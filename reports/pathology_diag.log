@@ -1,0 +1,26 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling typecheck-ts v0.1.0 (/root/r/ecma-rs/typecheck-ts)
+    Finished `release` profile [optimized] target(s) in 1m 05s
+     Running tests/pathology_diag.rs (target/release/deps/pathology_diag-69935897dda02e33)
+
+running 2 tests
+
+thread 'diag_parser_real_source12_no_ref' (1404542) panicked at typecheck-ts/tests/pathology_diag.rs:35:4:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test diag_parser_real_source12_no_ref ... FAILED
+memory allocation of 15 bytes failed
+memory allocation of 18 bytes failed
+memory allocation of 15 bytes failed
+memory allocation of 9 bytes failed
+memory allocation of 10 bytes failed
+memory allocation of 25 bytes failed
+memory allocation of 11 bytes failed
+error: test failed, to rerun pass `-p typecheck-ts --test pathology_diag`
+
+Caused by:
+  process didn't exit successfully: `/root/r/ecma-rs/target/release/deps/pathology_diag-69935897dda02e33 --nocapture` (signal: 6, SIGABRT: process abort signal)

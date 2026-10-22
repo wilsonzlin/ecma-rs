@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use hir_js::{
   ids::{ExprId, PatId},
-  ArrayElement, Body, ExprKind, ForHead, ForInit, MemberExpr, ObjectKey, PatKind, StmtId, StmtKind,
-  VarDeclKind,
+  ArrayElement, Body, ExprKind, ForHead, ForInit, LocalKind, MemberExpr, ObjectKey, PatKind,
+  StmtId, StmtKind, VarDeclKind,
 };
 use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
 use std::collections::HashSet;
@@ -184,9 +184,10 @@ impl<'a> FlowBindingsBuilder<'a> {
   }
 
   fn collect_var_scope(&mut self, roots: &[StmtId]) {
-    if let Some(func) = &self.body.function {
-      for param in func.params.iter() {
-        self.declare_var_pat(param.pat);
+    // Prefer Body.locals / LocalId for parameter bindings.
+    for (_local_id, local) in self.body.locals_with_kind(LocalKind::Param) {
+      if let Some(pat) = local.pat {
+        self.declare_var_pat(pat);
       }
     }
     for stmt in roots.iter() {
@@ -501,7 +502,8 @@ impl<'a> FlowBindingsBuilder<'a> {
       }
       ExprKind::Unary { expr, .. }
       | ExprKind::Update { expr, .. }
-      | ExprKind::TypeAssertion { expr, .. } => {
+      | ExprKind::TypeAssertion { expr, .. }
+      | ExprKind::Instantiation { expr, .. } => {
         self.process_expr(*expr, lexical_scopes);
       }
       ExprKind::Binary { left, right, .. } => {
@@ -561,7 +563,9 @@ impl<'a> FlowBindingsBuilder<'a> {
           self.process_expr(span.expr, lexical_scopes);
         }
       }
-      ExprKind::Await { expr } | ExprKind::NonNull { expr } | ExprKind::Satisfies { expr, .. } => {
+      ExprKind::Await { expr }
+      | ExprKind::NonNull { expr, .. }
+      | ExprKind::Satisfies { expr, .. } => {
         self.process_expr(*expr, lexical_scopes);
       }
       ExprKind::Yield { expr, .. } => {

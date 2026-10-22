@@ -66,4 +66,4 @@ docs:
 lint: fmt fmt-js utf8-apis diagnostic-codes clippy
 
 ci: fmt fmt-js utf8-apis diagnostic-codes clippy check test docs
-  git diff --exit-code docs/deps.md
+  git diff --exit-code wiki/architecture/deps.md

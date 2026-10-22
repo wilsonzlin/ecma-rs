@@ -12,13 +12,30 @@ fn run(source: &str) -> Vec<Diagnostic> {
 
 #[test]
 fn reports_excess_property_on_fresh_object_literal() {
-  let diagnostics = run("let x: { foo: number } = { foo: 1, bar: 2 };");
+  let source = "let x: { foo: number } = { foo: 1, bar: 2 };";
+  let diagnostics = run(source);
   assert_eq!(diagnostics.len(), 1);
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::EXCESS_PROPERTY.as_str(),
     "unexpected diagnostic: {:?}",
     diagnostics[0]
+  );
+  let bar = source.find("bar").expect("bar key");
+  assert_eq!(
+    (
+      diagnostics[0].primary.range.start as usize,
+      diagnostics[0].primary.range.end as usize
+    ),
+    (bar, bar + 3),
+    "TS2353 primary span should be the excess property key"
+  );
+  assert!(
+    diagnostics[0]
+      .message
+      .contains("Object literal may only specify known properties"),
+    "expected tsc-shaped message, got {:?}",
+    diagnostics[0].message
   );
 }
 

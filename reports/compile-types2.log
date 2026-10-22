@@ -1,0 +1,27 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling types-ts-interned v0.1.0 (/root/r/ecma-rs/types-ts-interned)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.34s
+  Executable unittests src/lib.rs (target/debug/deps/types_ts_interned-2e4f67a43c54e3ef)
+  Executable tests/cache.rs (target/debug/deps/cache-3f260ea7343f7cae)
+  Executable tests/canonicalization.rs (target/debug/deps/canonicalization-961fd2159b1231af)
+  Executable tests/determinism.rs (target/debug/deps/determinism-dcc9279191b497d5)
+  Executable tests/display.rs (target/debug/deps/display-c1fa7935405c6894)
+  Executable tests/eval.rs (target/debug/deps/eval-43f2016241296b29)
+  Executable tests/hash_collisions.rs (target/debug/deps/hash_collisions-e5a7d0d5a9c050eb)
+  Executable tests/hir_ref_expansion.rs (target/debug/deps/hir_ref_expansion-0039d1f69dbbcb54)
+  Executable tests/intrinsics.rs (target/debug/deps/intrinsics-ae01e7ee0390f438)
+  Executable tests/lock_stress.rs (target/debug/deps/lock_stress-1b07945a70823f11)
+  Executable tests/name_determinism.rs (target/debug/deps/name_determinism-649ff9ba58663389)
+  Executable tests/options.rs (target/debug/deps/options-8e9ee50ed58c1485)
+  Executable tests/parallel_caches.rs (target/debug/deps/parallel_caches-4cbc8bb7b2f2a431)
+  Executable tests/properties.rs (target/debug/deps/properties-4d0e2dfe98554d12)
+  Executable tests/proptests.rs (target/debug/deps/proptests-6ac051329d872716)
+  Executable tests/relate.rs (target/debug/deps/relate-235812baa6b4301f)
+  Executable tests/signature_ordering.rs (target/debug/deps/signature_ordering-01c3b0307428d1ad)
+  Executable tests/signature_param_name_canonicalization.rs (target/debug/deps/signature_param_name_canonicalization-099353fd4012232f)
+  Executable tests/signature_param_names.rs (target/debug/deps/signature_param_names-72c8f32fc20d11ea)
+  Executable tests/snapshot_serde.rs (target/debug/deps/snapshot_serde-43f76929c80d9b31)

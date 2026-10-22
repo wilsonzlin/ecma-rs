@@ -1,0 +1,257 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/covariantCallbacks.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/covariantCallbacks.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2569,
+      "rust_ms": 1841,
+      "tsc_ms": 727,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 230,
+            "end": 231,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 242,
+            "end": 243,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 326,
+            "end": 327,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1344,
+            "end": 1346,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1354,
+            "end": 1356,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1459,
+            "end": 1462,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1471,
+            "end": 1474,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1850,
+            "end": 1852,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/covariantCallbacks.ts",
+            "start": 1870,
+            "end": 1872,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 242,
+            "end": 243,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 326,
+            "end": 327,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 539,
+            "end": 540,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 755,
+            "end": 756,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 982,
+            "end": 983,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 1189,
+            "end": 1190,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 1850,
+            "end": 1852,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/covariantCallbacks.ts",
+            "start": 2089,
+            "end": 2091,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {
+          "target": "es2015",
+          "strict": true
+        },
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": true,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": true,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strict": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 1 extra diagnostic(s); first extra: /covariantCallbacks.ts:1471-1474 [TS2322]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/covariantCallbacks.ts",
+          "start": 1471,
+          "end": 1474,
+          "severity": "error",
+          "message": "assignment type mismatch"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 29/64) rust=[TS2454,TS2454,TS2454,TS2454,TS2454] tsc=[2322,2322,2322,2322,2322,2322,2322,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

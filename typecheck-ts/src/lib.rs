@@ -147,7 +147,6 @@
 //! cache and share results without relying on implementation details.
 
 mod api;
-#[allow(dead_code)]
 mod class_typing;
 pub mod codes;
 #[doc(hidden)]
@@ -159,6 +158,8 @@ mod files;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz;
+#[doc(hidden)]
+pub mod jsdoc;
 mod lower_metrics;
 mod parse_metrics;
 mod profile;
@@ -297,7 +298,7 @@ impl Host for MemoryHost {
     if self.libs.iter().any(|lib| &lib.key == file) {
       lib_support::FileKind::Dts
     } else {
-      lib_support::FileKind::Ts
+      lib_support::infer_file_kind(file.as_str())
     }
   }
 }

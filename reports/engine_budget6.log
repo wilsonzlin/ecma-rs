@@ -1,0 +1,12 @@
+
+running 3 tests
+test pathological_case_honors_cancellation_promptly ... 
+thread '<unnamed>' (1472020) panicked at parse-js/src/parse/mod.rs:521:9:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread '<unnamed>' (1472020) panicked at typecheck-ts/src/db/queries.rs:557:9:
+Box<dyn Any>
+ok
+test pathological_indexed_unresolved_assigns_terminate_quickly ... ok
+test real_parser_real_source12_terminates_without_libs ... 

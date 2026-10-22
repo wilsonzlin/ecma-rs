@@ -1,4 +1,6 @@
 use super::*;
+use crate::class_typing::hir_class_member_type_at_span;
+use crate::program::check::decls::{HirDeclLowerer, LocalDefIndex};
 use parse_js::ast::type_expr::TypeParameter;
 
 impl ProgramState {
@@ -9,125 +11,109 @@ impl ProgramState {
     self.lower_type_expr_in_file(file, None, expr)
   }
 
+  /// Lower [`hir_js::DefData::declared_type`] for a definition when present.
+  ///
+  /// Value-side annotations (class fields, module/ambient vars) store their
+  /// annotations here rather than on `VarData.typ`; `type_of_def` and related
+  /// paths consult this before any residual binder AST lowering.
+  pub(in super::super) fn hir_declared_type_for_def(&mut self, def: DefId) -> Option<TypeId> {
+    let file = self.def_data.get(&def)?.file;
+    let lowered = self.hir_lowered.get(&file)?.clone();
+    let hir_def = lowered.def(def)?;
+    let type_expr = hir_def.declared_type?;
+    Some(self.lower_hir_declared_type(file, &lowered, hir_def.id, type_expr))
+  }
+
+  fn hir_declared_type_for_span(&mut self, file: FileId, target: TextRange) -> Option<TypeId> {
+    let lowered = self.hir_lowered.get(&file)?.clone();
+    let mut candidates: Vec<_> = lowered
+      .defs
+      .iter()
+      .filter(|def| def.span == target && def.declared_type.is_some())
+      .collect();
+    candidates.sort_by_key(|def| def.id.0);
+    if let Some(hir_def) = candidates.first() {
+      let type_expr = hir_def.declared_type?;
+      return Some(self.lower_hir_declared_type(file, &lowered, hir_def.id, type_expr));
+    }
+
+    // Ambient class properties / constructor parameter properties: annotation
+    // lives on `DefTypeInfo::Class` `ClassMemberSig` (class arenas), not on a
+    // per-field `DefData.declared_type`.
+    let (owner, type_expr) = hir_class_member_type_at_span(&lowered, target)?;
+    Some(self.lower_hir_declared_type(file, &lowered, owner, type_expr))
+  }
+
+  fn lower_hir_declared_type(
+    &mut self,
+    file: FileId,
+    lowered: &hir_js::LowerResult,
+    owner: hir_js::DefId,
+    type_expr: hir_js::TypeExprId,
+  ) -> TypeId {
+    let store = Arc::clone(&self.store);
+    let mut diagnostics = Vec::new();
+    let local_defs = LocalDefIndex::from_lowered(lowered);
+    let mut binding_defs = HashMap::new();
+    if let Some(state) = self.files.get(&file) {
+      for (name, binding) in state.bindings.iter() {
+        if let Some(def) = binding.def {
+          binding_defs.insert(name.clone(), def);
+        }
+      }
+    }
+    let prev_file = self.current_file;
+    self.current_file = Some(file);
+    let program_resolver = self.build_type_resolver(&binding_defs);
+    let resolve_name = |path: &[String]| -> Option<DefId> {
+      program_resolver
+        .as_ref()
+        .and_then(|r| r.resolve_type_name(path))
+    };
+    let mut lowerer = HirDeclLowerer::new(
+      store,
+      &lowered.types,
+      self.semantics.as_deref(),
+      HashMap::new(),
+      file,
+      self.file_key_for_id(file),
+      local_defs,
+      &mut diagnostics,
+      None,
+      None,
+      None,
+      None,
+      Some(&self.module_namespace_defs),
+      Some(&self.value_defs),
+    )
+    .with_type_name_resolver(&resolve_name);
+    // Class fields own their annotation arenas but class-`T` lives on the
+    // enclosing class def — seed those params so `#foo: T` is not TC2008.
+    let enclosing_class = crate::class_typing::enclosing_class_type_params(lowered, owner);
+    let ty = match enclosing_class.as_ref() {
+      Some((class_id, params)) => lowerer.lower_declared_type_with_class_params(
+        owner,
+        type_expr,
+        Some((*class_id, params.as_slice())),
+        &lowered.names,
+      ),
+      None => lowerer.lower_declared_type(owner, type_expr, &lowered.names),
+    };
+    self.current_file = prev_file;
+    if self.semantics.is_some() {
+      self.diagnostics.extend(diagnostics);
+    }
+    ty
+  }
+
   pub(in super::super) fn declared_type_for_span(
     &mut self,
     file: FileId,
     target: TextRange,
   ) -> Option<TypeId> {
-    fn walk_namespace(
-      state: &mut ProgramState,
-      file: FileId,
-      body: &NamespaceBody,
-      target: TextRange,
-    ) -> Option<TypeId> {
-      match body {
-        NamespaceBody::Block(stmts) => walk(state, file, stmts, target),
-        NamespaceBody::Namespace(inner) => walk_namespace(state, file, &inner.stx.body, target),
-      }
-    }
-
-    fn walk(
-      state: &mut ProgramState,
-      file: FileId,
-      stmts: &[Node<Stmt>],
-      target: TextRange,
-    ) -> Option<TypeId> {
-      for stmt in stmts {
-        match stmt.stx.as_ref() {
-          Stmt::AmbientVarDecl(var) => {
-            let span = loc_to_span(file, stmt.loc).range;
-            if span == target {
-              if let Some(ann) = var.stx.type_annotation.as_ref() {
-                return Some(state.lower_type_expr_in_file(file, None, ann));
-              }
-            }
-          }
-          Stmt::VarDecl(var) => {
-            // Most definitions use the binding pattern span, but some def IDs
-            // (notably for local variables) may be keyed by a wider span (e.g.
-            // the declarator span). Prefer the exact pattern match first, then
-            // fall back to a single unambiguous declarator whose span contains
-            // the target.
-            for decl in var.stx.declarators.iter() {
-              let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
-              if pat_span == target {
-                if let Some(ann) = decl.type_annotation.as_ref() {
-                  return Some(state.lower_type_expr_in_file(file, None, ann));
-                }
-              }
-            }
-
-            let mut matching_decl = None;
-            for decl in var.stx.declarators.iter() {
-              let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
-              let end = decl
-                .initializer
-                .as_ref()
-                .map(|init| loc_to_span(file, init.loc).range.end)
-                .or_else(|| {
-                  decl
-                    .type_annotation
-                    .as_ref()
-                    .map(|ann| loc_to_span(file, ann.loc).range.end)
-                })
-                .unwrap_or(pat_span.end);
-              let decl_span = TextRange::new(pat_span.start, end);
-              // Some defs may be keyed by a span that covers the full declarator
-              // (or even the full statement). Prefer matching those wider spans,
-              // but avoid matching arbitrary sub-spans inside the pattern (e.g.
-              // bindings within destructuring patterns).
-              let matches = decl_span == target
-                || (target.start <= decl_span.start && target.end >= decl_span.end)
-                || (target.start == decl_span.start && target.end <= decl_span.end)
-                || (target.start <= pat_span.start && target.end >= pat_span.end);
-              if matches {
-                if matching_decl.is_some() {
-                  matching_decl = None;
-                  break;
-                }
-                matching_decl = Some(decl);
-              }
-            }
-
-            if let Some(decl) = matching_decl {
-              if let Some(ann) = decl.type_annotation.as_ref() {
-                return Some(state.lower_type_expr_in_file(file, None, ann));
-              }
-            }
-          }
-          Stmt::Block(block) => {
-            if let Some(ty) = walk(state, file, &block.stx.body, target) {
-              return Some(ty);
-            }
-          }
-          Stmt::NamespaceDecl(ns) => {
-            if let Some(ty) = walk_namespace(state, file, &ns.stx.body, target) {
-              return Some(ty);
-            }
-          }
-          Stmt::ModuleDecl(module) => {
-            if let Some(body) = &module.stx.body {
-              if let Some(ty) = walk(state, file, body, target) {
-                return Some(ty);
-              }
-            }
-          }
-          Stmt::GlobalDecl(global) => {
-            if let Some(ty) = walk(state, file, &global.stx.body, target) {
-              return Some(ty);
-            }
-          }
-          _ => {}
-        }
-      }
-      None
-    }
-
-    let ast = match self.asts.get(&file) {
-      Some(ast) => ast.clone(),
-      None => return None,
-    };
-    walk(self, file, &ast.stx.body, target)
+    // HIR-only: class fields / ambient+param-prop via ClassMemberSig; module and
+    // ambient vars via DefData.declared_type. No AST statement walk.
+    self.hir_declared_type_for_span(file, target)
   }
 
   fn lower_type_expr_in_file(
@@ -184,72 +170,68 @@ impl ProgramState {
     ty
   }
 
+  /// Recompute a type-alias body from HIR when the binder left `unknown`.
   pub(in super::super) fn type_alias_type_for_span(
     &mut self,
     file: FileId,
     target: TextRange,
     name: &str,
   ) -> Option<TypeId> {
-    fn walk_namespace(
-      state: &mut ProgramState,
-      file: FileId,
-      body: &NamespaceBody,
-      target: TextRange,
-      name: &str,
-    ) -> Option<TypeId> {
-      match body {
-        NamespaceBody::Block(stmts) => walk(state, file, stmts, target, name),
-        NamespaceBody::Namespace(inner) => {
-          walk_namespace(state, file, &inner.stx.body, target, name)
+    let lowered = self.hir_lowered.get(&file)?.clone();
+    let mut candidates: Vec<_> = lowered
+      .defs
+      .iter()
+      .filter(|def| {
+        matches!(
+          def.type_info.as_ref(),
+          Some(hir_js::DefTypeInfo::TypeAlias { .. })
+        ) && (def.span == target || lowered.names.resolve(def.name) == Some(name))
+      })
+      .collect();
+    candidates.sort_by_key(|def| def.id.0);
+    let hir_def = candidates.first()?;
+    let info = hir_def.type_info.as_ref()?;
+    let store = Arc::clone(&self.store);
+    let mut diagnostics = Vec::new();
+    let local_defs = LocalDefIndex::from_lowered(&lowered);
+    let mut binding_defs = HashMap::new();
+    if let Some(state) = self.files.get(&file) {
+      for (name, binding) in state.bindings.iter() {
+        if let Some(def) = binding.def {
+          binding_defs.insert(name.clone(), def);
         }
       }
     }
-
-    fn walk(
-      state: &mut ProgramState,
-      file: FileId,
-      stmts: &[Node<Stmt>],
-      target: TextRange,
-      name: &str,
-    ) -> Option<TypeId> {
-      for stmt in stmts {
-        match stmt.stx.as_ref() {
-          Stmt::TypeAliasDecl(alias) => {
-            let span = loc_to_span(file, stmt.loc).range;
-            if span == target || alias.stx.name == name {
-              let ty = state.lower_type_expr_in_file(
-                file,
-                alias.stx.type_parameters.as_deref(),
-                &alias.stx.type_expr,
-              );
-              return Some(ty);
-            }
-          }
-          Stmt::Block(block) => {
-            if let Some(ty) = walk(state, file, &block.stx.body, target, name) {
-              return Some(ty);
-            }
-          }
-          Stmt::NamespaceDecl(ns) => {
-            if let Some(ty) = walk_namespace(state, file, &ns.stx.body, target, name) {
-              return Some(ty);
-            }
-          }
-          Stmt::GlobalDecl(global) => {
-            if let Some(ty) = walk(state, file, &global.stx.body, target, name) {
-              return Some(ty);
-            }
-          }
-          _ => {}
-        }
-      }
-      None
-    }
-
-    let ast = match self.asts.get(&file) {
-      Some(ast) => ast.clone(),
-      None => return None,
+    let prev_file = self.current_file;
+    self.current_file = Some(file);
+    let program_resolver = self.build_type_resolver(&binding_defs);
+    let resolve_name = |path: &[String]| -> Option<DefId> {
+      program_resolver
+        .as_ref()
+        .and_then(|r| r.resolve_type_name(path))
     };
-    walk(self, file, &ast.stx.body, target, name)
+    let mut lowerer = HirDeclLowerer::new(
+      store,
+      &lowered.types,
+      self.semantics.as_deref(),
+      HashMap::new(),
+      file,
+      self.file_key_for_id(file),
+      local_defs,
+      &mut diagnostics,
+      None,
+      None,
+      None,
+      None,
+      Some(&self.module_namespace_defs),
+      Some(&self.value_defs),
+    )
+    .with_type_name_resolver(&resolve_name);
+    let (ty, _) = lowerer.lower_type_info(hir_def.id, info, &lowered.names);
+    self.current_file = prev_file;
+    if self.semantics.is_some() {
+      self.diagnostics.extend(diagnostics);
+    }
+    Some(ty)
   }
 }

@@ -1760,6 +1760,7 @@ fn mapped_type_applies_modifiers_and_remaps() {
   ));
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: store.intern_type(TypeKind::KeyOf(obj_ty)),
     value: primitives.boolean,
@@ -1853,6 +1854,7 @@ fn mapped_type_remap_as_never_filters_keys() {
   ));
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: store.intern_type(TypeKind::KeyOf(obj_ty)),
     value: primitives.boolean,
@@ -1878,6 +1880,7 @@ fn mapped_over_keyof_any_produces_broad_indexers() {
   let primitives = store.primitive_ids();
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: store.intern_type(TypeKind::KeyOf(primitives.any)),
     value: primitives.number,
@@ -1918,6 +1921,7 @@ fn mapped_remap_as_any_widens_to_broad_indexers() {
 
   let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: key_a,
     value: primitives.number,
@@ -1958,6 +1962,7 @@ fn mapped_as_string_produces_string_indexer() {
 
   let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: key_a,
     value: primitives.number,
@@ -1989,6 +1994,7 @@ fn mapped_as_number_produces_number_indexer() {
 
   let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: key_a,
     value: primitives.boolean,
@@ -2025,6 +2031,7 @@ fn mapped_as_union_emits_indexer_and_literals() {
   let as_union = store.union(vec![primitives.string, literal_num]);
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: key_a,
     value: primitives.number,
@@ -2132,6 +2139,7 @@ fn template_literal_as_mapped_key_produces_string_indexer() {
   }));
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: key_pattern,
     value: primitives.number,
@@ -2517,8 +2525,10 @@ fn keyof_respects_union_and_intersection_semantics() {
     properties: vec![
       Property {
         key: PropKey::String(name_b),
+        // Same type as `b` in `shape1` so the intersection below is not
+        // never-reduced: `keyof (A & B)` must be `keyof A | keyof B`.
         data: PropData {
-          ty: store.primitive_ids().boolean,
+          ty: store.primitive_ids().number,
           optional: false,
           readonly: false,
           accessibility: None,
@@ -2591,6 +2601,49 @@ fn keyof_respects_union_and_intersection_semantics() {
 }
 
 #[test]
+fn keyof_never_reduced_intersection_matches_tsc() {
+  // tsc 5.9.3: `{ b: number } & { b: boolean }` reduces to `never` (conflicting
+  // required property), and `keyof never` is `string | number | symbol`.
+  let store = TypeStore::new();
+  let name_b = store.intern_name("b");
+  let mk = |ty: TypeId| {
+    let shape = store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(name_b),
+        data: PropData {
+          ty,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    });
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })))
+  };
+
+  let obj1 = mk(store.primitive_ids().number);
+  let obj2 = mk(store.primitive_ids().boolean);
+  let inter = store.intersection(vec![obj1, obj2]);
+  assert_eq!(inter, store.primitive_ids().never);
+
+  let keys = store.evaluate(store.intern_type(TypeKind::KeyOf(inter)));
+  assert_eq!(
+    keys,
+    store.union(vec![
+      store.primitive_ids().string,
+      store.primitive_ids().number,
+      store.primitive_ids().symbol
+    ])
+  );
+}
+
+#[test]
 fn keyof_unknown_is_never() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
@@ -2600,12 +2653,21 @@ fn keyof_unknown_is_never() {
 }
 
 #[test]
-fn keyof_never_is_never() {
+fn keyof_never_is_string_number_symbol() {
+  // tsc 5.9.3: `keyof never` is `string | number | symbol` (the keyof
+  // constraint type), not `never`. Verified against the live oracle.
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
   let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(primitives.never)));
-  assert_eq!(evaluated, primitives.never);
+  assert_eq!(
+    evaluated,
+    store.union(vec![
+      primitives.string,
+      primitives.number,
+      primitives.symbol
+    ])
+  );
 }
 
 #[test]
@@ -2625,6 +2687,7 @@ fn keyof_fractional_number_literal_in_mapped_source_widens_to_number() {
 
   let source = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.5)));
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source,
     value: primitives.boolean,
@@ -2646,6 +2709,7 @@ fn keyof_fractional_number_literal_in_mapped_remap_widens_to_number() {
   let source = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   let remap = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.5)));
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source,
     value: primitives.boolean,
@@ -3204,6 +3268,7 @@ fn mapped_type_preserves_symbol_indexer() {
   ));
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: store.intern_type(TypeKind::KeyOf(obj_ty)),
     value: primitives.boolean,

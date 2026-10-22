@@ -26,6 +26,33 @@ pub(crate) fn stable_hash_builder() -> RandomState {
   RandomState::with_seeds(0, 0, 0, 0)
 }
 
+/// tsc: a type reference with fewer arguments than the definition's type
+/// parameters is filled with the declared defaults (`Iterator<Foo>` ≡
+/// `Iterator<Foo, any, any>`). Without this, partial refs never unify with
+/// their fully-applied form and expansion substitutes nothing for the missing
+/// parameters (`Generator<Foo, void, unknown>` vs `Iterable<Foo>` failing
+/// structurally). Only complete fills normalize; a missing non-defaulted
+/// parameter leaves the args as written.
+pub(crate) fn fill_default_type_args(
+  decls: Option<&[TypeParamDecl]>,
+  args: &[TypeId],
+) -> Vec<TypeId> {
+  let Some(decls) = decls else {
+    return args.to_vec();
+  };
+  if args.len() >= decls.len() {
+    return args.to_vec();
+  }
+  let mut filled: Vec<TypeId> = args.to_vec();
+  for decl in decls.iter().skip(args.len()) {
+    match decl.default {
+      Some(default) => filled.push(default),
+      None => return args.to_vec(),
+    }
+  }
+  filled
+}
+
 #[derive(Debug)]
 pub(crate) struct RefRecursionGuard {
   in_progress: Mutex<HashSet<(ThreadId, RefKey), RandomState>>,
@@ -106,6 +133,7 @@ pub struct ProgramTypeExpander<'a> {
   type_param_decls: &'a HashMap<DefId, Arc<[TypeParamDecl]>>,
   intrinsics: &'a HashMap<DefId, IntrinsicKind>,
   class_instances: &'a HashMap<DefId, TypeId>,
+  enum_defs: &'a HashSet<DefId>,
   caches: EvaluatorCaches,
   guard: RefRecursionGuard,
 }
@@ -118,6 +146,7 @@ impl<'a> ProgramTypeExpander<'a> {
     type_param_decls: &'a HashMap<DefId, Arc<[TypeParamDecl]>>,
     intrinsics: &'a HashMap<DefId, IntrinsicKind>,
     class_instances: &'a HashMap<DefId, TypeId>,
+    enum_defs: &'a HashSet<DefId>,
     caches: EvaluatorCaches,
   ) -> Self {
     Self {
@@ -127,6 +156,7 @@ impl<'a> ProgramTypeExpander<'a> {
       type_param_decls,
       intrinsics,
       class_instances,
+      enum_defs,
       caches,
       guard: RefRecursionGuard::new(),
     }
@@ -166,11 +196,39 @@ impl<'a> TypeExpander for ProgramTypeExpander<'a> {
 }
 
 impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
+  fn is_enum_type(&self, def: DefId) -> bool {
+    self.enum_defs.contains(&def)
+  }
+
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
 
+    // tsc: a type reference with fewer arguments than the definition's type
+    // parameters is filled with the declared defaults (`Iterator<Foo>` ≡
+    // `Iterator<Foo, any, any>`). Without this, partial refs never unify with
+    // their fully-applied form and expansion substitutes nothing for the
+    // missing parameters (`Generator<Foo, void, unknown>` vs `Iterable<Foo>`
+    // failing structurally). Only complete fills normalize; a missing
+    // non-defaulted parameter leaves the args as written.
+    // tsc fills missing type arguments with their declared defaults
+    // (`Iterator<Foo>` ≡ `Iterator<Foo, any, any>`) — see
+    // `fill_default_type_args`.
+    let filled = fill_default_type_args(self.type_param_decls.get(&def).map(|d| d.as_ref()), args);
+    let args: &[TypeId] = &filled;
+
     if let Some(cached) = self.caches.get_ref(def, args) {
-      return Some(cached);
+      // Deferred/cycle refs (same `def`) must not stick — re-expand once sibling
+      // instantiations or definition tables are complete.
+      let deferred_same_def = matches!(
+        store.type_kind(cached),
+        TypeKind::Ref {
+          def: cached_def,
+          ..
+        } if cached_def == def
+      );
+      if !deferred_same_def {
+        return Some(cached);
+      }
     }
 
     if let Some(kind) = self.intrinsics.get(&def).copied() {
@@ -197,7 +255,16 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
     let instantiated =
       instantiate_expanded(&self.store, self, &self.caches, def, &expanded, &key.args);
     self.guard.end(&key);
-    self.caches.insert_ref(def, &key.args, instantiated);
+    let deferred_same_def = matches!(
+      store.type_kind(instantiated),
+      TypeKind::Ref {
+        def: cached_def,
+        ..
+      } if cached_def == def
+    );
+    if !deferred_same_def {
+      self.caches.insert_ref(def, &key.args, instantiated);
+    }
     Some(instantiated)
   }
 

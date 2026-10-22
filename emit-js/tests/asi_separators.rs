@@ -104,6 +104,7 @@ fn var_decl_stmt(name: &str, initializer: Option<Node<Expr>>) -> Node<Stmt> {
   };
   node(Stmt::VarDecl(node(VarDecl {
     export: false,
+    declare: false,
     mode: VarDeclMode::Var,
     declarators: vec![declarator],
   })))

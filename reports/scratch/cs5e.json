@@ -1,0 +1,352 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures5.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures5.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2122,
+      "rust_ms": 1529,
+      "tsc_ms": 592,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 996,
+            "end": 997,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1058,
+            "end": 1060,
+            "severity": "error",
+            "message": "b2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1116,
+            "end": 1118,
+            "severity": "error",
+            "message": "b3 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1127,
+            "end": 1129,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1188,
+            "end": 1190,
+            "severity": "error",
+            "message": "b4 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1261,
+            "end": 1263,
+            "severity": "error",
+            "message": "b5 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1363,
+            "end": 1365,
+            "severity": "error",
+            "message": "b6 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1461,
+            "end": 1464,
+            "severity": "error",
+            "message": "b11 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1543,
+            "end": 1546,
+            "severity": "error",
+            "message": "b15 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1635,
+            "end": 1638,
+            "severity": "error",
+            "message": "b16 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1653,
+            "end": 1656,
+            "severity": "error",
+            "message": "a16 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1710,
+            "end": 1713,
+            "severity": "error",
+            "message": "b17 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1787,
+            "end": 1790,
+            "severity": "error",
+            "message": "b18 is used before being assigned"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 996,
+            "end": 997,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1058,
+            "end": 1060,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1116,
+            "end": 1118,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1127,
+            "end": 1129,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1188,
+            "end": 1190,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1261,
+            "end": 1263,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1363,
+            "end": 1365,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1461,
+            "end": 1464,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1473,
+            "end": 1476,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1543,
+            "end": 1546,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1569,
+            "end": 1572,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1635,
+            "end": 1638,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1647,
+            "end": 1650,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1653,
+            "end": 1656,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1710,
+            "end": 1713,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithCallSignatures5.ts",
+            "start": 1787,
+            "end": 1790,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 3 diagnostic(s); first missing: /assignmentCompatWithCallSignatures5.ts:1473-1476 [2322]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/assignmentCompatWithCallSignatures5.ts",
+          "start": 1473,
+          "end": 1476,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_extra_diagnostics (shard 53/64) rust=[TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454] tsc=[2454,2454,2454,2322,2454,2454,2454,2454,2322,2454,2322,2454,2322,2454,2454,2454]"
+      },
+      "mismatched": true
+    }
+  ]
+}

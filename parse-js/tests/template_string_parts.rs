@@ -3,7 +3,9 @@ use parse_js::ast::node::template_string_parts;
 use parse_js::ast::stmt::Stmt;
 use parse_js::parse;
 
-fn template_parts_of_first_expr_statement(source: &str) -> parse_js::ast::node::TemplateStringParts {
+fn template_parts_of_first_expr_statement(
+  source: &str,
+) -> parse_js::ast::node::TemplateStringParts {
   let ast = parse(source).expect("expected parse success");
   let stmt = ast.stx.body.first().expect("expected statement");
   let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
@@ -27,10 +29,7 @@ fn tagged_template_invalid_escape_has_undefined_cooked_and_preserves_raw() {
   let parts = template_parts_of_first_expr_statement("tag`\\u{10FFFFF}`");
   assert_eq!(parts.raw.len(), 1);
   let expected_raw: Vec<u16> = "\\u{10FFFFF}".encode_utf16().collect();
-  assert_eq!(
-    parts.raw[0].as_ref(),
-    expected_raw.as_slice()
-  );
+  assert_eq!(parts.raw[0].as_ref(), expected_raw.as_slice());
   assert_eq!(parts.cooked.len(), 1);
   assert!(parts.cooked[0].is_none());
 }
@@ -40,15 +39,9 @@ fn tagged_template_valid_escape_preserves_raw_and_cooked_utf16() {
   let parts = template_parts_of_first_expr_statement("tag`\\u{1F600}`");
   assert_eq!(parts.raw.len(), 1);
   let expected_raw: Vec<u16> = "\\u{1F600}".encode_utf16().collect();
-  assert_eq!(
-    parts.raw[0].as_ref(),
-    expected_raw.as_slice()
-  );
+  assert_eq!(parts.raw[0].as_ref(), expected_raw.as_slice());
   assert_eq!(parts.cooked.len(), 1);
-  assert_eq!(
-    parts.cooked[0].as_deref(),
-    Some(&[0xD83D, 0xDE00][..])
-  );
+  assert_eq!(parts.cooked[0].as_deref(), Some(&[0xD83D, 0xDE00][..]));
 }
 
 #[test]

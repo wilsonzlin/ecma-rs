@@ -1,0 +1,271 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 1,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    }
+  },
+  "compare_mode": "none",
+  "results": [
+    {
+      "id": "types/literal/templateLiteralTypes4.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypes4.ts",
+      "outcome": "match",
+      "duration_ms": 1014,
+      "rust_ms": 1014,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2338,
+            "end": 2348,
+            "severity": "error",
+            "message": "`Zero` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2350,
+            "end": 2363,
+            "severity": "error",
+            "message": "`True` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2365,
+            "end": 2380,
+            "severity": "error",
+            "message": "`False` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2382,
+            "end": 2405,
+            "severity": "error",
+            "message": "`Undefined` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2407,
+            "end": 2420,
+            "severity": "error",
+            "message": "`Null` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2575,
+            "end": 2579,
+            "severity": "error",
+            "message": "`Zero` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2581,
+            "end": 2584,
+            "severity": "error",
+            "message": "`One` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2769,
+            "end": 2798,
+            "severity": "error",
+            "message": "`Zero` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TC3000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 2800,
+            "end": 2827,
+            "severity": "error",
+            "message": "`One` implicitly has an `any` type"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15165,
+            "end": 15166,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15207,
+            "end": 15208,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15249,
+            "end": 15250,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15300,
+            "end": 15301,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15345,
+            "end": 15346,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15390,
+            "end": 15391,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15523,
+            "end": 15536,
+            "severity": "error",
+            "message": "no overload matches this call"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15608,
+            "end": 15621,
+            "severity": "error",
+            "message": "no overload matches this call"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15691,
+            "end": 15704,
+            "severity": "error",
+            "message": "no overload matches this call"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15776,
+            "end": 15790,
+            "severity": "error",
+            "message": "no overload matches this call"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2000",
+            "file": "/templateLiteralTypes4.ts",
+            "start": 15810,
+            "end": 15825,
+            "severity": "error",
+            "message": "no overload matches this call"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "skipped",
+        "diagnostics": [],
+        "error": "comparison disabled"
+      },
+      "options": {
+        "harness": {
+          "target": "esnext",
+          "strict": true,
+          "declaration": true
+        },
+        "rust": {
+          "target": "EsNext",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": true,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": true,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "declaration": true,
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": true,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strict": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ESNext",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    }
+  ]
+}

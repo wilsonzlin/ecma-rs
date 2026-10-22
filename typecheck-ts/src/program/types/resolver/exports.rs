@@ -9,39 +9,54 @@ impl ProgramTypeResolver {
   ) -> Option<DefId> {
     for (idx, segment) in segments.iter().enumerate() {
       let is_last = idx + 1 == segments.len();
-      if let Some(exports) = self.exports.get(&FileId(module.0)) {
-        if let Some(entry) = exports.get(segment) {
-          if is_last {
+      let ns = if is_last {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      };
+      // Prefer semantics-backed resolution so TYPE vs VALUE picks the right
+      // decl (classes expose a value-side synthetic `Var` on `ExportEntry.def`
+      // that must not be used for `import("./m").Foo` type queries).
+      // Do not call `pick_decl` on `ExportEntry.symbol`: that id may be a
+      // typecheck-local synthetic not present in the sem_ts symbol table.
+      if let Some(symbol) = self.semantics.resolve_export(*module, segment, ns) {
+        if is_last {
+          if let Some(def) = self.pick_decl(symbol, final_ns) {
+            return Some(def);
+          }
+          if final_ns.contains(sem_ts::Namespace::VALUE) {
+            if let sem_ts::SymbolOrigin::Import { from, imported } =
+              &self.semantics.symbols().symbol(symbol).origin
+            {
+              if imported == "*" {
+                if let sem_ts::ModuleRef::File(dep_file) = from {
+                  return self.module_namespace_defs.get(&FileId(dep_file.0)).copied();
+                }
+              }
+            }
+            if let Some(exports) = self.exports.get(&FileId(module.0)) {
+              if let Some(entry) = exports.get(segment) {
+                if let Some(def) = entry.def {
+                  return Some(def);
+                }
+              }
+            }
+          }
+          return None;
+        }
+        *module = self.import_origin_file(symbol)?;
+        continue;
+      }
+      if is_last && final_ns.contains(sem_ts::Namespace::VALUE) {
+        if let Some(exports) = self.exports.get(&FileId(module.0)) {
+          if let Some(entry) = exports.get(segment) {
             if let Some(def) = entry.def {
               return Some(def);
             }
           }
         }
       }
-      let ns = if is_last {
-        final_ns
-      } else {
-        sem_ts::Namespace::NAMESPACE
-      };
-      let symbol = self.semantics.resolve_export(*module, segment, ns)?;
-      if is_last {
-        if let Some(def) = self.pick_decl(symbol, final_ns) {
-          return Some(def);
-        }
-        if final_ns.contains(sem_ts::Namespace::VALUE) {
-          if let sem_ts::SymbolOrigin::Import { from, imported } =
-            &self.semantics.symbols().symbol(symbol).origin
-          {
-            if imported == "*" {
-              if let sem_ts::ModuleRef::File(dep_file) = from {
-                return self.module_namespace_defs.get(&FileId(dep_file.0)).copied();
-              }
-            }
-          }
-        }
-        return None;
-      }
-      *module = self.import_origin_file(symbol)?;
+      return None;
     }
     None
   }

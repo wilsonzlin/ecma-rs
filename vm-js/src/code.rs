@@ -53,4 +53,3 @@ pub struct CompiledFunctionRef {
   pub script: Arc<CompiledScript>,
   pub body: hir_js::BodyId,
 }
-

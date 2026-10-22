@@ -2,7 +2,7 @@ use crate::display::TypeDisplay;
 use crate::ids::{NameId, ObjectId, ShapeId, SignatureId, TypeId};
 use crate::kind::{CompositeKind, TypeKind};
 use crate::options::TypeOptions;
-use crate::shape::{Indexer, ObjectType, Property, Shape};
+use crate::shape::{Indexer, ObjectType, PropData, PropKey, Property, Shape};
 use crate::signature::{Param, Signature, TypeParamDecl};
 use ahash::RandomState;
 use dashmap::mapref::entry::Entry;
@@ -11,7 +11,7 @@ use parking_lot::RwLock;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -25,6 +25,11 @@ const SIGNATURE_DOMAIN: u64 = 0x7369_676e;
 const SHAPE_DOMAIN: u64 = 0x7368_6170;
 const OBJECT_DOMAIN: u64 = 0x6f62_6a65;
 const NAME_DOMAIN: u64 = 0x6e61_6d65;
+
+/// Hard cap on flattened union / intersection members. Beyond this, composites
+/// collapse to a conservative primitive so pathological evaluation cannot grow
+/// the type store without bound (see `parserRealSource12` / evaluate_object).
+pub const MAX_COMPOSITE_MEMBERS: usize = 4_096;
 
 type FingerprintFn = fn(u128, u64, u64) -> u128;
 
@@ -566,6 +571,16 @@ impl TypeStore {
     self.types.contains_key(&id)
   }
 
+  /// Number of interned types currently in the store (approximate under concurrency).
+  pub fn type_count(&self) -> usize {
+    self.types.len()
+  }
+
+  /// Number of interned shapes currently in the store.
+  pub fn shape_count(&self) -> usize {
+    self.shapes.len()
+  }
+
   pub fn intern_shape(&self, mut shape: Shape) -> ShapeId {
     for prop in shape.properties.iter_mut() {
       prop.data.ty = self.canon(prop.data.ty);
@@ -575,6 +590,7 @@ impl TypeStore {
       idx.value_type = self.canon(idx.value_type);
     }
 
+    // Never hold an interner guard across recursion that can re-enter it (writer fairness deadlock).
     {
       let names = self.names.read();
       shape
@@ -582,17 +598,73 @@ impl TypeStore {
         .sort_by(|a, b| a.key.cmp_with(&b.key, &|id| names.name(id)));
     }
     // Merge duplicate property keys deterministically by intersecting their
-    // types, requiring presence if any declaration is required, propagating
-    // readonly if any declaration is readonly, and keeping the most
-    // restrictive accessibility modifier if present.
+    // types, requiring presence if any declaration is required, treating the
+    // property as writable if any declaration is writable (getter+setter /
+    // `{readonly x}&{x}`), and keeping the most restrictive accessibility
+    // modifier if present. Callable props (overloaded methods) instead merge
+    // by concatenating their overload lists *in declaration order* — tsc
+    // selects the first applicable overload in source order, and the
+    // intersection canonicalizer's `TypeId` sort would scramble it
+    // (`typesWithSpecializedCallSignatures`).
+    //
+    // `#`-private keys from *different* declarations are distinct slots (tsc
+    // private-name uniqueness: a derived class redeclaring `#x` carries both
+    // its own and the base's). Keep both entries instead of intersecting to
+    // `never` / dropping the brand (`privateNamesAndFields`).
+    let private_ident_keys: HashSet<NameId> = {
+      let names = self.names.read();
+      shape
+        .properties
+        .iter()
+        .filter_map(|prop| match &prop.key {
+          PropKey::String(name) if names.name(*name).starts_with('#') => Some(*name),
+          _ => None,
+        })
+        .collect()
+    };
+    fn same_member_origin(a: &PropData, b: &PropData) -> bool {
+      if let (Some(x), Some(y)) = (a.declared_on, b.declared_on) {
+        return x == y;
+      }
+      if let (Some(x), Some(y)) = (a.origin, b.origin) {
+        return x == y;
+      }
+      false
+    }
     let mut merged_properties: Vec<Property> = Vec::with_capacity(shape.properties.len());
     let mut declared_on_conflict = false;
     for prop in shape.properties.into_iter() {
       if let Some(last) = merged_properties.last_mut() {
         if last.key == prop.key {
-          last.data.ty = self.intersection(vec![last.data.ty, prop.data.ty]);
+          let is_private_ident =
+            matches!(&prop.key, PropKey::String(name) if private_ident_keys.contains(name));
+          if is_private_ident
+            && (last.data.declared_on.is_some() || last.data.origin.is_some())
+            && (prop.data.declared_on.is_some() || prop.data.origin.is_some())
+            && !same_member_origin(&last.data, &prop.data)
+          {
+            merged_properties.push(prop);
+            declared_on_conflict = false;
+            continue;
+          }
+          last.data.ty = match (
+            self.callable_overloads(last.data.ty),
+            self.callable_overloads(prop.data.ty),
+          ) {
+            (Some(mut existing), Some(incoming)) => {
+              for sig in incoming {
+                if !existing.contains(&sig) {
+                  existing.push(sig);
+                }
+              }
+              self.intern_type(TypeKind::Callable {
+                overloads: existing,
+              })
+            }
+            _ => self.intersection(vec![last.data.ty, prop.data.ty]),
+          };
           last.data.optional = last.data.optional && prop.data.optional;
-          last.data.readonly = last.data.readonly || prop.data.readonly;
+          last.data.readonly = last.data.readonly && prop.data.readonly;
           last.data.is_method = last.data.is_method || prop.data.is_method;
           match (last.data.declared_on, prop.data.declared_on) {
             (Some(a), Some(b)) if a == b => {}
@@ -626,14 +698,10 @@ impl TypeStore {
       declared_on_conflict = false;
     }
     shape.properties = merged_properties;
+    // Preserve declaration order for call/construct overload lists (same rationale
+    // as `TypeKind::Callable` above).
     Self::stable_dedup_signatures(&mut shape.call_signatures);
-    shape
-      .call_signatures
-      .sort_by(|a, b| self.signature_cmp(*a, *b));
     Self::stable_dedup_signatures(&mut shape.construct_signatures);
-    shape
-      .construct_signatures
-      .sort_by(|a, b| self.signature_cmp(*a, *b));
     shape.indexers.sort_by(|a, b| {
       self
         .type_cmp(a.key_type, b.key_type)
@@ -664,6 +732,15 @@ impl TypeStore {
 
   pub fn intern_object(&self, object: ObjectType) -> ObjectId {
     self.insert_object_direct(object)
+  }
+
+  /// Overload list of a bare callable type, for declaration-order-preserving
+  /// duplicate-prop merges in [`Self::intern_shape`].
+  fn callable_overloads(&self, ty: TypeId) -> Option<Vec<SignatureId>> {
+    match self.type_kind(ty) {
+      TypeKind::Callable { overloads } => Some(overloads),
+      _ => None,
+    }
   }
 
   /// Deterministically compare two property keys using the store's interned
@@ -759,8 +836,11 @@ impl TypeStore {
       },
       TypeKind::KeyOf(inner) => TypeKind::KeyOf(self.canon(inner)),
       TypeKind::Callable { mut overloads } => {
+        // Preserve declaration order: TypeScript overload resolution selects the
+        // first matching signature in source order. Sorting by signature shape
+        // would make specificity win over declaration order (e.g. `Object` before
+        // `E` must still prefer `Object` for an `E` argument).
         Self::stable_dedup_signatures(&mut overloads);
-        overloads.sort_by(|a, b| self.signature_cmp(*a, *b));
         TypeKind::Callable { overloads }
       }
       other => other,
@@ -818,6 +898,9 @@ impl TypeStore {
     }
     if flat.len() == 1 {
       return flat[0];
+    }
+    if flat.len() > MAX_COMPOSITE_MEMBERS {
+      return self.primitives.unknown;
     }
     if flat.len() == 2
       && matches!(self.type_kind(flat[0]), TypeKind::BooleanLiteral(_))
@@ -893,6 +976,11 @@ impl TypeStore {
     if flat.len() == 1 {
       return flat[0];
     }
+    if flat.len() > MAX_COMPOSITE_MEMBERS {
+      // Give up: an oversized intersection is treated as uninhabited for
+      // robustness (prefer fail-closed over allocating unbounded members).
+      return self.primitives.never;
+    }
 
     const FAMILY_STRING: u8 = 1 << 0;
     const FAMILY_NUMBER: u8 = 1 << 1;
@@ -961,11 +1049,125 @@ impl TypeStore {
       }
     }
 
+    // tsc `getIntersectionType`: intersecting object types with a shared
+    // required property whose types reduce to `never` yields `never` (e.g.
+    // `{ kind: 'a' } & { kind: 'b' }`, `{ a: "" } & { a: number }`). Optional
+    // properties may become `{ a?: never }` without collapsing the whole type.
+    if self.object_intersection_has_never_required_property(&flat) {
+      return self.primitives.never;
+    }
+
     self.insert_type_direct(TypeKind::Intersection(flat))
   }
 
+  /// True when ≥2 object members share a non-optional property whose types
+  /// are definitely disjoint.
+  fn object_intersection_has_never_required_property(&self, members: &[TypeId]) -> bool {
+    let mut object_count = 0usize;
+    #[allow(clippy::type_complexity)]
+    let mut by_key: HashMap<
+      PropKey,
+      Vec<(TypeId, bool, Option<crate::ids::DefId>, Option<u32>)>,
+    > = HashMap::new();
+    for &member in members {
+      let TypeKind::Object(oid) = self.type_kind(member) else {
+        continue;
+      };
+      object_count += 1;
+      let shape = self.shape(self.object(oid).shape);
+      for prop in &shape.properties {
+        by_key.entry(prop.key.clone()).or_default().push((
+          prop.data.ty,
+          prop.data.optional,
+          prop.data.declared_on,
+          prop.data.origin,
+        ));
+      }
+    }
+    if object_count < 2 {
+      return false;
+    }
+    for (key, occurrences) in &by_key {
+      if occurrences.len() < 2 {
+        continue;
+      }
+      // All optional → `{ a?: never }` is inhabited as a type; do not collapse.
+      if occurrences.iter().all(|(_, optional, _, _)| *optional) {
+        continue;
+      }
+      // `#`-private identifiers from *different* declarations are distinct
+      // slots, not one conflicting property: a derived class redeclaring `#x`
+      // shadows the base's slot, and the instance type carries both
+      // (`privateNamesAndFields`).
+      let private_ident = matches!(key, PropKey::String(name) if self.name(*name).starts_with('#'));
+      // Any definitely-disjoint pair makes the joint intersection `never`.
+      // This deliberately uses the allocation-free structural check instead of
+      // `self.intersection(tys)`, which recursed back into this function per
+      // shared property and blew up on deep object graphs
+      // (`parserRealSource12`: ~50 % of a run in malloc/free churn).
+      let disjoint_pair = occurrences.iter().enumerate().any(|(i, a)| {
+        occurrences[i + 1..].iter().any(|b| {
+          if private_ident {
+            let brands_differ = match (a.2, b.2) {
+              (Some(x), Some(y)) => x != y,
+              _ => match (a.3, b.3) {
+                (Some(x), Some(y)) => x != y,
+                _ => false,
+              },
+            };
+            if brands_differ {
+              return false;
+            }
+          }
+          self.types_definitely_disjoint(a.0, b.0)
+        })
+      });
+      if disjoint_pair {
+        return true;
+      }
+    }
+    false
+  }
+
+  /// Cheap, conservative disjointness for the object-intersection
+  /// never-reduction: true only when two types cannot share any value by
+  /// direct inspection (distinct primitive families, or distinct literals of
+  /// the same family). Compound types are never "definitely" disjoint — the
+  /// full relation is intentionally not consulted (see the call site).
+  fn types_definitely_disjoint(&self, a: TypeId, b: TypeId) -> bool {
+    fn family(kind: &TypeKind) -> Option<u8> {
+      Some(match kind {
+        TypeKind::String | TypeKind::StringLiteral(_) => 0,
+        TypeKind::Number | TypeKind::NumberLiteral(_) => 1,
+        TypeKind::Boolean | TypeKind::BooleanLiteral(_) => 2,
+        TypeKind::BigInt | TypeKind::BigIntLiteral(_) => 3,
+        TypeKind::Symbol | TypeKind::UniqueSymbol => 4,
+        _ => return None,
+      })
+    }
+    let ka = self.type_kind(a);
+    let kb = self.type_kind(b);
+    match (&ka, &kb) {
+      // Same family: disjoint only for distinct literals.
+      (TypeKind::StringLiteral(x), TypeKind::StringLiteral(y)) => x != y,
+      (TypeKind::NumberLiteral(x), TypeKind::NumberLiteral(y)) => x != y,
+      (TypeKind::BooleanLiteral(x), TypeKind::BooleanLiteral(y)) => x != y,
+      (TypeKind::BigIntLiteral(x), TypeKind::BigIntLiteral(y)) => x != y,
+      _ => match (family(&ka), family(&kb)) {
+        (Some(fa), Some(fb)) => fa != fb,
+        _ => false,
+      },
+    }
+  }
+
   fn sort_and_dedup(&self, members: &mut Vec<TypeId>) {
-    members.sort_by(|a, b| self.type_cmp(*a, *b));
+    // TypeIds are content-addressed fingerprints: equal structure ⇒ equal id.
+    // Sorting by `TypeId` is therefore a correct, deterministic total order for
+    // union/intersection canonicalization, and avoids the catastrophic cost of
+    // structural `type_cmp` over nested object shapes (observed in
+    // `evaluate_object` → `intern_shape` → `intersection` on large AST-walker
+    // sources).
+    members.sort_unstable();
     members.dedup();
   }
 
@@ -983,6 +1185,7 @@ impl TypeStore {
       (TypeKind::BooleanLiteral(a), TypeKind::BooleanLiteral(b)) => a.cmp(&b),
       (TypeKind::NumberLiteral(a), TypeKind::NumberLiteral(b)) => a.cmp(&b),
       (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => {
+        // Never hold an interner guard across recursion that can re-enter it (writer fairness deadlock).
         let names = self.names.read();
         names.name(a).cmp(names.name(b))
       }
@@ -1258,10 +1461,13 @@ impl TypeStore {
   }
 
   fn compare_props(&self, a: &Property, b: &Property) -> Ordering {
-    let names = self.names.read();
-    let ord = a.key.cmp_with(&b.key, &|id| names.name(id));
-    if ord != Ordering::Equal {
-      return ord;
+    // Never hold an interner guard across recursion that can re-enter it (writer fairness deadlock).
+    let key_ord = {
+      let names = self.names.read();
+      a.key.cmp_with(&b.key, &|id| names.name(id))
+    };
+    if key_ord != Ordering::Equal {
+      return key_ord;
     }
     self
       .type_cmp(a.data.ty, b.data.ty)

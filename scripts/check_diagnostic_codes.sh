@@ -99,6 +99,7 @@ RULES = [
     Rule("MINIFY", r"^MINIFY\d{4}$", allowed_crates={"bench/minify-js"}),
     Rule("CONF", r"^CONF\d{4}$", allowed_crates={"parse-js"}),
     Rule("T262", r"^T262\d{4}$", allowed_crates={"test262"}),
+    Rule("VMJS", r"^VMJS\d{4}$", allowed_crates={"vm-js"}),
     Rule("HOST", r"^HOST\d{4}$", shared=True),
     Rule("ICE", r"^ICE\d{4}$", shared=True),
     Rule("CANCEL", r"^CANCEL\d{4}$", allowed_crates={"typecheck-ts"}),
@@ -177,7 +178,7 @@ if invalid or wrong_crate or collisions:
                 print(f"    {path}:{line} (crate={crate})", file=sys.stderr)
         print(file=sys.stderr)
 
-    print("hint: see docs/diagnostic-codes.md for the repo-wide policy", file=sys.stderr)
+    print("hint: see wiki/architecture/diagnostics.md for the repo-wide policy", file=sys.stderr)
     sys.exit(1)
 
 print(f"diagnostic code check passed ({len(code_to_rule)} unique codes, {len(occurrences)} locations)")

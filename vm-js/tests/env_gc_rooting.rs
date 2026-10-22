@@ -117,7 +117,8 @@ fn env_record_traces_binding_values() -> Result<(), VmError> {
 }
 
 #[test]
-fn alloc_env_record_roots_all_inputs_even_if_root_stack_growth_triggers_gc() -> Result<(), VmError> {
+fn alloc_env_record_roots_all_inputs_even_if_root_stack_growth_triggers_gc() -> Result<(), VmError>
+{
   // Determine a GC threshold that is high enough to allow allocating the inputs, but low enough
   // that growing the root stacks will trigger a GC cycle.
   let gc_threshold = {

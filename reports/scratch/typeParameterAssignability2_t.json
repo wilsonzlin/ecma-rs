@@ -1,0 +1,590 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/typeParameterAssignability2.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/typeParameterAssignability2.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2536,
+      "rust_ms": 1729,
+      "tsc_ms": 806,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 161,
+            "end": 162,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 182,
+            "end": 183,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 250,
+            "end": 251,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 271,
+            "end": 272,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 358,
+            "end": 359,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 379,
+            "end": 380,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 393,
+            "end": 394,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 414,
+            "end": 415,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 434,
+            "end": 435,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 455,
+            "end": 456,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 555,
+            "end": 556,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 576,
+            "end": 577,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 629,
+            "end": 630,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 641,
+            "end": 642,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 694,
+            "end": 695,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 706,
+            "end": 707,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 765,
+            "end": 766,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 783,
+            "end": 784,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 801,
+            "end": 802,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 957,
+            "end": 958,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 978,
+            "end": 979,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1031,
+            "end": 1032,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1043,
+            "end": 1044,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1096,
+            "end": 1097,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1108,
+            "end": 1109,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1167,
+            "end": 1168,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1185,
+            "end": 1186,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1203,
+            "end": 1204,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1280,
+            "end": 1281,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1301,
+            "end": 1302,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1324,
+            "end": 1325,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1342,
+            "end": 1343,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1365,
+            "end": 1366,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1386,
+            "end": 1387,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 182,
+            "end": 183,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 250,
+            "end": 251,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 358,
+            "end": 359,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 393,
+            "end": 394,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 434,
+            "end": 435,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 555,
+            "end": 556,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 576,
+            "end": 577,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 597,
+            "end": 598,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 641,
+            "end": 642,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 662,
+            "end": 663,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 718,
+            "end": 719,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 957,
+            "end": 958,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 978,
+            "end": 979,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 999,
+            "end": 1000,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1043,
+            "end": 1044,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1064,
+            "end": 1065,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1120,
+            "end": 1121,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1280,
+            "end": 1281,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1301,
+            "end": 1302,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1342,
+            "end": 1343,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1365,
+            "end": 1366,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/typeParameterAssignability2.ts",
+            "start": 1386,
+            "end": 1387,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 12 extra diagnostic(s); first extra: /typeParameterAssignability2.ts:161-162 [TS2322]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/typeParameterAssignability2.ts",
+          "start": 161,
+          "end": 162,
+          "severity": "error",
+          "message": "assignment type mismatch"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 10/64) rust=[TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322] tsc=[2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

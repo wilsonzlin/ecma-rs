@@ -9,8 +9,8 @@ use types_ts_interned::{
 };
 
 use crate::db::types::DeclTypes;
-use crate::program::check::decls::HirDeclLowerer;
-use crate::{FileKey, Host};
+use crate::program::check::decls::{DeclHost, HirDeclLowerer, LocalDefIndex};
+use crate::FileKey;
 
 /// Lower declaration type information for a single file using the provided
 /// interning store and optional semantic context.
@@ -21,14 +21,14 @@ pub fn lower_decl_types(
   defs: Arc<HashMap<(FileId, String), DefId>>,
   file: FileId,
   file_key: Option<FileKey>,
-  host: Option<&dyn Host>,
+  host: Option<&dyn DeclHost>,
   key_to_id: Option<&dyn Fn(&FileKey) -> Option<FileId>>,
   module_namespace_defs: Option<&HashMap<FileId, DefId>>,
   value_defs: Option<&HashMap<DefId, DefId>>,
 ) -> DeclTypes {
   let mut decls = DeclTypes::default();
   let mut def_map = HashMap::new();
-  let mut local_defs = HashMap::new();
+  let local_defs = LocalDefIndex::from_lowered(lowered);
 
   // The `defs` map is keyed by `(file, name)` and intentionally describes the
   // *module scope* definitions for a file. HIR includes many nested definitions
@@ -64,7 +64,6 @@ pub fn lower_decl_types(
   for def in lowered.defs.iter() {
     if let Some(name) = lowered.names.resolve(def.name) {
       let name = name.to_string();
-      local_defs.insert(name.clone(), def.id);
       if should_canonicalize(def) {
         if let Some(mapped) = defs.get(&(file, name.clone())) {
           def_map.insert(def.id, *mapped);
@@ -141,11 +140,15 @@ pub fn lower_decl_types(
         if !params.is_empty() {
           decls.type_params.insert(target_def, params);
         }
+        // Prefer the class/enum's own DefId for `value_defs` lookup. The TYPE
+        // canonical `target_def` can be a same-name interface when priorities
+        // disagree; the synthetic constructor DefId is always keyed by the
+        // class/enum DefId from hir-align.
         if let Some(value_defs) = value_defs {
           if let Some(value_def) = value_defs
-            .get(&target_def)
+            .get(&def.id)
             .copied()
-            .or_else(|| value_defs.get(&def.id).copied())
+            .or_else(|| value_defs.get(&target_def).copied())
           {
             decls
               .types
@@ -172,9 +175,9 @@ pub fn lower_decl_types(
           .or_insert(enum_ty);
         if let Some(value_defs) = value_defs {
           if let Some(value_def) = value_defs
-            .get(&target_def)
+            .get(&def.id)
             .copied()
-            .or_else(|| value_defs.get(&def.id).copied())
+            .or_else(|| value_defs.get(&target_def).copied())
           {
             decls
               .types
@@ -261,6 +264,15 @@ fn type_expr_is_intrinsic_marker(
   }
 }
 
+/// Overload list of a bare callable type, for declaration-order-preserving
+/// same-name method merges (tsc interface merging).
+fn callable_overloads(store: &TypeStore, ty: TypeId) -> Option<Vec<tti::SignatureId>> {
+  match store.type_kind(ty) {
+    TypeKind::Callable { overloads } => Some(overloads),
+    _ => None,
+  }
+}
+
 pub fn merge_interned_decl_types(
   store: &Arc<TypeStore>,
   existing: TypeId,
@@ -286,10 +298,29 @@ pub fn merge_interned_decl_types(
           overloads: incoming_overloads,
         });
       }
+      // Prefer a complete declaration-order overload set (see ProgramState merge).
+      let existing_set: std::collections::HashSet<_> = existing_overloads.iter().copied().collect();
+      let incoming_set: std::collections::HashSet<_> = incoming_overloads.iter().copied().collect();
+      if existing_set.is_subset(&incoming_set)
+        && incoming_overloads.len() >= existing_overloads.len()
+      {
+        let mut merged = incoming_overloads;
+        let mut seen = std::collections::HashSet::new();
+        merged.retain(|sig| seen.insert(*sig));
+        return store.intern_type(TypeKind::Callable { overloads: merged });
+      }
+      if incoming_set.is_subset(&existing_set)
+        && existing_overloads.len() >= incoming_overloads.len()
+      {
+        let mut merged = existing_overloads;
+        let mut seen = std::collections::HashSet::new();
+        merged.retain(|sig| seen.insert(*sig));
+        return store.intern_type(TypeKind::Callable { overloads: merged });
+      }
       let mut merged = existing_overloads.clone();
       merged.extend(incoming_overloads.iter().copied());
-      merged.sort_by(|a, b| store.compare_signatures(*a, *b));
-      merged.dedup();
+      let mut seen = std::collections::HashSet::new();
+      merged.retain(|sig| seen.insert(*sig));
       store.intern_type(TypeKind::Callable { overloads: merged })
     }
     (TypeKind::Object(obj_a), TypeKind::Object(obj_b)) => {
@@ -305,7 +336,26 @@ pub fn merge_interned_decl_types(
           .iter_mut()
           .find(|p: &&mut Property| p.key == prop.key)
         {
-          *existing = prop;
+          // tsc interface merging: same-name *methods* across declarations form
+          // one overload set with the later declaration's signatures taking
+          // precedence (they resolve first). Non-callable duplicates keep
+          // last-wins (tsc requires them to be identical — TS2717 reports
+          // conflicts elsewhere).
+          match (
+            callable_overloads(store.as_ref(), existing.data.ty),
+            callable_overloads(store.as_ref(), prop.data.ty),
+          ) {
+            (Some(earlier), Some(later)) => {
+              let mut overloads = later;
+              for sig in earlier {
+                if !overloads.contains(&sig) {
+                  overloads.push(sig);
+                }
+              }
+              existing.data.ty = store.intern_type(TypeKind::Callable { overloads });
+            }
+            _ => *existing = prop,
+          }
         } else {
           merged.push(prop);
         }

@@ -120,7 +120,15 @@ impl ProgramState {
         Stmt::TypeAliasDecl(alias) => {
           let span = loc_to_span(file, stmt.loc);
           let name = alias.stx.name.clone();
-          let ty = self.type_from_type_expr(&alias.stx.type_expr);
+          // HIR-only binder slice: when the file is already lowered, seed
+          // `unknown` and let `type_of_def` recompute from
+          // `DefTypeInfo::TypeAlias` (semantics/bindings are incomplete here).
+          // Fall back to AST lowering only when HIR is unavailable.
+          let ty = if self.hir_lowered.contains_key(&file) {
+            self.store.primitive_ids().unknown
+          } else {
+            self.type_from_type_expr(&alias.stx.type_expr)
+          };
           if let TypeExpr::TypeReference(reference) = alias.stx.type_expr.stx.as_ref() {
             if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
               if let Some(binding) = bindings.get(type_name) {

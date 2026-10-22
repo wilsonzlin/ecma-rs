@@ -1,5 +1,6 @@
 use vm_js::{
-  Heap, HeapLimits, JobCallback, NativeFunctionId, PromiseReaction, PromiseReactionType, Value, VmError,
+  Heap, HeapLimits, JobCallback, NativeFunctionId, PromiseReaction, PromiseReactionType, Value,
+  VmError,
 };
 
 #[test]
@@ -19,18 +20,25 @@ fn promise_result_value_is_traced() -> Result<(), VmError> {
       .promise_fulfill(promise, Value::String(result_string))?;
 
     scope.heap_mut().collect_garbage();
-    assert_eq!(scope.heap().get_string(result_string)?.to_utf8_lossy(), "result");
+    assert_eq!(
+      scope.heap().get_string(result_string)?.to_utf8_lossy(),
+      "result"
+    );
   }
 
   // Stack roots were removed when the scope was dropped.
   heap.collect_garbage();
   assert!(!heap.is_valid_object(promise));
-  assert!(matches!(heap.get_string(result_string), Err(VmError::InvalidHandle)));
+  assert!(matches!(
+    heap.get_string(result_string),
+    Err(VmError::InvalidHandle)
+  ));
   Ok(())
 }
 
 #[test]
-fn promise_reaction_handler_traced_while_pending_and_collectable_after_settlement() -> Result<(), VmError> {
+fn promise_reaction_handler_traced_while_pending_and_collectable_after_settlement(
+) -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
   let promise;
@@ -59,7 +67,9 @@ fn promise_reaction_handler_traced_while_pending_and_collectable_after_settlemen
 
     // Settling clears reaction lists to `None`, allowing the handler to be collected if otherwise
     // unreachable.
-    scope.heap_mut().promise_fulfill(promise, Value::Undefined)?;
+    scope
+      .heap_mut()
+      .promise_fulfill(promise, Value::Undefined)?;
 
     scope.heap_mut().collect_garbage();
     assert!(!scope.heap().is_valid_object(handler));

@@ -19,7 +19,9 @@ fn assert_value_is_utf8(rt: &JsRuntime, value: Value, expected: &str) {
 #[test]
 fn try_catch_binds_param_and_returns_value() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"try { throw "x"; } catch(e){ e }"#).unwrap();
+  let value = rt
+    .exec_script(r#"try { throw "x"; } catch(e){ e }"#)
+    .unwrap();
   assert_value_is_utf8(&rt, value, "x");
 }
 
@@ -73,7 +75,9 @@ fn try_statement_update_empty_to_undefined_catch_only() {
 #[test]
 fn try_statement_update_empty_to_undefined_catch_and_finally() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"1; try { } catch { } finally { }"#).unwrap();
+  let value = rt
+    .exec_script(r#"1; try { } catch { } finally { }"#)
+    .unwrap();
   assert_eq!(value, Value::Undefined);
 }
 
@@ -167,7 +171,9 @@ fn labelled_continue_targets_outer_loop() {
 #[test]
 fn call_expression_invokes_user_function() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"function f(a){ return a; } f(5)"#).unwrap();
+  let value = rt
+    .exec_script(r#"function f(a){ return a; } f(5)"#)
+    .unwrap();
   assert_eq!(value, Value::Number(5.0));
 }
 
@@ -192,7 +198,9 @@ fn new_target_is_constructor_for_new_expression() {
 #[test]
 fn try_catch_converts_not_callable_into_type_error_object() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"try { (0)(); } catch(e) { e.name }"#).unwrap();
+  let value = rt
+    .exec_script(r#"try { (0)(); } catch(e) { e.name }"#)
+    .unwrap();
   assert_value_is_utf8(&rt, value, "TypeError");
 }
 
@@ -208,7 +216,9 @@ fn try_catch_converts_builtin_type_error_into_type_error_object() {
 #[test]
 fn try_catch_converts_not_constructable_into_type_error_object() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"try { new 0; } catch(e) { e.name }"#).unwrap();
+  let value = rt
+    .exec_script(r#"try { new 0; } catch(e) { e.name }"#)
+    .unwrap();
   assert_value_is_utf8(&rt, value, "TypeError");
 }
 
@@ -311,4 +321,63 @@ fn try_catch_converts_prototype_chain_too_deep_into_type_error_object() {
     .exec_script(r#"try { Object.setPrototypeOf({}, deep); } catch(e) { e.name }"#)
     .unwrap();
   assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn with_statement_resolves_object_bindings_and_unscopables() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+      var v = 1;
+      globalThis[Symbol.unscopables] = { v: true };
+      function f(x) {
+        var a, b;
+        with (globalThis) { a = v; }
+        var v = x;
+        with (globalThis) { b = v; v = 20; }
+        return a === undefined && b === 10 && v === 20 && globalThis.v === 1;
+      }
+      f(10)
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn with_statement_null_object_throws_type_error() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { with (null) {} } catch (e) { e instanceof TypeError }"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn thrown_object_survives_gc_during_catch_env_creation() {
+  // Reproduction: `eval_catch` used to `env_create` (which may GC) before rooting the thrown
+  // value. With a zero GC threshold every allocation collects, so an unrooted thrown object is
+  // swept before the catch binding is installed — surfacing as `InvalidHandle`.
+  let vm = Vm::new(VmOptions::default());
+  let heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
+  let mut rt = JsRuntime::new(vm, heap).unwrap();
+
+  // Loop so the throw→catch path runs after the realm's live set has churned; keep heaps tiny.
+  for _ in 0..8 {
+    let value = rt
+      .exec_script(
+        r#"
+          var out = "none";
+          try {
+            throw { marker: "keep-" + "me", n: 1 };
+          } catch (e) {
+            out = e.marker + ":" + e.n;
+          }
+          out
+        "#,
+      )
+      .unwrap_or_else(|err| panic!("expected catch to keep thrown object alive, got {err:?}"));
+    assert_value_is_utf8(&rt, value, "keep-me:1");
+  }
 }

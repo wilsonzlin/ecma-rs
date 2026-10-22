@@ -43,7 +43,17 @@ impl<'a> Parser<'a> {
   where
     F: Fn(&mut Self) -> SyntaxResult<S>,
   {
-    self.repeat_while(|p| p.peek().typ != tt, f)
+    // Also stop at EOF so ASI'd trailing statements (e.g. bare `return` /
+    // `break` at end-of-input) do not spuriously start another item; the
+    // caller’s `require(tt)` then reports the unclosed delimiter.
+    // When `tt` is itself `EOF` (top-level), this is equivalent to `!= EOF`.
+    self.repeat_while(
+      |p| {
+        let typ = p.peek().typ;
+        typ != tt && typ != TT::EOF
+      },
+      f,
+    )
   }
 
   pub fn repeat_until_tt_with_loc<S: Drive + DriveMut, F>(
@@ -54,7 +64,13 @@ impl<'a> Parser<'a> {
   where
     F: Fn(&mut Self) -> SyntaxResult<S>,
   {
-    self.repeat_while_with_loc(|p| p.peek().typ != tt, f)
+    self.repeat_while_with_loc(
+      |p| {
+        let typ = p.peek().typ;
+        typ != tt && typ != TT::EOF
+      },
+      f,
+    )
   }
 
   /// Parse a list of items separated by a delimiter until `close`, which will also be consumed.

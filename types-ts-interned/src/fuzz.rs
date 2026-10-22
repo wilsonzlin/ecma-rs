@@ -344,6 +344,7 @@ fn resolve_index(
       optional: modifier_value(optional),
       name_type: name_type.map(|idx| resolve_index(graph, store, cache, visiting, idx, depth + 1)),
       as_type: as_type.map(|idx| resolve_index(graph, store, cache, visiting, idx, depth + 1)),
+      homomorphic_var: None,
     })),
     SerializedType::TemplateLiteral { head, spans } => {
       let spans: Vec<_> = spans

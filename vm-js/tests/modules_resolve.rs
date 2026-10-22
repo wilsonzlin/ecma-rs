@@ -321,4 +321,3 @@ fn ambiguous_star_exports_when_binding_name_differs() {
     })
   );
 }
-

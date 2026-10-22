@@ -1,0 +1,793 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 1,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 0,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 1
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+      "outcome": "match",
+      "duration_ms": 2158,
+      "rust_ms": 1581,
+      "tsc_ms": 576,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 419,
+            "end": 420,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 439,
+            "end": 440,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 456,
+            "end": 457,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 460,
+            "end": 461,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 480,
+            "end": 481,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 484,
+            "end": 485,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 508,
+            "end": 509,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 525,
+            "end": 526,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 529,
+            "end": 530,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 594,
+            "end": 595,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 615,
+            "end": 616,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 632,
+            "end": 634,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 637,
+            "end": 638,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 654,
+            "end": 656,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 659,
+            "end": 660,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 681,
+            "end": 682,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 698,
+            "end": 700,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 703,
+            "end": 704,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 767,
+            "end": 768,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 788,
+            "end": 789,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 810,
+            "end": 811,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 832,
+            "end": 833,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 854,
+            "end": 855,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 871,
+            "end": 873,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 876,
+            "end": 877,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 951,
+            "end": 952,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 972,
+            "end": 973,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 994,
+            "end": 995,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1016,
+            "end": 1017,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1038,
+            "end": 1039,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1055,
+            "end": 1057,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1060,
+            "end": 1061,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1133,
+            "end": 1134,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1154,
+            "end": 1155,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1171,
+            "end": 1173,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1176,
+            "end": 1177,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1193,
+            "end": 1195,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1198,
+            "end": 1199,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1220,
+            "end": 1221,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1237,
+            "end": 1239,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1242,
+            "end": 1243,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 419,
+            "end": 420,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 439,
+            "end": 440,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 456,
+            "end": 457,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 460,
+            "end": 461,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 480,
+            "end": 481,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 484,
+            "end": 485,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 508,
+            "end": 509,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 525,
+            "end": 526,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 529,
+            "end": 530,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 594,
+            "end": 595,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 615,
+            "end": 616,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 632,
+            "end": 634,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 637,
+            "end": 638,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 654,
+            "end": 656,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 659,
+            "end": 660,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 681,
+            "end": 682,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 698,
+            "end": 700,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 703,
+            "end": 704,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 767,
+            "end": 768,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 788,
+            "end": 789,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 810,
+            "end": 811,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 832,
+            "end": 833,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 854,
+            "end": 855,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 871,
+            "end": 873,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 876,
+            "end": 877,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 951,
+            "end": 952,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 972,
+            "end": 973,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 994,
+            "end": 995,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1016,
+            "end": 1017,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1038,
+            "end": 1039,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1055,
+            "end": 1057,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1060,
+            "end": 1061,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1133,
+            "end": 1134,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1154,
+            "end": 1155,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1171,
+            "end": 1173,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1176,
+            "end": 1177,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1193,
+            "end": 1195,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1198,
+            "end": 1199,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1220,
+            "end": 1221,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1237,
+            "end": 1239,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts",
+            "start": 1242,
+            "end": 1243,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": false,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 17/64) rust=[TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322] tsc=[2454,2454,2322,2454,2322,2454,2454,2322,2454,2454,2454,2322,2454,2322,2454,2454,2322,2454,2454,2454,2454,2454,2454,2322,2454,2454,2454,2454,2454,2454,2322,2454,2454,2454,2322,2454,2322,2454,2454,2322,2454]"
+      },
+      "mismatched": false
+    }
+  ]
+}

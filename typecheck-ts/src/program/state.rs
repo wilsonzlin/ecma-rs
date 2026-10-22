@@ -39,7 +39,7 @@ use crate::check::overload::{callable_signatures, CallArgType};
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
-use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
+use crate::db::{self, BodyCheckContext, BodyInfo, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::{FileOrigin, FileRegistry};
 use crate::profile::{QueryKind, QueryStatsCollector};
@@ -141,11 +141,16 @@ struct ProgramState {
   file_overrides: HashMap<FileKey, Arc<str>>,
   decl_types_fingerprint: Option<u64>,
   cached_body_context: Option<body_context::CachedBodyCheckContext>,
+  /// The context `Arc` most recently written to the salsa input, used to skip
+  /// redundant input writes (which would bump the salsa revision).
+  published_body_context: Option<Arc<BodyCheckContext>>,
   typecheck_db: db::TypecheckDb,
   checker_caches: CheckerCaches,
   cache_stats: CheckerCacheStats,
+  /// Shared per-body cache-stat accumulator handed to each published
+  /// [`BodyCheckContext`]; drained into `cache_stats` after body checking.
+  body_cache_stats_sink: std::sync::Arc<std::sync::Mutex<CheckerCacheStats>>,
   asts: HashMap<FileId, Arc<Node<TopLevel>>>,
-  ast_indexes: HashMap<FileId, Arc<check::hir_body::AstIndex>>,
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_map: HashMap<BodyId, BodyMeta>,
@@ -155,8 +160,17 @@ struct ProgramState {
   local_semantics: HashMap<FileId, sem_ts::locals::TsLocalSemantics>,
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
-  body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
-  checking_bodies: HashSet<BodyId>,
+  /// Program-state-local memo of body results. Three roles: (a) memo for the
+  /// imperative *inference-grade* checker used during declaration typing
+  /// ([`ProgramState::check_body`]), (b) after `check()`, a mirror of the
+  /// final salsa-tracked results so `type_of_expr` stays consistent, and (c)
+  /// the result store for loaded snapshots. Never feeds the salsa database;
+  /// final-grade results live in the tracked `check_body` query.
+  local_body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
+  /// Bodies currently being checked by the imperative inference path, used for
+  /// re-entrancy detection. Shared (`Arc<Mutex<_>>`) so a drop guard can remove
+  /// entries on unwind without holding a raw pointer into `ProgramState`.
+  checking_bodies: std::sync::Arc<std::sync::Mutex<HashSet<BodyId>>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   local_symbol_info: BTreeMap<semantic_js::SymbolId, crate::db::symbols::LocalSymbolInfo>,
@@ -172,7 +186,7 @@ struct ProgramState {
   module_namespace_types: HashMap<FileId, TypeId>,
   module_namespace_in_progress: HashSet<FileId>,
   namespace_member_index: Option<Arc<NamespaceMemberIndex>>,
-  callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
+  callable_overloads: HashMap<(FileId, String, bool), Vec<DefId>>,
   import_assignment_requires: Vec<ImportAssignmentRequireRecord>,
   diagnostics: Vec<Diagnostic>,
   implicit_any_reported: HashSet<Span>,
@@ -183,7 +197,14 @@ struct ProgramState {
   interned_type_param_decls: HashMap<DefId, Arc<[tti::TypeParamDecl]>>,
   interned_intrinsics: HashMap<DefId, tti::IntrinsicKind>,
   interned_class_instances: HashMap<DefId, tti::TypeId>,
+  /// DefIds with [`DefKind::Enum`] — used for nominal enum assignability.
+  interned_enum_defs: HashSet<DefId>,
   value_defs: HashMap<DefId, DefId>,
+  /// JS expando members registered by
+  /// [`ProgramState::register_js_expando_members`] (outer var def → member
+  /// names). Body checking uses this to skip the assignability check at the
+  /// special-assignment site (tsc binds the member from the RHS).
+  expando_members: HashMap<DefId, HashSet<String>>,
   query_stats: QueryStatsCollector,
   current_file: Option<FileId>,
   next_def: u64,
@@ -207,7 +228,10 @@ impl GlobalBindingsDb for ProgramState {
       for (name, binding) in state.bindings.iter() {
         let mut binding = binding.clone();
         if let Some(def) = binding.def {
-          if let Some(ty) = self.interned_def_types.get(&def).copied() {
+          // Class/enum defs store the *instance* type; value bindings need
+          // the constructor value stored under the synthetic value def.
+          let ty_def = self.value_defs.get(&def).copied().unwrap_or(def);
+          if let Some(ty) = self.interned_def_types.get(&ty_def).copied() {
             binding.type_id = Some(ty);
           }
           if let Some(sem) = semantics {
@@ -223,6 +247,10 @@ impl GlobalBindingsDb for ProgramState {
   }
 
   fn type_of_def(&self, def: DefId) -> Option<TypeId> {
+    // Only used for global *value* bindings (`db::queries::global_bindings`):
+    // class/enum defs store the instance type, so map through to the
+    // synthetic value def carrying the constructor type first.
+    let def = self.value_defs.get(&def).copied().unwrap_or(def);
     self.interned_def_types.get(&def).copied()
   }
 
@@ -254,11 +282,14 @@ impl ProgramState {
       file_overrides: HashMap::new(),
       decl_types_fingerprint: None,
       cached_body_context: None,
+      published_body_context: None,
       typecheck_db,
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
       cache_stats: CheckerCacheStats::default(),
+      body_cache_stats_sink: std::sync::Arc::new(std::sync::Mutex::new(
+        CheckerCacheStats::default(),
+      )),
       asts: HashMap::new(),
-      ast_indexes: HashMap::new(),
       files: HashMap::new(),
       def_data: HashMap::new(),
       body_map: HashMap::new(),
@@ -268,8 +299,8 @@ impl ProgramState {
       local_semantics: HashMap::new(),
       semantics: None,
       qualified_def_members: Arc::new(HashMap::new()),
-      body_results: HashMap::new(),
-      checking_bodies: HashSet::new(),
+      local_body_results: HashMap::new(),
+      checking_bodies: std::sync::Arc::new(std::sync::Mutex::new(HashSet::new())),
       symbol_to_def: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       local_symbol_info: BTreeMap::new(),
@@ -296,7 +327,9 @@ impl ProgramState {
       interned_type_param_decls: HashMap::new(),
       interned_intrinsics: HashMap::new(),
       interned_class_instances: HashMap::new(),
+      interned_enum_defs: HashSet::new(),
       value_defs: HashMap::new(),
+      expando_members: HashMap::new(),
       query_stats,
       current_file: None,
       next_def: 0,
@@ -311,13 +344,16 @@ impl ProgramState {
     self.snapshot_loaded = false;
     self.decl_types_fingerprint = None;
     self.cached_body_context = None;
+    self.published_body_context = None;
 
-    self.typecheck_db.clear_body_results();
+    self.typecheck_db.set_body_context(None);
     self.checker_caches.clear_shared();
     self.cache_stats = CheckerCacheStats::default();
+    if let Ok(mut sink) = self.body_cache_stats_sink.lock() {
+      *sink = CheckerCacheStats::default();
+    }
 
     self.asts.clear();
-    self.ast_indexes.clear();
     self.files.clear();
     self.def_data.clear();
     self.body_map.clear();
@@ -327,8 +363,12 @@ impl ProgramState {
     self.local_semantics.clear();
     self.semantics = None;
     self.qualified_def_members = Arc::new(HashMap::new());
-    self.body_results.clear();
-    self.checking_bodies.clear();
+    self.local_body_results.clear();
+    self
+      .checking_bodies
+      .lock()
+      .unwrap_or_else(|err| err.into_inner())
+      .clear();
     self.symbol_to_def.clear();
     self.symbol_occurrences.clear();
     self.local_symbol_info.clear();
@@ -354,7 +394,9 @@ impl ProgramState {
     self.interned_type_param_decls.clear();
     self.interned_intrinsics.clear();
     self.interned_class_instances.clear();
+    self.interned_enum_defs.clear();
     self.value_defs.clear();
+    self.expando_members.clear();
     self.current_file = None;
     self.next_def = 0;
     self.next_body = 0;
@@ -371,7 +413,11 @@ impl ProgramState {
   }
 
   fn push_program_diagnostic(&mut self, diagnostic: Diagnostic) {
-    if diagnostic.code.as_str() == codes::IMPLICIT_ANY.as_str() {
+    let code = diagnostic.code.as_str();
+    if code == codes::IMPLICIT_ANY.as_str()
+      || code == codes::MEMBER_IMPLICIT_ANY.as_str()
+      || code == codes::CIRCULAR_INITIALIZER_IMPLICIT_ANY.as_str()
+    {
       if !self.implicit_any_reported.insert(diagnostic.primary) {
         return;
       }
@@ -473,10 +519,14 @@ impl ProgramState {
       };
     }
     if ns.contains(sem_ts::Namespace::TYPE) {
+      // Prefer `class` over `interface` for the same name so class+interface
+      // declaration merging hosts the instance type on the class DefId (and the
+      // synthetic value-side constructor stays reachable via `value_defs`).
+      // Pure interface merges are unaffected (no class competitor).
       return match &data.kind {
-        DefKind::Interface(_) => 0,
-        DefKind::TypeAlias(_) => 1,
-        DefKind::Class(_) => 2,
+        DefKind::Class(_) => 0,
+        DefKind::Interface(_) => 1,
+        DefKind::TypeAlias(_) => 2,
         DefKind::Enum(_) => 3,
         DefKind::Import(_) | DefKind::ImportAlias(_) => 4,
         DefKind::VarDeclarator(_) => 5,
@@ -553,6 +603,8 @@ impl ProgramState {
     best.map(|(_, id)| id)
   }
 
+  // Used by snapshot loading (`program/snapshot.rs`, `serde` feature).
+  #[cfg_attr(not(feature = "serde"), allow(dead_code))]
   fn update_typecheck_roots(&mut self, roots: &[FileId]) {
     let mut keys: Vec<FileKey> = roots
       .iter()
@@ -566,6 +618,8 @@ impl ProgramState {
       .set_roots(Arc::from(keys.into_boxed_slice()));
   }
 
+  // Used by snapshot loading (`program/snapshot.rs`, `serde` feature).
+  #[cfg_attr(not(feature = "serde"), allow(dead_code))]
   fn sync_typecheck_roots(&mut self) {
     let roots = self.root_ids.clone();
     self.update_typecheck_roots(&roots);
@@ -574,6 +628,8 @@ impl ProgramState {
   fn recompute_global_bindings(&mut self) {
     self.global_bindings = crate::db::global_bindings(self);
   }
+  // Used by snapshot loading (`program/snapshot.rs`, `serde` feature).
+  #[cfg_attr(not(feature = "serde"), allow(dead_code))]
   fn ensure_body_map_from_defs(&mut self) {
     for (file, state) in self.files.iter() {
       if let Some(body) = state.top_body {
@@ -681,7 +737,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn initializer_bodies_have_function_parent() {
+  fn body_local_vars_are_localid_only_under_enclosing_function() {
     let source = r#"
 function Box() {}
 
@@ -717,37 +773,29 @@ function onlyObjects(val: object | number) {
       other => panic!("unexpected def kind for onlyObjects: {other:?}"),
     };
 
-    let inner_initializer_body = state
-      .def_data
-      .iter()
-      .find_map(|(def, data)| {
-        (data.file == file_id && data.name == "inner")
-          .then(|| state.body_of_def(*def))
-          .flatten()
-      })
-      .expect("inner body");
-
-    let inner_meta = state
-      .body_map
-      .get(&inner_initializer_body)
-      .expect("inner meta");
-    assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
-
-    let parent = state
-      .body_parents
-      .get(&inner_initializer_body)
-      .copied()
-      .expect("initializer body parent");
-    assert_eq!(
-      parent, only_objects_body,
-      "expected initializer body parent to be enclosing function body"
+    // Body-local `inner` has no DefId; it lives in Body.locals.
+    assert!(
+      !state
+        .def_data
+        .iter()
+        .any(|(_, data)| data.file == file_id && data.name == "inner"),
+      "body-local inner must not allocate a DefId"
     );
-    let parent_kind = state.body_map.get(&parent).map(|m| m.kind);
-    assert_eq!(parent_kind, Some(HirBodyKind::Function));
+    let lowered = state.hir_lowered.get(&file_id).expect("lowered");
+    let only_objects_hir = lowered
+      .body(only_objects_body)
+      .expect("onlyObjects hir body");
+    let inner_local = only_objects_hir
+      .locals_with_kind(hir_js::LocalKind::Var)
+      .find(|(_, local)| lowered.names.resolve(local.name) == Some("inner"));
+    assert!(
+      inner_local.is_some(),
+      "inner should be a LocalId under onlyObjects"
+    );
   }
 
   #[test]
-  fn narrowing_patterns_fixture_initializer_parent_chain() {
+  fn narrowing_patterns_fixture_body_locals_resolve() {
     let source = include_str!("../../tests/litmus/narrowing_patterns/main.ts");
     let mut host = crate::MemoryHost::new();
     let file_key = FileKey::new("main.ts");
@@ -772,35 +820,24 @@ function onlyObjects(val: object | number) {
       other => panic!("unexpected def kind for onlyObjects: {other:?}"),
     };
 
-    let inner_initializer_body = state
-      .def_data
-      .iter()
-      .find_map(|(def, data)| {
-        (data.file == file_id && data.name == "inner")
-          .then(|| state.body_of_def(*def))
-          .flatten()
-      })
-      .expect("inner body");
-    let inner_meta = state
-      .body_map
-      .get(&inner_initializer_body)
-      .expect("inner meta");
-    assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
-
-    let parent = state
-      .body_parents
-      .get(&inner_initializer_body)
-      .copied()
-      .expect("initializer body parent");
-    assert_eq!(
-      parent, only_objects_body,
-      "expected narrowing_patterns inner initializer body to be parented to onlyObjects body"
+    assert!(
+      !state
+        .def_data
+        .iter()
+        .any(|(_, data)| data.file == file_id && data.name == "inner"),
+      "body-local inner must not allocate a DefId"
     );
 
     let lowered = state.hir_lowered.get(&file_id).expect("lowered");
     let only_objects_hir = lowered
       .body(only_objects_body)
       .expect("onlyObjects hir body");
+    assert!(
+      only_objects_hir
+        .locals_with_kind(hir_js::LocalKind::Var)
+        .any(|(_, local)| lowered.names.resolve(local.name) == Some("inner")),
+      "inner should be a LocalId under onlyObjects"
+    );
     let val_pat_id = only_objects_hir
       .function
       .as_ref()
@@ -837,7 +874,7 @@ function onlyObjects(val: object | number) {
       if let Some(diag) = result
         .diagnostics
         .iter()
-        .find(|diag| diag.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+        .find(|diag| diag.code.as_str() == codes::CANNOT_FIND_NAME.as_str())
       {
         let owner = state.owner_of_body(body);
         let owner_name = owner

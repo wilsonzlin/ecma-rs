@@ -64,8 +64,7 @@ fn import_meta_hooks_are_called_and_object_is_spec_shaped() {
   let mut vm = Vm::new(VmOptions::default());
 
   let module = ModuleId::from_raw(1);
-  let import_meta =
-    create_import_meta_object(&mut vm, &mut scope, &mut hooks, module).unwrap();
+  let import_meta = create_import_meta_object(&mut vm, &mut scope, &mut hooks, module).unwrap();
 
   assert_eq!(scope.heap().object_prototype(import_meta).unwrap(), None);
 

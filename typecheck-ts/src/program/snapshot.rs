@@ -118,7 +118,7 @@ impl Program {
     }
 
     let mut body_results: Vec<_> = state
-      .body_results
+      .local_body_results
       .iter()
       .map(|(id, res)| (*id, (**res).clone()))
       .collect();
@@ -370,7 +370,7 @@ impl Program {
         .collect();
       state.body_map = HashMap::new();
       state.body_parents = HashMap::new();
-      state.body_results = snapshot
+      state.local_body_results = snapshot
         .body_results
         .into_iter()
         .map(|res| (res.body(), Arc::new(res)))

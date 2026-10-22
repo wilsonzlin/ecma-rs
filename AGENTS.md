@@ -1,6 +1,9 @@
 # AGENTS.md — TypeScript Type Checking for ecma-rs (from-scratch “ideal” design)
 
-This document is the **authoritative architecture + implementation playbook** for adding **comprehensive, rigorous TypeScript type checking** to this repository.
+This document is the **harness-wired agent contract**: authoritative architecture
+constraints, implementation playbook, and coding standards for adding
+**comprehensive, rigorous TypeScript type checking** to this repository. Agents load
+it; do not gut it casually.
 
 Assumptions:
 - You have **full ownership** of the entire codebase (parser, symbols, optimizers, minifier, workspace layout).
@@ -19,6 +22,33 @@ Secondary outcomes:
 - **Incremental-ready** architecture (query-based, revisioned inputs, dependency tracking).
 - **Parallel by design** (safe concurrent checking across files/bodies).
 - Predictable performance and memory (interning, canonicalization, bounded caches).
+
+---
+
+## Living docs (wiki)
+
+This file is **not** the live status board. Deep pages, dated health, roadmap, crate
+rationale, theory, and engineering ops live under [`wiki/`](./wiki/index.md).
+
+| Need | Page |
+| --- | --- |
+| Reading order / map | [`wiki/index.md`](./wiki/index.md) |
+| Vision, non-goals, success criteria | [`wiki/vision.md`](./wiki/vision.md) |
+| Crate map + structural assessment | [`wiki/architecture/overview.md`](./wiki/architecture/overview.md) |
+| Host / query DAG / parallelism / API | [`wiki/architecture/engine.md`](./wiki/architecture/engine.md) |
+| Determinism doctrine | [`wiki/architecture/determinism.md`](./wiki/architecture/determinism.md) |
+| Diagnostics model + code registry | [`wiki/architecture/diagnostics.md`](./wiki/architecture/diagnostics.md) |
+| Compiler-theory litmus + references | [`wiki/theory/compiler-theory.md`](./wiki/theory/compiler-theory.md) |
+| Per-crate depth | [`wiki/crates/`](./wiki/crates/) |
+| How to run tests / CI / workflows | [`wiki/engineering/testing.md`](./wiki/engineering/testing.md), [`workflows`](./wiki/engineering/workflows.md) |
+| Build/test health (dated) | [`wiki/status/health.md`](./wiki/status/health.md) |
+| Phased roadmap + acceptance criteria | [`wiki/status/roadmap.md`](./wiki/status/roadmap.md) |
+| Absorption ledger (AGENTS ↔ wiki) | [`wiki/meta/sources.md`](./wiki/meta/sources.md) |
+| Engineering doctrine | [`wiki/meta/how-to-work.md`](./wiki/meta/how-to-work.md) |
+
+**Conflict rule:** architecture constraints and playbook rules in this file win until
+deliberately reconciled. Dated status (what builds, what's done) is owned by the wiki
+— prefer [`status/health`](./wiki/status/health.md) and [`status/roadmap`](./wiki/status/roadmap.md).
 
 ---
 
@@ -55,6 +85,9 @@ Secondary outcomes:
 
 ## Target architecture (north star)
 
+Steady-state operating model (Host, query DAG, parallelism, memory):
+[`wiki/architecture/engine.md`](./wiki/architecture/engine.md).
+
 Pipeline (conceptual):
 
 ```
@@ -75,56 +108,48 @@ Key idea: **`parse-js` AST is the canonical syntax model**, HIR is stable-ish fo
 
 ## Workspace layout (recommended)
 
-This project is not “just type checking”; it is a full JS/TS toolchain (parser, semantics, optimizer, minifier, tooling). In the **best long-term end-state** (no backwards-compat constraints, one-shot rebuild), TS type checking should not be “bolted on” to existing semantics. Instead, we should converge the entire repo on a single, deterministic, lock-minimal **semantic foundation** shared by:
-- `typecheck-ts` (full TS binder + checker)
-- `optimize-js` (value-namespace-only mode)
-- `minify-js` (renaming + semantics-aware transforms)
+This project is a full JS/TS toolchain, not “just type checking.” Converge on a single,
+deterministic, lock-minimal **semantic foundation** shared by `typecheck-ts`,
+`optimize-js` (JS-mode / value namespace), and `minify-js`. Live crate inventory,
+dependency graph, and structural assessment:
+[`wiki/architecture/overview.md`](./wiki/architecture/overview.md).
 
 ```
 ecma-rs/
-├── parse-js/                  # existing: TS/JS parser + AST + Loc
-├── semantic-js/               # new: unified, deterministic semantics (scopes/symbols/modules/exports); only semantics layer (symbol-js removed)
-├── optimize-js/               # existing
-├── minify-js/                 # existing
-├── emit-js/                   # new: deterministic JS emitter/printer (HIR/IR -> JS), shared by minify/opt tooling
-├── hir-js/                    # new: lowering from parse-js AST → HIR (DefId/BodyId/ExprId)
-├── types-ts-interned/         # new: pure type representation + interner + relations (no AST refs)
-├── typecheck-ts/              # new: checker + diagnostics + public API surface (uses hir-js + semantic-js + types-ts-interned)
-├── typecheck-ts-harness/      # new: conformance + differential testing vs tsc (CLI/binary + lib helpers)
-├── diagnostics/               # new: shared Diagnostic model + rendering + utilities (used repo-wide)
+├── parse-js/                  # TS/JS parser + AST + Loc (canonical syntax)
+├── hir-js/                    # AST → HIR (DefId/BodyId/ExprId, SpanMap)
+├── semantic-js/               # sole semantics layer (JS + TS modes); symbol-js removed
+├── types-ts-interned/         # pure type store + relations (no AST refs)
+├── typecheck-ts/              # Program/Host, salsa, body checking
+├── typecheck-ts-harness/      # conformance + difftsc vs tsc
+├── diagnostics/               # shared Diagnostic / Span model
+├── emit-js/                   # deterministic printer (minify/opt)
+├── optimize-js/               # CFG/SSA optimizer
+├── minify-js/                 # TS erasure + renaming
 └── Cargo.toml
 ```
 
-Notes:
-- Keep `parse-js` as the single source of syntax truth; **do not rewrite the parser** (it is already high-coverage and fast).
-- Keep type representation **pure** and reusable (no AST references).
-- Prefer a **single** semantics layer (`semantic-js`) used by optimizer/minifier/typechecker (one-shot end-state). Do not maintain two competing binders long-term.
+Notes (normative):
+- Keep `parse-js` as the single source of syntax truth; **do not rewrite the parser**.
+- Keep type representation **pure** (no AST references) in `types-ts-interned`.
+- Prefer a **single** semantics layer (`semantic-js`); do not revive competing binders.
 
 ## Fit to this repo (integration boundaries)
 
 - **`parse-js`**: the canonical TS/TSX/JS parser + AST. The type checker consumes this AST; **no new syntax tree is required**.
-- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). It supersedes `symbol-js` (now removed from the workspace) and is the sole semantics API used by all downstream crates; straggling references should be migrated rather than reviving the legacy crate.
-- **`optimize-js` / `minify-js`**: today they rely on JS-mode semantics via `semantic-js` (e.g. `semantic_js::js::bind_js`) and should continue to work without the TS type checker. Type checking must be **opt-in** and should not become a mandatory dependency edge for minification.
-- **Typed outputs**: for downstream AOT compilation, prefer producing a typed HIR/IR (and location→ID mappings) rather than mutating/annotating the AST in-place.
+- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). Sole semantics API for all downstream crates; do not revive `symbol-js` ([graveyard](./wiki/graveyard.md#symbol-js)).
+- **`optimize-js` / `minify-js`**: JS-mode via `semantic-js` (e.g. `semantic_js::js::bind_js`); must keep working without the TS type checker. Type checking is **opt-in**, not a mandatory minify dependency.
+- **Typed outputs**: prefer typed HIR/IR + location→ID maps; do not mutate/annotate the AST in-place for bulk type data.
 
-## Repo-wide modernization (strongly encouraged)
+## Repo-wide modernization (hygiene invariants)
 
-With full ownership (no backwards-compat constraints), prioritize these hygiene fixes early because they prevent long-term drift:
+These remain required invariants (progress/status: [`wiki/status/health.md`](./wiki/status/health.md), [`roadmap`](./wiki/status/roadmap.md)):
 
-- **Standardize “source text” APIs**
-  - Prefer `&str` for TS/JS source (valid UTF-8 is required for correct identifier handling).
-  - Avoid having some crates/tests/docs pass `&[u8]` while the parser expects `&str`. Pick one and enforce it via doctests + CI.
-- **Make workspace build/test green**
-  - Ensure `cargo check --workspace` and `cargo test --workspace` succeed (or document intentionally excluded crates/targets).
-  - Treat doc examples as compile-tested (doctests) for public APIs.
-- **Deterministic + lock-minimal semantics**
-  - Avoid `Arc<RwLock<...>>` as the default representation for scopes/symbols; prefer immutable arenas + `ScopeId`/`SymbolId` indices.
-  - Avoid non-deterministic ID allocation (atomics across parallelism) for anything that affects outputs/caches.
-- **Single diagnostics story**
-  - One `Diagnostic` model (codes + spans + labels + notes) used consistently across parsing, binding, checking, and tooling.
-- **Stabilize internal IR boundaries**
-  - `parse-js` produces AST; `hir-js` produces stable IDs; all semantic/type/opt passes operate on HIR + side tables.
-  - Avoid downstream crates pattern-matching deep AST structures in many places (that leads to drift/rot).
+- **UTF-8 `&str` source APIs** — valid UTF-8 required for identifiers; do not reintroduce `&[u8]` public source APIs without a measured reason.
+- **Workspace green** — `cargo check --workspace` / `cargo test --workspace` (or document intentional exclusions); doctests for public APIs.
+- **Deterministic + lock-minimal semantics** — prefer immutable arenas + `ScopeId`/`SymbolId`; no non-deterministic ID allocation that affects outputs/caches; avoid `Arc<RwLock<...>>` as the default scope/symbol shape.
+- **Single diagnostics story** — one `Diagnostic` model (codes + spans + labels + notes) across parse/bind/check/tooling ([wiki/architecture/diagnostics.md](./wiki/architecture/diagnostics.md)).
+- **Stable IR boundaries** — `parse-js` → AST; `hir-js` → stable IDs; semantic/type/opt on HIR + side tables. Avoid deep AST pattern-matching in many downstream places.
 
 ---
 
@@ -172,6 +197,9 @@ Stability strategy:
 ---
 
 ## Incremental query engine (required)
+
+Implemented shape and deviations: [`wiki/architecture/engine.md`](./wiki/architecture/engine.md).
+The rules below remain normative for agents.
 
 Build a query DB (Salsa-2022 recommended; a custom engine is acceptable only if it supports):
 - revisioned inputs
@@ -284,33 +312,24 @@ This keeps the type checker usable in:
 - IDEs
 - in-memory virtual files
 
-### Replacing `symbol-js` with `semantic-js` (one-shot end-state)
+### `semantic-js` requirements (sole semantics layer)
 
-`symbol-js` has been retired from the workspace; `semantic-js` now owns all scope/symbol binding. The historical comparison is kept here for clarity:
+`symbol-js` is retired ([graveyard](./wiki/graveyard.md#symbol-js)); `semantic-js` owns
+all scope/symbol binding. Depth: [`wiki/crates/semantic-js.md`](./wiki/crates/semantic-js.md).
 
-`symbol-js` is valuable today for optimizers/minifiers, but its current shape is **not** an ideal semantic foundation for rigorous, parallel TS checking:
-- it stores scopes as `Arc<RwLock<...>>` and associates full scope objects per AST node
-- it uses symbol IDs that are explicitly documented as “opaque, ephemeral, and non-deterministic”
-
-For **deterministic** parallel checking and stable caching, we want semantic IDs that are:
-- stable within a `Program`
-- deterministic across runs
-- cheap to copy (`u32`/`u64` indices)
-
-End-state design:
-- Replace `symbol-js` with a new `semantic-js` crate providing an immutable, lock-free semantic layer:
-  - stable IDs: `ScopeId(u32)`, `SymbolId(u32)`, `NameId(u32)`
-  - arenas: `Vec<ScopeData>`, `Vec<SymbolData>`
-  - stable, deterministic ordering for members/exports/overloads
-  - attach `ScopeId` (not a lock-backed scope object) to AST nodes via `NodeAssocData` **only when needed**, or keep a side table keyed by `ExprId`/`DefId`
-- `semantic-js` supports both:
-  - **JS mode** (value namespace only, tuned for optimizer/minifier)
-  - **TS mode** (three namespaces + merging + exports + `.d.ts` + module graph)
-- `optimize-js`/`minify-js` consume `semantic-js` (JS mode) directly; `typecheck-ts` consumes `semantic-js` (TS mode).
+Required shape (do not regress):
+- stable IDs within a `Program`, deterministic across runs, cheap to copy (`u32`/`u64`)
+- immutable, lock-free arenas (`ScopeId` / `SymbolId` / `NameId` + `Vec` data)
+- stable ordering for members/exports/overloads
+- attach `ScopeId` via `NodeAssocData` only when needed, or side tables keyed by `ExprId`/`DefId`
+- **JS mode** (value namespace; minify/optimize) and **TS mode** (three namespaces + merges + exports + `.d.ts` + module graph)
+- `typecheck-ts` consumes TS mode; minify/optimize consume JS mode
 
 ---
 
 ## Type representation (`types-ts-interned`)
+
+Depth: [`wiki/crates/types-ts-interned.md`](./wiki/crates/types-ts-interned.md).
 
 ### Core constraints
 
@@ -395,6 +414,9 @@ The checker must be parameterized by `CompilerOptions` that control these semant
 ---
 
 ## Type checking algorithm (`typecheck-ts`)
+
+Depth: [`wiki/crates/typecheck-ts.md`](./wiki/crates/typecheck-ts.md),
+engine model: [`wiki/architecture/engine.md`](./wiki/architecture/engine.md).
 
 ### Overall strategy
 
@@ -562,17 +584,16 @@ Keep it bounded:
 
 ## Diagnostics
 
-Diagnostics must be:
+Normative contract (registry, renderer, severity/exit policy:
+[`wiki/architecture/diagnostics.md`](./wiki/architecture/diagnostics.md)):
+
 - precise spans (`Span { file, range }`)
 - stable error codes (so tooling can depend on them)
-- have “related” notes (e.g., candidate overloads)
-
-Recommended structure:
-- `Diagnostic { code: &'static str, message: String, primary: Span, labels: Vec<Label>, notes: Vec<String> }`
-
-Design guidelines:
+- “related” notes/labels (e.g., candidate overloads)
 - never panic on bad input; emit diagnostics
 - keep messages short; attach detail in notes/labels
+
+Shape (conceptual): `Diagnostic { code, message, primary: Span, labels, notes }`.
 
 ---
 
@@ -647,63 +668,31 @@ Provide convenient wrappers:
 
 ## Testing strategy (comprehensive)
 
+How to run harnesses, oracle map, manifests, and CI bindings:
+[`wiki/engineering/testing.md`](./wiki/engineering/testing.md).
+
 ### 1) Upstream TypeScript test suites
 
-Use the TypeScript submodule as the source of truth:
-- parser tests
-- binder/name resolution tests
-- type checker tests
+Use the TypeScript submodule as the source of truth (parser, binder, checker tests).
+Primary corpus: `parse-js/tests/TypeScript/`. Maintain a curated subset + snapshots under
+`typecheck-ts-harness/`; shard/parallelize heavily.
 
-Use the already-vendored submodule at `parse-js/tests/TypeScript/` as the primary corpus. For speed and stability, maintain a curated subset + optional snapshots under `typecheck-ts-harness/` (and shard/parallelize heavily).
-
-Create a harness that:
+Harness requirements:
 - runs tests in parallel
-- records pass/fail categories (parse error vs bind error vs type error mismatch)
+- records pass/fail categories (parse vs bind vs type mismatch)
 - supports filtering and sharding
-
-### Running tests (recommended commands)
-
-- **Parser conformance (existing)**:
-
-  - `cargo run -p parse-js --release --features conformance-runner --bin conformance_runner`
-
-  Notes:
-  - the current parser runner skips `@filename:` multi-file tests; the typecheck harness must not
-
-- **Type checker conformance (new)**:
-
-  - `cargo run -p typecheck-ts-harness --release -- conformance --filter <glob-or-regex>`
-  - `cargo run -p typecheck-ts-harness --release -- conformance --shard 0/16`
-
-  Recommended harness flags:
-  - `--json` (machine-readable output)
-  - `--update-snapshots` (regenerate baselines for curated suites)
-  - `--trace` / `--profile` (enable tracing + per-query timing dumps)
+- typecheck harness **must** support `@filename:` multi-file tests (parser runner may skip them)
 
 ### 2) Differential testing vs `tsc`
 
-When available (CI job with Node):
-- run `tsc` on the same inputs
-- compare:
-  - diagnostics count + codes + spans (allow some normalization)
-  - selected inferred types (for a curated subset)
+When available (CI with Node): run `tsc` on the same inputs; compare structured facts
+(diagnostics count + codes + spans with normalization; selected inferred types on a
+curated subset). Do **not** require exact message text.
 
-Important:
-- don’t attempt to match *exact* message text
-- compare structured facts, not strings
+### 3) Snapshot baselines
 
-### 3) Snapshot baselines (optional, recommended)
-
-For stability and offline tests:
-- generate `tsc` baselines (JSON) for a curated subset
-- commit those snapshots
-- run our checker and compare to snapshots
-
-Baseline format recommendation:
-- store **structured JSON**, not raw strings
-- include:
-  - `diagnostics: [{ code, severity, primary: {file, start, end}, labels: [...] }]`
-  - optional: selected `types` facts for curated assertions (e.g. `type_of_symbol`, `type_of_expr`)
+Prefer structured JSON baselines (codes/spans/labels; optional `type_of_*` facts), not
+raw strings. Commit curated snapshots; compare checker output to them offline.
 
 ### 4) Property testing and fuzzing
 
@@ -715,27 +704,25 @@ Baseline format recommendation:
 
 ## Performance engineering (make it measurable)
 
-Add benchmarks for:
-- parsing (TS/TSX)
-- binding large lib sets
-- checking real projects (import graph + many bodies)
-- assignability stress tests (union/intersection heavy)
+Targets and current standing: [`wiki/vision.md`](./wiki/vision.md#success-criteria),
+[`wiki/status/health.md`](./wiki/status/health.md). Bench/command detail:
+[`wiki/engineering/testing.md`](./wiki/engineering/testing.md#benchmarks).
 
-Instrumentation:
-- per-query timings (Salsa has hooks; otherwise add tracing)
-- cache hit rates for:
-  - relation cache
-  - type interner
-  - instantiation cache
+Measure:
+- parsing (TS/TSX), binding large lib sets, checking real projects, assignability stress
+- per-query timings; cache hit rates (relation / interner / instantiation)
 
-Targets (realistic):
-- medium project (~50k LOC): < 500ms on a modern desktop CPU (release, warm caches)
-- incremental re-check after local edit: < 50ms for affected bodies (warm caches)
+Baseline targets (still normative):
+- medium project (~50k LOC): < 500ms warm (release)
+- incremental re-check after local edit: < 50ms for affected bodies (warm)
 - memory bounded by design (LRU for huge caches if needed)
 
 ---
 
 ## Explicit scope (what we support vs skip)
+
+Aligned with [`wiki/vision.md`](./wiki/vision.md#non-goals); if scope intent changes,
+update both.
 
 ### Must support (comprehensive core)
 - TS syntax + `.d.ts` parsing
@@ -764,6 +751,10 @@ Targets (realistic):
 ## Implementation playbook (one-shot end-to-end)
 
 Assume a “one-shot” rebuild with unlimited resources. The phases below are **internal decomposition**, not incremental shipping. The end-state is a coherent toolchain where parsing, semantics, type checking, optimization, and minification share stable IDs, diagnostics, and deterministic behavior.
+
+Live phased plan with acceptance criteria (what is done vs remaining):
+[`wiki/status/roadmap.md`](./wiki/status/roadmap.md). The phases A–F below remain the
+normative decomposition agents should reason against.
 
 ### Phase A — Repo-wide foundations (non-negotiable)
 - Standardize on **UTF-8 `&str`** source APIs across the repo; delete remaining byte-slice public APIs unless there is a compelling, measured reason.
@@ -818,6 +809,8 @@ Assume a “one-shot” rebuild with unlimited resources. The phases below are *
 
 ## Coding standards for agents
 
+Broader engineering doctrine: [`wiki/meta/how-to-work.md`](./wiki/meta/how-to-work.md).
+
 - **No global `RefCell`** or non-`Sync` state in anything that must run in parallel.
 - Prefer `Arc`, immutable snapshots, and sharded caches (`DashMap`, `parking_lot` with sharding) where necessary.
 - Keep “pure” logic in `types-ts-interned` (no AST references).
@@ -826,3 +819,5 @@ Assume a “one-shot” rebuild with unlimited resources. The phases below are *
   - memoization
   - a termination story documented in code comments
 - Tests are first-class: every bug fix should come with a regression test.
+- End sessions by reconciling the wiki when designs or status change
+  ([update loop](./wiki/meta/how-to-write.md#the-update-loop-continuous-absorption)).

@@ -21,7 +21,8 @@ fn for_await_of_sets_has_tla() {
 
 #[test]
 fn for_await_of_inside_function_does_not_set_has_tla() {
-  let record = SourceTextModuleRecord::parse("async function g(){ for await (const x of y) {} } export {};")
-    .expect("parse module");
+  let record =
+    SourceTextModuleRecord::parse("async function g(){ for await (const x of y) {} } export {};")
+      .expect("parse module");
   assert!(!record.has_tla);
 }

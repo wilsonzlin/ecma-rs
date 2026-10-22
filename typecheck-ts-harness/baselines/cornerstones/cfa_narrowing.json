@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "strictPropertyInitialization": false,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "cfa_narrowing.ts",
+        "name": "discriminant",
+        "type": "({ kind: \"circle\"; radius: number } | { kind: \"square\"; size: number }) => number"
+      },
+      {
+        "file": "cfa_narrowing.ts",
+        "name": "typeofNarrow",
+        "type": "(number | string) => number | string"
+      }
+    ]
+  }
+}

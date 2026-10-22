@@ -1782,8 +1782,11 @@ fn dce_keeps_object_destructuring_when_accessing_getters() {
 
 #[test]
 fn rewrites_return_undefined() {
+  // `return undefined;` first becomes `return;`, and a trailing bare `return;`
+  // at the end of a function body is then dropped entirely (falling off the end
+  // returns `undefined` regardless).
   let result = minified(TopLevelMode::Global, "function f(){return undefined;}");
-  assert_eq!(result, "function f(){return;}");
+  assert_eq!(result, "function f(){}");
 }
 
 #[test]
@@ -1817,6 +1820,253 @@ fn rewrites_nullish_or_to_loose_equality() {
   assert_eq!(result, "function f(a){a==null&&g();}");
 }
 
+#[test]
+fn rewrites_nullish_and_to_loose_inequality() {
+  // The De Morgan dual of the `== null` rewrite: `x !== null && x !== undefined`
+  // is true iff `x` is neither `null` nor `undefined`, which is exactly the
+  // negation of loose `x == null` (ECMA-262 Abstract Equality: `null == undefined`
+  // and `null`/`undefined` compare loosely-equal to nothing else). So the whole
+  // conjunction collapses to `x != null`.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x!==null&&x!==undefined)g();}",
+  );
+  assert_eq!(result, "function f(a){a!=null&&g();}");
+}
+
+#[test]
+fn does_not_rewrite_nullish_and_for_distinct_bindings() {
+  // The two comparisons must reference the *same* binding; `x` and `y` are
+  // distinct, so `x != null` would change meaning.
+  let src = "function f(x,y){return x!==null&&y!==undefined;}";
+  let result = minified(TopLevelMode::Global, src);
+  // Distinct bindings: the conjunction is preserved verbatim (renamed), never
+  // collapsed to `!= null`. (`undefined` is still canonicalized to `void 0`.)
+  assert_eq!(result, "function f(b,a){return b!==null&&a!==void 0;}");
+}
+
+#[test]
+fn rewrites_typeof_undefined_to_void_zero() {
+  // For a *declared* binding, `typeof x === "undefined"` is true iff the value is
+  // `undefined`, identical to `x === void 0`. `void 0` is the unshadowable
+  // spelling of `undefined`.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){return typeof x===\"undefined\";}",
+  );
+  assert_eq!(result, "function f(a){return a===void 0;}");
+}
+
+#[test]
+fn rewrites_typeof_defined_negation_to_void_zero() {
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){return typeof x!==\"undefined\";}",
+  );
+  assert_eq!(result, "function f(a){return a!==void 0;}");
+}
+
+#[test]
+fn does_not_rewrite_typeof_undefined_for_unresolved_binding() {
+  // ILLEGAL to rewrite: `typeof g` tolerates a completely undeclared `g` and
+  // yields "undefined", but a bare `g === void 0` read throws ReferenceError.
+  // `g` here is a free/global reference with no resolved binding, so the rewrite
+  // must be declined and `typeof` preserved.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){return typeof g===\"undefined\";}",
+  );
+  assert!(
+    result.contains("typeof") && !result.contains("void 0"),
+    "expected typeof to be preserved for unresolved binding: {result}"
+  );
+}
+
+#[test]
+fn does_not_rewrite_loose_typeof_undefined() {
+  // Only strict comparisons are handled. A loose `typeof x == "undefined"` is left
+  // untouched: mapping it to `x == void 0` would be wrong (that also matches
+  // `null`), and mapping to strict would silently change the operator. Declining
+  // keeps the rewrite obviously correct.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){return typeof x==\"undefined\";}",
+  );
+  assert!(
+    result.contains("typeof") && !result.contains("void 0"),
+    "expected loose typeof comparison to be preserved: {result}"
+  );
+}
+
+#[test]
+fn removes_trailing_bare_return() {
+  // A trailing `return;` is redundant: control falls off the end returning
+  // `undefined` anyway.
+  let result = minified(TopLevelMode::Global, "function f(){g();return;}");
+  assert_eq!(result, "function f(){g();}");
+}
+
+#[test]
+fn keeps_non_trailing_return() {
+  // A `return;` that guards later code is reachable-control-affecting and must be
+  // kept; only the final direct statement is trimmed.
+  let result = minified(TopLevelMode::Global, "function f(x){if(x)return;g();}");
+  assert_eq!(result, "function f(a){if(a)return;g();}");
+}
+
+#[test]
+fn rewrites_if_else_return_to_ternary() {
+  // `if (t) return A; else return B;` is equivalent to `return t ? A : B;`
+  // (t evaluated once, then exactly one branch value returned).
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x)return 1;else return 2;}",
+  );
+  assert_eq!(result, "function f(a){return a?1:2;}");
+}
+
+#[test]
+fn rewrites_if_else_return_chain_to_nested_ternary() {
+  // Chains collapse bottom-up: the inner `if/else return` becomes a ternary
+  // first, then folds into the outer return.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x>0)return 1;else if(x<0)return 2;else return 3;}",
+  );
+  assert_eq!(result, "function f(a){return a>0?1:a<0?2:3;}");
+}
+
+#[test]
+fn rewrites_block_wrapped_if_else_return() {
+  // Single-statement blocks around each return are transparent to the rewrite;
+  // they carry no block-scoped declarations.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x){return 1}else{return 2}}",
+  );
+  assert_eq!(result, "function f(a){return a?1:2;}");
+}
+
+#[test]
+fn keeps_if_else_return_when_branch_lacks_value() {
+  // A bare `return;` branch is not folded (we never synthesize a `void 0`
+  // operand). The `if` is instead handled by the generic control-flow rewrites.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x)return 1;else return;}",
+  );
+  assert_eq!(result, "function f(a){if(a)return 1;}");
+}
+
+#[test]
+fn unwraps_bare_block_without_lexicals() {
+  // A bare `{ … }` that introduces no block scope may be spliced into the parent
+  // statement list (`{ a(); b(); }` → `a(); b();`).
+  let result = minified(TopLevelMode::Global, "function f(){{g();h();}}");
+  assert_eq!(result, "function f(){g();h();}");
+}
+
+#[test]
+fn unwraps_bare_block_containing_var() {
+  // `var` is function-scoped, so unwrapping does not change its binding contour.
+  let result = minified(TopLevelMode::Global, "function f(){{var x=1;g(x);}}");
+  assert_eq!(result, "function f(){var a=1;g(a);}");
+}
+
+#[test]
+fn unwraps_nested_bare_blocks() {
+  let result = minified(TopLevelMode::Global, "function f(){{{g();}}}");
+  assert_eq!(result, "function f(){g();}");
+}
+
+#[test]
+fn unwraps_single_stmt_block_in_if_body() {
+  // `if (t) { stmt; }` → braces drop when the block is otherwise inert; the
+  // expression-statement form is then eligible for the `t&&stmt` rewrite.
+  let result = minified(TopLevelMode::Global, "function f(x){if(x){g();}}");
+  assert_eq!(result, "function f(a){a&&g();}");
+}
+
+#[test]
+fn keeps_block_with_let_binding() {
+  // Unwrapping would move `let` into the parent scope (collision / TDZ change).
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let x=1;{let x=2;g(x);}return x;}",
+  );
+  assert!(
+    result.contains('{') && result.contains("let"),
+    "expected inner block with let to be preserved: {result}"
+  );
+  // Outer `x` and inner `x` must remain distinct after rename.
+  assert_eq!(result, "function f(){let a=1;{let a=2;g(a);}return a;}");
+}
+
+#[test]
+fn keeps_block_with_const_binding() {
+  let result = minified(TopLevelMode::Global, "function f(){{const x=1;g(x);}}");
+  assert_eq!(result, "function f(){{const a=1;g(a);}}");
+}
+
+#[test]
+fn keeps_block_with_class_decl() {
+  let result = minified(TopLevelMode::Global, "function f(){{class C{}g(C);}}");
+  assert_eq!(result, "function f(){{class a{}g(a);}}");
+}
+
+#[test]
+fn keeps_block_with_function_decl_annex_b() {
+  // Annex B: block-level `function` decls have subtle hoisting in sloppy mode,
+  // distinct from a bare `function` as an `if` body. Never unwrap these.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){{function inner(){}return inner;}}",
+  );
+  assert_eq!(result, "function f(){{function a(){}return a;}}");
+}
+
+#[test]
+fn keeps_block_around_annex_b_function_in_if() {
+  // `if (c) { function inner(){} }` must not become `if (c) function inner(){}`
+  // — those forms differ under Annex B.3.3.
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(c){if(c){function inner(){return 1;}}return typeof inner;}",
+  );
+  assert!(
+    result.contains("if(a){function") || result.contains("if(a){function "),
+    "expected braced function decl in if body to be preserved: {result}"
+  );
+  assert!(
+    !result.contains("if(a)function"),
+    "must not unwrap to bare function-in-if: {result}"
+  );
+}
+
+#[test]
+fn keeps_block_with_leading_string_literal_directive_hazard() {
+  // A leading string-literal ExpressionStatement inside a bare block is *not* a
+  // directive of the block (blocks have no Directive Prologue), but unwrapping
+  // into the parent function body would promote it into that prologue and can
+  // flip sloppy→strict (`"use strict"`).
+  let result = minified(TopLevelMode::Global, r#"function f(){{"use strict";g();}}"#);
+  assert_eq!(result, r#"function f(){{"use strict";g();}}"#);
+}
+
+#[test]
+fn keeps_block_with_leading_non_strict_string_literal() {
+  // Same promotion hazard for any leading string literal (not only "use strict").
+  let result = minified(TopLevelMode::Global, r#"function f(){{"foo";g();}}"#);
+  assert_eq!(result, r#"function f(){{"foo";g();}}"#);
+}
+
+#[test]
+fn unwraps_block_when_string_literal_is_not_leading() {
+  // A non-leading string is just an expression statement; safe to unwrap.
+  let result = minified(TopLevelMode::Global, r#"function f(){{g();"foo";}}"#);
+  assert_eq!(result, r#"function f(){g();"foo";}"#);
+}
+
 #[cfg(feature = "emit-minify")]
 #[test]
 fn hir_emitter_matches_ast_output() {
@@ -1840,10 +2090,15 @@ fn hir_emitter_matches_ast_output() {
       "const obj={async m(){await 1;},*g(){yield 1;},async *ag(){yield 1;}};console.log(obj);",
     ),
     (
+      // `new abc?.def()` is a SyntaxError per ECMA-262 (an optional chain may not
+      // be the callee of `new`); the constructor must be parenthesized to be
+      // legal. This still exercises a `new` expression whose callee contains an
+      // optional chain. (Previously this case used the illegal unparenthesized
+      // form, which parse-js now correctly rejects with PS0017.)
       "new expression with optional chaining callee",
       TopLevelMode::Global,
       Dialect::Js,
-      "new abc?.def();",
+      "new (abc?.def)();",
     ),
     (
       "exported class with fields/accessors/static block",
@@ -1994,16 +2249,18 @@ fn readme_example_is_parseable() {
 
 #[test]
 fn test_with_statement_disables_renaming() {
+  // Safe single-statement block unwrap drops the braces; renaming stays disabled
+  // because the `with` scope is still hazard-flagged.
   let src = "with ({x:2}){x}";
   let result = minified(TopLevelMode::Global, src);
-  assert_eq!(result, "with({x:2}){x;}");
+  assert_eq!(result, "with({x:2})x;");
 }
 
 #[test]
 fn with_statement_does_not_rewrite_undefined_property() {
   let src = "with({undefined:1}){undefined}";
   let result = minified(TopLevelMode::Global, src);
-  assert_eq!(result, "with({undefined:1}){undefined;}");
+  assert_eq!(result, "with({undefined:1})undefined;");
 }
 
 #[test]
@@ -2046,7 +2303,7 @@ fn test_with_in_nested_scope_only_disables_that_scope() {
   let result = minified(TopLevelMode::Global, src);
   assert_eq!(
     result,
-    "(()=>{function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}return a();})();"
+    "(()=>{function a(){let a=1;function b(obj){let value=obj.v;with(obj)value;return value;}return b({v:a})+a;}return a();})();"
   );
 }
 
@@ -2057,7 +2314,7 @@ fn with_in_nested_scope_pins_outer_bindings() {
   let result = minified(TopLevelMode::Global, src);
   assert_eq!(
     result,
-    "(()=>{function a(){let top=1;function a(obj){with(obj){top;}return top;}return a({})+top;}return a();})();"
+    "(()=>{function a(){let top=1;function a(obj){with(obj)top;return top;}return a({})+top;}return a();})();"
   );
 }
 

@@ -52,10 +52,7 @@ pub enum ToyObjectKind {
   Ordinary,
   Array { len: usize },
   StringObject { string: ToyString },
-  Iterator {
-    values: Vec<ToyValue>,
-    index: usize,
-  },
+  Iterator { values: Vec<ToyValue>, index: usize },
   IteratorMethod { values: Vec<ToyValue> },
   AsyncIteratorMethod { values: Vec<ToyValue> },
 }
@@ -135,15 +132,14 @@ impl ToyRuntime {
     });
 
     let iterator_sym = ToySymbol(0);
-    self
-      .objects[obj.0]
-      .props
-      .push((PropertyKey::Symbol(iterator_sym), ToyValue::Object(sync_method_obj)));
+    self.objects[obj.0].props.push((
+      PropertyKey::Symbol(iterator_sym),
+      ToyValue::Object(sync_method_obj),
+    ));
 
     if async_ {
-      let async_method_obj = self.alloc_object_with_kind(ToyObjectKind::AsyncIteratorMethod {
-        values: elements,
-      });
+      let async_method_obj =
+        self.alloc_object_with_kind(ToyObjectKind::AsyncIteratorMethod { values: elements });
       let async_iter_sym = ToySymbol(1);
       self.objects[obj.0].props.push((
         PropertyKey::Symbol(async_iter_sym),
@@ -355,9 +351,9 @@ impl JsRuntime for ToyRuntime {
       }
       ToyValue::Object(o) => match &self.objects[o.0].kind {
         ToyObjectKind::StringObject { string } => Ok(*string),
-        _ => self.alloc_string_from_code_units(
-          &"[object Object]".encode_utf16().collect::<Vec<_>>(),
-        ),
+        _ => {
+          self.alloc_string_from_code_units(&"[object Object]".encode_utf16().collect::<Vec<_>>())
+        }
       },
       ToyValue::Symbol(_) => Err(ToyError::Unimplemented("ToString(Symbol)")),
     }
@@ -475,12 +471,17 @@ impl JsRuntime for ToyRuntime {
 
   fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error> {
     let ToyValue::Object(obj) = value else {
-      return Err(ToyError::TypeError("GetIterator expected object".to_string()));
+      return Err(ToyError::TypeError(
+        "GetIterator expected object".to_string(),
+      ));
     };
     let iter_sym = self.well_known_symbol(WellKnownSymbol::Iterator)?;
-    let method = self
-      .get_method(obj, PropertyKey::Symbol(iter_sym))?
-      .ok_or(ToyError::TypeError("GetIterator: value is not iterable".to_string()))?;
+    let method =
+      self
+        .get_method(obj, PropertyKey::Symbol(iter_sym))?
+        .ok_or(ToyError::TypeError(
+          "GetIterator: value is not iterable".to_string(),
+        ))?;
     self.get_iterator_from_method(obj, method)
   }
 
@@ -507,7 +508,10 @@ impl JsRuntime for ToyRuntime {
     Ok(self.alloc_object_with_kind(ToyObjectKind::Iterator { values, index: 0 }))
   }
 
-  fn iterator_next(&mut self, iterator: Self::Object) -> Result<IteratorResult<Self::Value>, Self::Error> {
+  fn iterator_next(
+    &mut self,
+    iterator: Self::Object,
+  ) -> Result<IteratorResult<Self::Value>, Self::Error> {
     let ToyObjectKind::Iterator { values, index } = &mut self.objects[iterator.0].kind else {
       return Err(ToyError::TypeError(
         "IteratorNext expected iterator object".to_string(),
@@ -521,7 +525,10 @@ impl JsRuntime for ToyRuntime {
     }
     let v = values[*index];
     *index += 1;
-    Ok(IteratorResult { value: v, done: false })
+    Ok(IteratorResult {
+      value: v,
+      done: false,
+    })
   }
 }
 

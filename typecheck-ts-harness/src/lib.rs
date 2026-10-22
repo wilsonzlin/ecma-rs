@@ -51,6 +51,7 @@ pub use directives::HarnessOptions;
 pub use discover::build_filter;
 pub use discover::discover_conformance_tests;
 pub use discover::load_conformance_test;
+pub use discover::parse_shard;
 pub use discover::Filter;
 pub use discover::Shard;
 pub use discover::ShardStrategy;

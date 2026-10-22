@@ -1,0 +1,35 @@
+
+thread '<unnamed>' (3573506) panicked at typecheck-ts/src/db/queries.rs:59:5:
+Box<dyn Any>
+stack backtrace:
+   0:     0x654df3714a12 - <unknown>
+   1:     0x654df347859f - <unknown>
+   2:     0x654df371444f - <unknown>
+   3:     0x654df3714873 - <unknown>
+   4:     0x654df3713e7e - <unknown>
+   5:     0x654df38b8940 - <unknown>
+   6:     0x654df38b88d6 - <unknown>
+   7:     0x654df37862d6 - <unknown>
+   8:     0x654df38cbfbc - <unknown>
+   9:     0x654df38c96e5 - <unknown>
+  10:     0x654df3924642 - <unknown>
+  11:     0x654df3a712a0 - <unknown>
+  12:     0x654df3a70192 - <unknown>
+  13:     0x654df3c4d689 - <unknown>
+  14:     0x654df3c48fdb - <unknown>
+  15:     0x654df3c4a95d - <unknown>
+  16:     0x654df3c49d2d - <unknown>
+  17:     0x654df3c4a95d - <unknown>
+  18:     0x654df3c49d2d - <unknown>
+  19:     0x654df3c4a95d - <unknown>
+  20:     0x654df3c49d2d - <unknown>
+  21:     0x654df3c4bd90 - <unknown>
+  22:     0x654df3624eb1 - <unknown>
+  23:     0x654df36245e5 - <unknown>
+  24:     0x654df36241e1 - <unknown>
+  25:     0x654df374644f - <unknown>
+  26:     0x76b3212a40da - start_thread
+                               at ./nptl/pthread_create.c:454:8
+  27:     0x76b3213377ac - __GI___clone3
+                               at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+  28:                0x0 - <unknown>

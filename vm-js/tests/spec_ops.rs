@@ -1,6 +1,6 @@
 use vm_js::{
-  get_prototype_from_constructor, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
-  Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+  get_prototype_from_constructor, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind,
+  Realm, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
 };
 
 fn data_desc(value: Value) -> PropertyDescriptor {
@@ -39,7 +39,8 @@ fn get_prototype_from_constructor_uses_prototype_property_when_object() -> Resul
   let key = PropertyKey::from_string(scope.alloc_string("prototype")?);
   scope.define_property(ctor, key, data_desc(Value::Object(explicit_proto)))?;
 
-  let proto = get_prototype_from_constructor(&mut vm, &mut scope, Value::Object(ctor), default_proto)?;
+  let proto =
+    get_prototype_from_constructor(&mut vm, &mut scope, Value::Object(ctor), default_proto)?;
   assert_eq!(proto, explicit_proto);
   Ok(())
 }
@@ -56,7 +57,8 @@ fn get_prototype_from_constructor_falls_back_when_not_object() -> Result<(), VmE
   let key = PropertyKey::from_string(scope.alloc_string("prototype")?);
   scope.define_property(ctor, key, data_desc(Value::Number(123.0)))?;
 
-  let proto = get_prototype_from_constructor(&mut vm, &mut scope, Value::Object(ctor), default_proto)?;
+  let proto =
+    get_prototype_from_constructor(&mut vm, &mut scope, Value::Object(ctor), default_proto)?;
   assert_eq!(proto, default_proto);
   Ok(())
 }

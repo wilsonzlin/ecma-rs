@@ -56,11 +56,11 @@ jobs:
       - name: cargo test --workspace (full suite)
         run: cargo test --workspace --locked
 
-      - name: Regenerate docs/deps.md
+      - name: Regenerate wiki/architecture/deps.md
         run: ./scripts/gen_deps_graph.sh
 
-      - name: Ensure docs/deps.md is up to date
-        run: git diff --exit-code docs/deps.md
+      - name: Ensure wiki/architecture/deps.md is up to date
+        run: git diff --exit-code wiki/architecture/deps.md
 
   typecheck-ts-bench:
     runs-on: ubuntu-24.04
@@ -91,6 +91,62 @@ jobs:
         with:
           name: typecheck-ts-bench
           path: reports
+
+  # Honest ratchet: hash shards 0–63 of 64 vs live tsc, gated by the curated
+  # conformance_manifest (`--fail-on new`). Measurement-only 16-way shards below
+  # stay `--fail-on none`; this job fails the nightly when a previously-matching
+  # case regresses or a manifested mismatch unexpectedly passes (XPASS).
+  ts-conformance-ratchet:
+    runs-on: ubuntu-24.04
+    needs: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: typecheck-ts-harness/package-lock.json
+
+      - name: Install Node dependencies (pinned TypeScript)
+        working-directory: typecheck-ts-harness
+        run: npm ci
+
+      - name: Conformance ratchet shard (hash /64, manifest, fail-on new)
+        run: |
+          mkdir -p reports
+          cargo run -p typecheck-ts-harness --release --locked -- \
+            conformance \
+            --root parse-js/tests/TypeScript/tests/cases/conformance \
+            --shard ${{ matrix.shard }}/64 \
+            --shard-strategy hash \
+            --compare tsc \
+            --timeout-secs 20 \
+            --manifest typecheck-ts-harness/fixtures/conformance_manifest.toml \
+            --fail-on new \
+            --json \
+            > reports/conformance-ratchet-${{ matrix.shard }}of64.json
+
+      - name: Upload ratchet shard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-conformance-ratchet-${{ matrix.shard }}
+          path: reports/conformance-ratchet-${{ matrix.shard }}of64.json
 
   ts-conformance:
     runs-on: ubuntu-24.04

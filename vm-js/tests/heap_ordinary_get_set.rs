@@ -122,8 +122,16 @@ fn heap_ordinary_get_invokes_accessor_getter_with_receiver() -> Result<(), VmErr
     (proto_root, child_root)
   };
 
-  let _proto_obj = heap.get_root(proto).ok_or(VmError::InvalidHandle)?.as_object().unwrap();
-  let child_obj = heap.get_root(child).ok_or(VmError::InvalidHandle)?.as_object().unwrap();
+  let _proto_obj = heap
+    .get_root(proto)
+    .ok_or(VmError::InvalidHandle)?
+    .as_object()
+    .unwrap();
+  let child_obj = heap
+    .get_root(child)
+    .ok_or(VmError::InvalidHandle)?
+    .as_object()
+    .unwrap();
 
   let mut scope = heap.scope();
   let key_prop = PropertyKey::String(scope.alloc_string("prop")?);

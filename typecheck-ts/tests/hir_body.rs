@@ -54,7 +54,7 @@ fn infers_basic_literals_and_identifiers() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -103,7 +103,7 @@ fn object_literal_methods_have_checkable_bodies() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let result = check_body(
@@ -130,8 +130,8 @@ fn object_literal_methods_have_checkable_bodies() {
     "object literal method bodies should be checkable without ICE0002; got {codes:?}"
   );
   assert!(
-    codes.contains(&"TC0005"),
-    "expected unknown identifier diagnostic from method body; got {codes:?}"
+    codes.contains(&"TS2304"),
+    "expected Cannot find name (TS2304) diagnostic from method body; got {codes:?}"
   );
 }
 
@@ -176,7 +176,7 @@ fn local_variable_widening_respects_decl_mode() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -247,7 +247,7 @@ fn expression_spans_match_body_indices() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -294,7 +294,7 @@ fn expr_at_returns_innermost_type() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -394,7 +394,7 @@ fn diagnostics_are_stably_sorted() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -442,7 +442,7 @@ fn call_with_missing_arguments_types_arguments_once() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let result = check_body(
@@ -508,11 +508,13 @@ fn program_type_at_prefers_literal_in_call_arguments() {
   let key = FileKey::new("entry.ts");
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
-  let call_diags: Vec<_> = diagnostics
+  // tsc emits TS2554 ("Expected 2 arguments, but got 1") for the arity miss on
+  // a single-signature callee.
+  let arity_diags: Vec<_> = diagnostics
     .iter()
-    .filter(|d| d.code.as_str() == "TC2000")
+    .filter(|d| d.code.as_str() == "TS2554")
     .collect();
-  assert_eq!(call_diags.len(), 1, "should report one overload error");
+  assert_eq!(arity_diags.len(), 1, "should report one arity error");
   let start = source.find("(1)").expect("argument snippet start") as u32;
   let offset = start + (("(1)").len() as u32 / 2);
   let file_id = program.file_id(&key).expect("file id");

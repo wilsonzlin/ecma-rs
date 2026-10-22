@@ -1,6 +1,6 @@
 use crate::heap::{ObjectBase, Trace, Tracer};
 use crate::CompiledFunctionRef;
-use crate::{GcEnv, GcObject, GcString, RealmId, Value};
+use crate::{GcEnv, GcObject, GcString, GcSymbol, RealmId, Value};
 use core::mem;
 
 /// Identifier for a host/native `[[Call]]` implementation.
@@ -19,8 +19,9 @@ pub struct NativeConstructId(pub u32);
 
 /// Identifier for an ECMAScript (user-defined) function's executable body.
 ///
-/// This is intentionally just an id so that function objects can outlive a single `exec_script`
-/// invocation without holding any references into ephemeral parser/AST data structures.
+/// This is intentionally just an id: the VM's code table stores the retained parsed body
+/// (`Arc<ParsedProgram>` + a pointer into that tree) keyed by this id, so function objects can
+/// outlive a single `exec_script` / `eval` invocation without re-parsing source snippets.
 ///
 /// In the future this id can index into a per-realm code table (bytecode, HIR, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,7 +63,10 @@ pub(crate) enum FunctionData {
   /// resolving functions into that record and throws if called more than once.
   PromiseCapabilityExecutor,
   /// Promise resolving function created by `CreateResolvingFunctions`.
-  PromiseResolvingFunction { promise: GcObject, is_reject: bool },
+  PromiseResolvingFunction {
+    promise: GcObject,
+    is_reject: bool,
+  },
   /// Closure function created by `Promise.prototype.finally` when `onFinally` is callable.
   ///
   /// - When `is_reject` is `false`, this is `thenFinally(value)`.
@@ -75,7 +79,20 @@ pub(crate) enum FunctionData {
   /// Closure function created by `Promise.prototype.finally`:
   /// - `valueThunk()` returns the captured fulfillment value.
   /// - `thrower()` throws the captured rejection reason.
-  PromiseFinallyThunk { value: Value, is_throw: bool },
+  PromiseFinallyThunk {
+    value: Value,
+    is_throw: bool,
+  },
+  /// Await continuation (§27.7.5.3 Await fulfilled/rejected functions): resumes the suspended
+  /// async activation `generator` with the settled value (normal or throw completion).
+  ///
+  /// When `deliver_yield` is set (async generators only), fulfillment delivers the value to the
+  /// waiting `next`/`return` promise via AsyncGeneratorYield; rejection throws into the body.
+  AwaitContinuation {
+    generator: GcObject,
+    is_reject: bool,
+    deliver_yield: bool,
+  },
 }
 
 /// A JavaScript function object.
@@ -102,6 +119,15 @@ pub(crate) struct JsFunction {
   /// Note: `[[ThisMode]]` depends on strictness for ordinary functions, but strictness also affects
   /// other semantics (early errors, `arguments`, etc), so we store it separately.
   pub(crate) is_strict: bool,
+  /// `MakeClassConstructor` — `[[Call]]` must throw TypeError (ECMA-262 §10.2.2).
+  pub(crate) is_class_constructor: bool,
+  /// `[[ConstructorKind]]` = derived (class with `extends`, including `extends null`).
+  pub(crate) is_derived_constructor: bool,
+  /// `[[HomeObject]]` — base for `super` property lookups (`MakeMethod`).
+  pub(crate) home_object: Option<GcObject>,
+  /// Instance private names from ClassDefinitionEvaluation (`[[Elements]]` instance subset).
+  /// Installed on each constructed instance via `InitializeInstanceElements`.
+  pub(crate) instance_private_names: Option<Box<[GcSymbol]>>,
 
   pub(crate) base: ObjectBase,
   pub(crate) data: FunctionData,
@@ -166,6 +192,10 @@ impl JsFunction {
       length,
       this_mode: ThisMode::Global,
       is_strict: false,
+      is_class_constructor: false,
+      is_derived_constructor: false,
+      home_object: None,
+      instance_private_names: None,
       base: ObjectBase::new(None),
       data: FunctionData::None,
       bound_target: None,
@@ -204,6 +234,10 @@ impl JsFunction {
       length,
       this_mode: ThisMode::Global,
       is_strict: false,
+      is_class_constructor: false,
+      is_derived_constructor: false,
+      home_object: None,
+      instance_private_names: None,
       base: ObjectBase::new(None),
       data: FunctionData::None,
       bound_target: None,
@@ -237,6 +271,10 @@ impl JsFunction {
       length,
       this_mode,
       is_strict,
+      is_class_constructor: false,
+      is_derived_constructor: false,
+      home_object: None,
+      instance_private_names: None,
       base: ObjectBase::new(None),
       data: FunctionData::None,
       bound_target: None,
@@ -258,6 +296,10 @@ impl JsFunction {
       length,
       this_mode: ThisMode::Global,
       is_strict: false,
+      is_class_constructor: false,
+      is_derived_constructor: false,
+      home_object: None,
+      instance_private_names: None,
       base: ObjectBase::new(None),
       data: FunctionData::None,
       bound_target: None,
@@ -272,7 +314,11 @@ impl JsFunction {
   }
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
-    let native_slots_len = self.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0);
+    let native_slots_len = self
+      .native_slots
+      .as_ref()
+      .map(|slots| slots.len())
+      .unwrap_or(0);
     let property_count = self.base.property_count();
     Self::heap_size_bytes_for_counts(bound_args_len, native_slots_len, property_count)
   }
@@ -323,6 +369,9 @@ impl Trace for JsFunction {
       FunctionData::PromiseFinallyThunk { value, .. } => {
         tracer.trace_value(value);
       }
+      FunctionData::AwaitContinuation { generator, .. } => {
+        tracer.trace_value(Value::Object(generator));
+      }
     }
 
     if let Some(target) = self.bound_target {
@@ -349,6 +398,14 @@ impl Trace for JsFunction {
     }
     if let Some(env) = self.closure_env {
       tracer.trace_env(env);
+    }
+    if let Some(home) = self.home_object {
+      tracer.trace_value(Value::Object(home));
+    }
+    if let Some(names) = &self.instance_private_names {
+      for &name in names.iter() {
+        tracer.trace_value(Value::Symbol(name));
+      }
     }
   }
 }

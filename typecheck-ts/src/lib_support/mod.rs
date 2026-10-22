@@ -31,6 +31,42 @@ pub enum FileKind {
   Dts,
 }
 
+/// Infer a [`FileKind`] from a virtual path (extension-based).
+///
+/// Paths may be TypeScript-style (`/a.ts`, `dir/file.tsx`) or plain names
+/// (`entry.js`). Module-suffixed extensions (`.mts`/`.cts`/`.mjs`/`.cjs`) map
+/// to the closest supported kind.
+pub fn infer_file_kind(path: &str) -> FileKind {
+  let ends_with = |suffix: &str| {
+    path.len() >= suffix.len()
+      && path.as_bytes()[path.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+  };
+
+  if ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") {
+    return FileKind::Dts;
+  }
+  if ends_with(".tsx") {
+    return FileKind::Tsx;
+  }
+  if ends_with(".ts") {
+    return FileKind::Ts;
+  }
+  if ends_with(".jsx") {
+    return FileKind::Jsx;
+  }
+  if ends_with(".js") {
+    return FileKind::Js;
+  }
+  if ends_with(".mts") || ends_with(".cts") {
+    return FileKind::Ts;
+  }
+  if ends_with(".mjs") || ends_with(".cjs") {
+    return FileKind::Js;
+  }
+
+  FileKind::Ts
+}
+
 /// A library file that can be loaded before user source files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibFile {

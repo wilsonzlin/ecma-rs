@@ -1,0 +1,737 @@
+{
+  "summary": {
+    "total": 6,
+    "outcomes": {
+      "match": 5,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "snapshot",
+  "results": [
+    {
+      "id": "match/basic.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/match/basic.ts",
+      "outcome": "match",
+      "duration_ms": 839,
+      "rust_ms": 839,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": []
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": []
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    },
+    {
+      "id": "match/lib_names_dotted.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/match/lib_names_dotted.ts",
+      "outcome": "match",
+      "duration_ms": 52,
+      "rust_ms": 4,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'Array'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'Boolean'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'Function'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'IArguments'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'Number'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'Object'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'RegExp'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2318",
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error",
+            "message": "Cannot find global type 'String'."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {
+          "lib": [
+            "DOM.Iterable",
+            "es2015.promise"
+          ]
+        },
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [
+            "dom.iterable",
+            "es2015.promise"
+          ],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "lib": [
+            "dom.iterable",
+            "es2015.promise"
+          ],
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    },
+    {
+      "id": "match/options_passthrough.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/match/options_passthrough.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 70,
+      "rust_ms": 38,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC0005",
+            "file": "/beta.ts",
+            "start": 24,
+            "end": 29,
+            "severity": "error",
+            "message": "unknown identifier `Alpha`"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2318,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 5053,
+            "file": null,
+            "start": 0,
+            "end": 0,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2304,
+            "file": "/beta.ts",
+            "start": 24,
+            "end": 29,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {
+          "target": "ES2020",
+          "module": "nodenext",
+          "no_unchecked_indexed_access": true,
+          "no_lib": true,
+          "lib": [
+            "es2020"
+          ],
+          "use_define_for_class_fields": false,
+          "declaration": true,
+          "module_resolution": "node16",
+          "types": [
+            "example"
+          ]
+        },
+        "rust": {
+          "target": "Es2020",
+          "module": "NodeNext",
+          "no_default_lib": true,
+          "libs": [
+            "es2020"
+          ],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": true,
+          "module_resolution": "node16",
+          "types": [
+            "example"
+          ],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": true,
+          "use_define_for_class_fields": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "declaration": true,
+          "exactOptionalPropertyTypes": false,
+          "lib": [
+            "es2020"
+          ],
+          "module": "NodeNext",
+          "moduleResolution": "node16",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noLib": true,
+          "noUncheckedIndexedAccess": true,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2020",
+          "types": [
+            "example"
+          ],
+          "useDefineForClassFields": false
+        }
+      },
+      "detail": {
+        "message": "rust missing 9 diagnostic(s); first missing: <unknown>:0-0 [2318]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "CompilerOptions.types not implemented yet"
+      },
+      "mismatched": true
+    },
+    {
+      "id": "match/strict_null_checks_disabled.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/match/strict_null_checks_disabled.ts",
+      "outcome": "match",
+      "duration_ms": 841,
+      "rust_ms": 841,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": []
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": []
+      },
+      "options": {
+        "harness": {
+          "strict_null_checks": false
+        },
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": false,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    },
+    {
+      "id": "mismatch/strict_null_checks_enabled.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/mismatch/strict_null_checks_enabled.ts",
+      "outcome": "match",
+      "duration_ms": 839,
+      "rust_ms": 839,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/strict_null_checks_enabled.ts",
+            "start": 5,
+            "end": 10,
+            "severity": "error",
+            "message": "type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/strict_null_checks_enabled.ts",
+            "start": 5,
+            "end": 10,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {
+          "strict_null_checks": true
+        },
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    },
+    {
+      "id": "mismatch/type_error.ts",
+      "path": "typecheck-ts-harness/fixtures/conformance-mini/mismatch/type_error.ts",
+      "outcome": "match",
+      "duration_ms": 842,
+      "rust_ms": 842,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/type_error.ts",
+            "start": 6,
+            "end": 12,
+            "severity": "error",
+            "message": "type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/type_error.ts",
+            "start": 6,
+            "end": 12,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    }
+  ]
+}

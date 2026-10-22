@@ -2,9 +2,9 @@ extern crate semantic_js as semantic_js_crate;
 
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use crate::check::overload::callable_signatures;
+use crate::db;
 use crate::db::queries::VarInit;
 use crate::db::spans::expr_at_from_spans;
-use crate::db::{self, BodyCheckDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileOrigin;
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
@@ -68,6 +68,10 @@ pub struct BodyCheckResult {
   pub(crate) pat_spans: Vec<TextRange>,
   pub(crate) diagnostics: Vec<Diagnostic>,
   pub(crate) return_types: Vec<TypeId>,
+  /// Operand types of `yield` / `yield*` expressions in the body, for
+  /// generator return-type inference (`Generator<Y, R, N>` from the yield
+  /// union instead of `() => void`).
+  pub(crate) yield_types: Vec<TypeId>,
 }
 
 impl BodyCheckResult {
@@ -80,6 +84,7 @@ impl BodyCheckResult {
       pat_spans: Vec::new(),
       diagnostics: Vec::new(),
       return_types: Vec::new(),
+      yield_types: Vec::new(),
     })
   }
 

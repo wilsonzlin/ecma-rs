@@ -1,7 +1,7 @@
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
-use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use parse_js::{parse_with_options_detailed, Dialect, ParseOptions, SourceType};
 use std::sync::Arc;
 
 use crate::lib_support::FileKind;
@@ -61,14 +61,24 @@ pub fn parse(file: FileId, kind: FileKind, source: &str) -> ParseResult {
     FileKind::Dts => Dialect::Dts,
   };
 
-  match parse_with_options(
+  match parse_with_options_detailed(
     source,
     ParseOptions {
       dialect,
       source_type: SourceType::Module,
     },
   ) {
-    Ok(ast) => ParseResult::ok(ast),
+    Ok(parsed) => {
+      let diagnostics = parsed
+        .soft_errors
+        .into_iter()
+        .map(|err| err.to_diagnostic(file))
+        .collect();
+      ParseResult {
+        ast: Some(Arc::new(parsed.ast)),
+        diagnostics,
+      }
+    }
     Err(err) => ParseResult::error(err.to_diagnostic(file)),
   }
 }

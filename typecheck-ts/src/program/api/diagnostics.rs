@@ -24,6 +24,16 @@ impl Program {
     })
   }
 
+  /// Number of actual (non-memoized) body-check query executions performed by
+  /// this program since construction.
+  ///
+  /// Salsa memo hits do not increment this counter, so the delta across an
+  /// edit shows exactly how many bodies were re-checked.
+  pub fn body_check_count(&self) -> usize {
+    let state = self.lock_state();
+    state.typecheck_db.body_check_count()
+  }
+
   /// Return collected query and cache statistics for this program.
   pub fn query_stats(&self) -> QueryStats {
     let (cache_stats, mut snapshot) = {

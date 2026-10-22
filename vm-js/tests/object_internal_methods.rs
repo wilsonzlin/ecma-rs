@@ -165,7 +165,10 @@ fn ordinary_set_invokes_accessor_setter_with_receiver() -> Result<(), VmError> {
       .object_get_own_data_property_value(child, &key_seen)?,
     Some(Value::Number(99.0))
   );
-  assert!(scope.heap().object_get_own_property(proto, &key_seen)?.is_none());
+  assert!(scope
+    .heap()
+    .object_get_own_property(proto, &key_seen)?
+    .is_none());
 
   Ok(())
 }

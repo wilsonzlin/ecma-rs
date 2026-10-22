@@ -65,6 +65,7 @@ fn break_stmt(label: Option<&str>) -> Node<Stmt> {
 fn var_decl_stmt(name: &str, init: Node<Expr>) -> Node<Stmt> {
   stmt(Stmt::VarDecl(node(VarDecl {
     export: false,
+    declare: false,
     mode: VarDeclMode::Var,
     declarators: vec![VarDeclarator {
       pattern: node(PatDecl {

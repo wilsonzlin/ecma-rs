@@ -1,4 +1,7 @@
-use vm_js::{GcObject, Heap, HeapLimits, PropertyKey, PropertyKind, Realm, Scope, Value, Vm, VmError, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, PropertyKey, PropertyKind, Realm, Scope, Value, Vm, VmError,
+  VmOptions,
+};
 
 struct TestRt {
   vm: Vm,
@@ -45,27 +48,40 @@ fn array_map_join_and_string_conversion_work() -> Result<(), VmError> {
 
   // new Array(1, 2)
   let array_ctor = Value::Object(intr.array_constructor());
-  let array = rt
-    .vm
-    .construct_without_host(&mut scope, array_ctor, &[Value::Number(1.0), Value::Number(2.0)], array_ctor)?;
+  let array = rt.vm.construct_without_host(
+    &mut scope,
+    array_ctor,
+    &[Value::Number(1.0), Value::Number(2.0)],
+    array_ctor,
+  )?;
   let Value::Object(array_obj) = array else {
-    return Err(VmError::Unimplemented("Array constructor did not return object"));
+    return Err(VmError::Unimplemented(
+      "Array constructor did not return object",
+    ));
   };
 
   // array.map(String)
   let map = get_data_property(&mut scope, array_obj, "map")?.unwrap();
   let string_ctor = Value::Object(intr.string_constructor());
-  let mapped = rt.vm.call_without_host(&mut scope, map, array, &[string_ctor])?;
+  let mapped = rt
+    .vm
+    .call_without_host(&mut scope, map, array, &[string_ctor])?;
   let Value::Object(mapped_obj) = mapped else {
-    return Err(VmError::Unimplemented("Array.prototype.map did not return object"));
+    return Err(VmError::Unimplemented(
+      "Array.prototype.map did not return object",
+    ));
   };
 
   // mapped.join(',')
   let join = get_data_property(&mut scope, mapped_obj, "join")?.unwrap();
   let comma = Value::String(scope.alloc_string(",")?);
-  let joined = rt.vm.call_without_host(&mut scope, join, mapped, &[comma])?;
+  let joined = rt
+    .vm
+    .call_without_host(&mut scope, join, mapped, &[comma])?;
   let Value::String(s) = joined else {
-    return Err(VmError::Unimplemented("Array.prototype.join did not return string"));
+    return Err(VmError::Unimplemented(
+      "Array.prototype.join did not return string",
+    ));
   };
   assert_eq!(scope.heap().get_string(s)?.to_utf8_lossy(), "1,2");
   Ok(())
@@ -87,9 +103,14 @@ fn object_prototype_to_string_works_via_function_call() -> Result<(), VmError> {
     .vm
     .call_without_host(&mut scope, call, to_string, &[Value::Number(1.0)])?;
   let Value::String(s) = out else {
-    return Err(VmError::Unimplemented("Object.prototype.toString.call did not return string"));
+    return Err(VmError::Unimplemented(
+      "Object.prototype.toString.call did not return string",
+    ));
   };
-  assert_eq!(scope.heap().get_string(s)?.to_utf8_lossy(), "[object Number]");
+  assert_eq!(
+    scope.heap().get_string(s)?.to_utf8_lossy(),
+    "[object Number]"
+  );
   Ok(())
 }
 
@@ -105,7 +126,9 @@ fn error_construction_sets_message() -> Result<(), VmError> {
     .vm
     .construct_without_host(&mut scope, error_ctor, &[msg], error_ctor)?;
   let Value::Object(err_obj) = err else {
-    return Err(VmError::Unimplemented("Error constructor did not return object"));
+    return Err(VmError::Unimplemented(
+      "Error constructor did not return object",
+    ));
   };
   let message = get_data_property(&mut scope, err_obj, "message")?.unwrap();
   let Value::String(s) = message else {
@@ -128,7 +151,9 @@ fn json_stringify_string_does_not_crash() -> Result<(), VmError> {
     .vm
     .call_without_host(&mut scope, stringify, Value::Object(json), &[x])?;
   let Value::String(s) = out else {
-    return Err(VmError::Unimplemented("JSON.stringify did not return string"));
+    return Err(VmError::Unimplemented(
+      "JSON.stringify did not return string",
+    ));
   };
   assert_eq!(scope.heap().get_string(s)?.to_utf8_lossy(), "\"x\"");
   Ok(())

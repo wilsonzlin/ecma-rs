@@ -237,7 +237,10 @@ pub struct EvaluatorLimits {
 impl EvaluatorLimits {
   pub const DEFAULT_DEPTH_LIMIT: usize = 64;
   pub const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
-  pub const DEFAULT_STEP_LIMIT: usize = usize::MAX;
+  /// Sentinel that disables step tracking entirely.
+  pub const UNLIMITED_STEP_LIMIT: usize = usize::MAX;
+  /// Matches [`crate::RelationLimits::DEFAULT_STEP_LIMIT`].
+  pub const DEFAULT_STEP_LIMIT: usize = 50_000;
 }
 
 impl Default for EvaluatorLimits {
@@ -304,8 +307,16 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
   caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
+  /// Per-`evaluate_ref`-invocation memo for `substitute_only`. Interned types
+  /// are DAGs; a substitution walk without sharing explodes exponentially on
+  /// self-similar types (e.g. `OldDiff<keyof this, _>` intersections whose
+  /// members repeat the same ladder).
+  subst_memo: std::collections::HashMap<TypeId, TypeId>,
   limits: EvaluatorLimits,
   steps: usize,
+  /// Cooperative stop flag (e.g. host cancellation). Never panics.
+  should_stop: Option<&'a std::sync::atomic::AtomicBool>,
+  budget_exceeded: bool,
 }
 
 impl<'a, E: TypeExpander> std::fmt::Debug for TypeEvaluator<'a, E> {
@@ -486,8 +497,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
+      subst_memo: std::collections::HashMap::new(),
       limits: EvaluatorLimits::default(),
       steps: 0,
+      should_stop: None,
+      budget_exceeded: false,
     }
   }
 
@@ -523,8 +537,19 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     self
   }
 
+  /// Install a cooperative stop flag (e.g. host cancellation). On stop the
+  /// evaluator returns the input type unchanged and latches [`budget_exceeded`].
+  pub fn with_should_stop(mut self, should_stop: &'a std::sync::atomic::AtomicBool) -> Self {
+    self.should_stop = Some(should_stop);
+    self
+  }
+
   pub fn step_count(&self) -> usize {
     self.steps
+  }
+
+  pub fn budget_exceeded(&self) -> bool {
+    self.budget_exceeded
   }
 
   pub fn cache_stats(&self) -> EvaluatorCacheStats {
@@ -585,6 +610,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if depth >= self.limits.depth_limit {
       return ty;
     }
+    if self
+      .should_stop
+      .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    {
+      self.budget_exceeded = true;
+      return ty;
+    }
     let key = EvalKey {
       gen: self.caches.generation.load(AtomicOrdering::Relaxed),
       ty,
@@ -594,8 +626,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       return cached;
     }
 
-    if self.limits.step_limit != EvaluatorLimits::DEFAULT_STEP_LIMIT {
+    if self.limits.step_limit != EvaluatorLimits::UNLIMITED_STEP_LIMIT {
       if self.steps >= self.limits.step_limit {
+        self.budget_exceeded = true;
         return ty;
       }
       self.steps += 1;
@@ -651,14 +684,29 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           .collect();
         self.store.intern_type(TypeKind::Tuple(evaluated))
       }
-      TypeKind::Object(obj) => self.evaluate_object(obj, subst, depth + 1),
+      TypeKind::Object(obj) => {
+        // Empty subst + no reducible operators: identity (avoids re-interning
+        // already-canonical structural graphs).
+        if subst.bindings.is_empty() && !self.type_needs_evaluation(ty, 0) {
+          ty
+        } else {
+          self.evaluate_object(obj, subst, depth + 1)
+        }
+      }
       TypeKind::Callable { overloads } => {
-        // Signatures may reference type parameters; eagerly substitute.
-        let overloads: Vec<_> = overloads
-          .into_iter()
-          .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
-          .collect();
-        self.store.intern_type(TypeKind::Callable { overloads })
+        if subst.bindings.is_empty() && !self.type_needs_evaluation(ty, 0) {
+          ty
+        } else {
+          // Keep full signature evaluation for callables (lib method
+          // instantiation / Promise.resolve assignability depends on it).
+          // Nested object graphs inside parameter/return types are still
+          // bounded via `evaluate_object`'s empty-subst `evaluate_ops` path.
+          let overloads: Vec<_> = overloads
+            .into_iter()
+            .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
+            .collect();
+          self.store.intern_type(TypeKind::Callable { overloads })
+        }
       }
       TypeKind::Ref { def, args } => self.evaluate_ref(def, args, subst, depth + 1),
       TypeKind::Conditional {
@@ -686,7 +734,12 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       other => self.store.intern_type(other),
     };
     self.eval_in_progress.remove(&key);
-    self.caches.eval.insert(key, result);
+    // Never cache a budget/cancel short-circuit: the result depends on remaining
+    // steps in the caller, not solely on `(ty, subst)`, and would race under
+    // shared evaluator caches.
+    if !self.budget_exceeded {
+      self.caches.eval.insert(key, result);
+    }
     result
   }
 
@@ -698,40 +751,498 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) -> crate::SignatureId {
     let mut sig = self.store.signature(sig);
     sig.params.iter_mut().for_each(|param| {
-      param.ty = self.evaluate_with_subst(param.ty, subst, depth + 1);
+      param.ty = self.evaluate_signature_type(param.ty, subst, depth + 1);
     });
-    sig.ret = self.evaluate_with_subst(sig.ret, subst, depth + 1);
+    sig.ret = self.evaluate_signature_type(sig.ret, subst, depth + 1);
     if let Some(this) = sig.this_param.as_mut() {
-      *this = self.evaluate_with_subst(*this, subst, depth + 1);
+      *this = self.evaluate_signature_type(*this, subst, depth + 1);
     }
     self.store.intern_signature(sig)
   }
 
-  fn evaluate_object(&mut self, obj: ObjectId, subst: &Substitution, depth: usize) -> TypeId {
+  /// Evaluate a type that appears in a call/construct signature position.
+  ///
+  /// Under an empty subst, named `Ref`s (e.g. lib `Array<T>`) are left
+  /// unexpanded: expanding them re-interns method graphs on every normalize
+  /// pass and breaks Callable assignability (engine budget / false
+  /// `SKIP_NORMALIZE` failures on `assignmentCompatWithCallSignatures3`).
+  /// Concrete substitutions still fully evaluate so instantiation stays
+  /// correct.
+  fn evaluate_signature_type(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> TypeId {
+    if !subst.bindings.is_empty() {
+      return self.evaluate_with_subst(ty, subst, depth);
+    }
+    if depth >= self.limits.depth_limit || self.budget_exceeded {
+      return ty;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Ref { def, args } => {
+        let args = args
+          .into_iter()
+          .map(|a| self.evaluate_signature_type(a, subst, depth + 1))
+          .collect();
+        self.store.intern_type(TypeKind::Ref { def, args })
+      }
+      TypeKind::Union(members) => {
+        let members = members
+          .into_iter()
+          .map(|m| self.evaluate_signature_type(m, subst, depth + 1))
+          .collect();
+        self.store.union(members)
+      }
+      TypeKind::Intersection(members) => {
+        let members = members
+          .into_iter()
+          .map(|m| self.evaluate_signature_type(m, subst, depth + 1))
+          .collect();
+        self.store.intersection(members)
+      }
+      TypeKind::Array { ty: elem, readonly } => {
+        let elem = self.evaluate_signature_type(elem, subst, depth + 1);
+        self
+          .store
+          .intern_type(TypeKind::Array { ty: elem, readonly })
+      }
+      TypeKind::Tuple(elems) => {
+        let elems = elems
+          .into_iter()
+          .map(|mut e| {
+            e.ty = self.evaluate_signature_type(e.ty, subst, depth + 1);
+            e
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Tuple(elems))
+      }
+      TypeKind::Object(_) | TypeKind::Callable { .. } => ty,
+      TypeKind::Conditional { .. }
+      | TypeKind::Mapped(_)
+      | TypeKind::TemplateLiteral(_)
+      | TypeKind::Intrinsic { .. }
+      | TypeKind::IndexedAccess { .. }
+      | TypeKind::KeyOf(_)
+      | TypeKind::Infer { .. } => self.evaluate_ops(ty, subst, depth),
+      _ => ty,
+    }
+  }
+
+  /// True if `ty` (or a shallow component) still contains a reducible operator
+  /// that `evaluate_with_subst` must process. Used to skip identity object walks.
+  fn type_needs_evaluation(&self, ty: TypeId, depth: usize) -> bool {
+    if depth > 6 {
+      // Bounded scan — prefer a false positive (extra eval) over deep walks.
+      return true;
+    }
+    match self.store.type_kind(ty) {
+      // Free type parameters are already normal under an empty subst (the only
+      // caller of this helper). Forcing `true` here made every generic method
+      // object look "reducible" and re-enabled deep `evaluate_object` walks.
+      TypeKind::TypeParam(_) => false,
+      TypeKind::Infer { .. }
+      | TypeKind::Ref { .. }
+      | TypeKind::Conditional { .. }
+      | TypeKind::Mapped(_)
+      | TypeKind::TemplateLiteral(_)
+      | TypeKind::Intrinsic { .. }
+      | TypeKind::IndexedAccess { .. }
+      | TypeKind::KeyOf(_) => true,
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .any(|m| self.type_needs_evaluation(*m, depth + 1)),
+      TypeKind::Array { ty, .. } => self.type_needs_evaluation(ty, depth + 1),
+      TypeKind::Tuple(elems) => elems
+        .iter()
+        .any(|e| self.type_needs_evaluation(e.ty, depth + 1)),
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        shape
+          .properties
+          .iter()
+          .any(|p| self.type_needs_evaluation(p.data.ty, depth + 1))
+          || shape.indexers.iter().any(|i| {
+            self.type_needs_evaluation(i.key_type, depth + 1)
+              || self.type_needs_evaluation(i.value_type, depth + 1)
+          })
+          || shape
+            .call_signatures
+            .iter()
+            .chain(shape.construct_signatures.iter())
+            .any(|sig| self.signature_needs_evaluation(*sig, depth + 1))
+      }
+      TypeKind::Callable { overloads } => overloads
+        .iter()
+        .any(|sig| self.signature_needs_evaluation(*sig, depth + 1)),
+      _ => false,
+    }
+  }
+
+  fn signature_needs_evaluation(&self, sig: crate::SignatureId, depth: usize) -> bool {
+    let sig = self.store.signature(sig);
+    // Signature positions leave named `Ref`s opaque under empty subst (see
+    // `evaluate_signature_type`), so a free `Array<T>` in a parameter must not
+    // force a full signature re-evaluation during Callable normalize.
+    sig
+      .params
+      .iter()
+      .any(|p| self.signature_type_needs_ops(p.ty, depth))
+      || self.signature_type_needs_ops(sig.ret, depth)
+      || sig
+        .this_param
+        .is_some_and(|t| self.signature_type_needs_ops(t, depth))
+  }
+
+  fn signature_type_needs_ops(&self, ty: TypeId, depth: usize) -> bool {
+    if depth > 6 {
+      return true;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Infer { .. }
+      | TypeKind::Conditional { .. }
+      | TypeKind::Mapped(_)
+      | TypeKind::TemplateLiteral(_)
+      | TypeKind::Intrinsic { .. }
+      | TypeKind::IndexedAccess { .. }
+      | TypeKind::KeyOf(_) => true,
+      TypeKind::Ref { args, .. } => args
+        .iter()
+        .any(|a| self.signature_type_needs_ops(*a, depth + 1)),
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .any(|m| self.signature_type_needs_ops(*m, depth + 1)),
+      TypeKind::Array { ty, .. } => self.signature_type_needs_ops(ty, depth + 1),
+      TypeKind::Tuple(elems) => elems
+        .iter()
+        .any(|e| self.signature_type_needs_ops(e.ty, depth + 1)),
+      _ => false,
+    }
+  }
+
+  /// Evaluate reducible operators under `subst`, but treat nested `Object` /
+  /// `Callable` as opaque when `subst` is empty. This is a pure function of
+  /// `(ty, subst)` (unlike depth-dependent early exits) and prevents
+  /// signature↔object recursion from allocating unbounded shapes.
+  fn evaluate_ops(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> TypeId {
+    if depth >= self.limits.depth_limit || self.budget_exceeded {
+      return ty;
+    }
+    if self
+      .should_stop
+      .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    {
+      self.budget_exceeded = true;
+      return ty;
+    }
+    if self.limits.step_limit != EvaluatorLimits::UNLIMITED_STEP_LIMIT {
+      if self.steps >= self.limits.step_limit {
+        self.budget_exceeded = true;
+        return ty;
+      }
+      self.steps += 1;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Object(_) if subst.bindings.is_empty() => ty,
+      TypeKind::TypeParam(id) => subst
+        .get(id)
+        .map(|mapped| self.evaluate_ops(mapped, subst, depth + 1))
+        .unwrap_or(ty),
+      TypeKind::Union(members) => {
+        let evaluated: Vec<_> = members
+          .into_iter()
+          .map(|m| self.evaluate_ops(m, subst, depth + 1))
+          .collect();
+        self.store.union(evaluated)
+      }
+      TypeKind::Intersection(members) => {
+        let evaluated: Vec<_> = members
+          .into_iter()
+          .map(|m| self.evaluate_ops(m, subst, depth + 1))
+          .collect();
+        self.store.intersection(evaluated)
+      }
+      TypeKind::Array { ty: elem, readonly } => {
+        let elem = self.evaluate_ops(elem, subst, depth + 1);
+        self
+          .store
+          .intern_type(TypeKind::Array { ty: elem, readonly })
+      }
+      TypeKind::Tuple(elems) => {
+        let evaluated = elems
+          .into_iter()
+          .map(|elem| crate::TupleElem {
+            ty: self.evaluate_ops(elem.ty, subst, depth + 1),
+            optional: elem.optional,
+            rest: elem.rest,
+            readonly: elem.readonly,
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Tuple(evaluated))
+      }
+      TypeKind::Ref { def, args } => self.evaluate_ref(def, args, subst, depth + 1),
+      TypeKind::Conditional {
+        check,
+        extends,
+        true_ty,
+        false_ty,
+        distributive,
+      } => self.evaluate_conditional(
+        check,
+        extends,
+        true_ty,
+        false_ty,
+        distributive,
+        subst,
+        depth + 1,
+      ),
+      TypeKind::Mapped(mapped) => self.evaluate_mapped(mapped, subst, depth + 1),
+      TypeKind::TemplateLiteral(tpl) => self.evaluate_template_literal(tpl, subst, depth + 1),
+      TypeKind::Intrinsic { kind, ty } => self.evaluate_intrinsic(kind, ty, subst, depth + 1),
+      TypeKind::IndexedAccess { obj, index } => {
+        self.evaluate_indexed_access(obj, index, subst, depth + 1)
+      }
+      TypeKind::KeyOf(inner) => self.evaluate_keyof(inner, subst, depth + 1),
+      TypeKind::Infer { param, constraint } => match subst.get(param) {
+        Some(mapped) => self.evaluate_ops(mapped, subst, depth + 1),
+        None => {
+          let constraint = constraint.map(|c| self.evaluate_ops(c, subst, depth + 1));
+          self
+            .store
+            .intern_type(TypeKind::Infer { param, constraint })
+        }
+      },
+      // Non-empty subst must still walk objects for substitution.
+      TypeKind::Object(obj) => self.evaluate_object(obj, subst, depth + 1),
+      TypeKind::Callable { overloads } => {
+        let overloads: Vec<_> = overloads
+          .into_iter()
+          .map(|sig| {
+            if subst.bindings.is_empty() {
+              self.evaluate_signature_ops(sig, subst, depth + 1)
+            } else {
+              self.evaluate_signature(sig, subst, depth + 1)
+            }
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Callable { overloads })
+      }
+      other => self.store.intern_type(other),
+    }
+  }
+
+  /// Evaluate only call/construct signatures on an object; leave properties
+  /// untouched. Used when a nested object appears under an empty subst.
+  fn evaluate_object_signatures_only(
+    &mut self,
+    obj: ObjectId,
+    subst: &Substitution,
+    depth: usize,
+  ) -> TypeId {
+    if depth >= self.limits.depth_limit || self.budget_exceeded {
+      return self.store.intern_type(TypeKind::Object(obj));
+    }
     let object = self.store.object(obj);
     let mut shape = self.store.shape(object.shape);
-    for prop in shape.properties.iter_mut() {
-      prop.data.ty = self.evaluate_with_subst(prop.data.ty, subst, depth + 1);
-    }
-    for idx in shape.indexers.iter_mut() {
-      idx.key_type = self.evaluate_with_subst(idx.key_type, subst, depth + 1);
-      idx.value_type = self.evaluate_with_subst(idx.value_type, subst, depth + 1);
+    if shape.call_signatures.is_empty() && shape.construct_signatures.is_empty() {
+      return self.store.intern_type(TypeKind::Object(obj));
     }
     shape.call_signatures = shape
       .call_signatures
       .into_iter()
-      .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
+      .map(|sig| self.evaluate_signature_ops(sig, subst, depth + 1))
       .collect();
     shape.construct_signatures = shape
       .construct_signatures
       .into_iter()
-      .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
+      .map(|sig| self.evaluate_signature_ops(sig, subst, depth + 1))
       .collect();
+    if self.budget_exceeded {
+      return self.store.intern_type(TypeKind::Object(obj));
+    }
     let shape_id = self.store.intern_shape(shape);
     let obj_id = self
       .store
       .intern_object(crate::ObjectType { shape: shape_id });
     self.store.intern_type(TypeKind::Object(obj_id))
+  }
+
+  fn evaluate_signature_ops(
+    &mut self,
+    sig: crate::SignatureId,
+    subst: &Substitution,
+    depth: usize,
+  ) -> crate::SignatureId {
+    let mut sig = self.store.signature(sig);
+    sig.params.iter_mut().for_each(|param| {
+      param.ty = self.evaluate_signature_type(param.ty, subst, depth + 1);
+    });
+    sig.ret = self.evaluate_signature_type(sig.ret, subst, depth + 1);
+    if let Some(this) = sig.this_param.as_mut() {
+      *this = self.evaluate_signature_type(*this, subst, depth + 1);
+    }
+    self.store.intern_signature(sig)
+  }
+
+  fn evaluate_object(&mut self, obj: ObjectId, subst: &Substitution, depth: usize) -> TypeId {
+    if self.budget_exceeded
+      || self
+        .should_stop
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    {
+      self.budget_exceeded = true;
+      return self.store.intern_type(TypeKind::Object(obj));
+    }
+    let object = self.store.object(obj);
+    let mut shape = self.store.shape(object.shape);
+    // A subst that only renames type parameters (or is empty) must not deep-walk
+    // nested object property graphs — `evaluate_ref` often builds such substs
+    // when expanding `Promise<T>`-like refs, and re-entering `evaluate_object`
+    // there is the `parserRealSource12` memory bomb. Concrete substitutions
+    // (T → number, …) still walk fully so instantiation stays correct.
+    let deep_object_walk = subst
+      .bindings
+      .iter()
+      .any(|(_, ty)| !matches!(self.store.type_kind(*ty), TypeKind::TypeParam(_)));
+    for prop in shape.properties.iter_mut() {
+      prop.data.ty = if !deep_object_walk {
+        match self.store.type_kind(prop.data.ty) {
+          TypeKind::Object(inner) => self.evaluate_object_signatures_only(inner, subst, depth + 1),
+          _ => self.evaluate_with_subst(prop.data.ty, subst, depth + 1),
+        }
+      } else {
+        self.evaluate_with_subst(prop.data.ty, subst, depth + 1)
+      };
+      if self.budget_exceeded {
+        return self.store.intern_type(TypeKind::Object(obj));
+      }
+    }
+    for idx in shape.indexers.iter_mut() {
+      if !deep_object_walk {
+        if !matches!(self.store.type_kind(idx.key_type), TypeKind::Object(_)) {
+          idx.key_type = self.evaluate_with_subst(idx.key_type, subst, depth + 1);
+        }
+        if !matches!(self.store.type_kind(idx.value_type), TypeKind::Object(_)) {
+          idx.value_type = self.evaluate_with_subst(idx.value_type, subst, depth + 1);
+        }
+      } else {
+        idx.key_type = self.evaluate_with_subst(idx.key_type, subst, depth + 1);
+        idx.value_type = self.evaluate_with_subst(idx.value_type, subst, depth + 1);
+      }
+      if self.budget_exceeded {
+        return self.store.intern_type(TypeKind::Object(obj));
+      }
+    }
+    shape.call_signatures = shape
+      .call_signatures
+      .into_iter()
+      .map(|sig| {
+        if deep_object_walk {
+          self.evaluate_signature(sig, subst, depth + 1)
+        } else {
+          self.evaluate_signature_ops(sig, subst, depth + 1)
+        }
+      })
+      .collect();
+    if self.budget_exceeded {
+      return self.store.intern_type(TypeKind::Object(obj));
+    }
+    shape.construct_signatures = shape
+      .construct_signatures
+      .into_iter()
+      .map(|sig| {
+        if deep_object_walk {
+          self.evaluate_signature(sig, subst, depth + 1)
+        } else {
+          self.evaluate_signature_ops(sig, subst, depth + 1)
+        }
+      })
+      .collect();
+    if self.budget_exceeded {
+      return self.store.intern_type(TypeKind::Object(obj));
+    }
+    let shape_id = self.store.intern_shape(shape);
+    let obj_id = self
+      .store
+      .intern_object(crate::ObjectType { shape: shape_id });
+    self.store.intern_type(TypeKind::Object(obj_id))
+  }
+
+  /// Structural substitution without evaluation: replaces bound type
+  /// parameters via `subst` and rebuilds composite nodes, but never expands
+  /// `Ref`s (their args are rebuilt structurally instead). Used by the
+  /// recursive-generic deferral in [`TypeEvaluator::evaluate_ref`], where
+  /// the deferred reference must carry substituted args without triggering
+  /// further expansion.
+  fn substitute_only(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> TypeId {
+    if depth >= self.limits.depth_limit {
+      return ty;
+    }
+    // DAG sharing memo: valid only for the current `evaluate_ref` invocation's
+    // substitution (the caller scopes `subst_memo` to that window).
+    if let Some(memo) = self.subst_memo.get(&ty) {
+      return *memo;
+    }
+    let result = match self.store.type_kind(ty) {
+      TypeKind::TypeParam(id) => subst.get(id).unwrap_or(ty),
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.substitute_only(m, subst, depth + 1))
+          .collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.substitute_only(m, subst, depth + 1))
+          .collect();
+        self.store.intersection(mapped)
+      }
+      TypeKind::Array { ty, readonly } => {
+        let inner = self.substitute_only(ty, subst, depth + 1);
+        self.store.intern_type(TypeKind::Array {
+          ty: inner,
+          readonly,
+        })
+      }
+      TypeKind::Tuple(elems) => {
+        let mapped: Vec<_> = elems
+          .into_iter()
+          .map(|elem| crate::TupleElem {
+            ty: self.substitute_only(elem.ty, subst, depth + 1),
+            optional: elem.optional,
+            rest: elem.rest,
+            readonly: elem.readonly,
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Tuple(mapped))
+      }
+      TypeKind::KeyOf(inner) => {
+        let inner = self.substitute_only(inner, subst, depth + 1);
+        self.store.intern_type(TypeKind::KeyOf(inner))
+      }
+      TypeKind::IndexedAccess { obj, index } => {
+        let obj = self.substitute_only(obj, subst, depth + 1);
+        let index = self.substitute_only(index, subst, depth + 1);
+        self
+          .store
+          .intern_type(TypeKind::IndexedAccess { obj, index })
+      }
+      TypeKind::Intrinsic { kind, ty } => {
+        let ty = self.substitute_only(ty, subst, depth + 1);
+        self.store.intern_type(TypeKind::Intrinsic { kind, ty })
+      }
+      TypeKind::Ref { def, args } => {
+        let mapped: Vec<TypeId> = args
+          .into_iter()
+          .map(|arg| self.substitute_only(arg, subst, depth + 1))
+          .collect();
+        self.store.intern_type(TypeKind::Ref { def, args: mapped })
+      }
+      // Objects, callables, operators, and primitives: shapes here do not
+      // carry the in-flight subst's free parameters (they belong to the
+      // already-instantiated definition), so return as-is.
+      _ => ty,
+    };
+    self.subst_memo.insert(ty, result);
+    result
   }
 
   fn evaluate_ref(
@@ -741,10 +1252,22 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
+    // Args are substituted structurally (no eager expansion): expanding Ref
+    // arguments here eagerly is what makes recursive generics with growing
+    // args quadratic (`new D<string>()` on `class D<T> { wrapped: D<D<T>> }`
+    // — each nesting level re-expanded the full chain below it). tsc keeps
+    // type arguments as references; downstream evaluation expands lazily on
+    // demand. `substitute_only` applies the in-flight substitution without
+    // evaluating.
+    //
+    // The memo is scoped to this invocation's substitution: nested
+    // `evaluate_ref` calls extend the substitution, so they save/restore.
+    let saved_subst_memo = std::mem::take(&mut self.subst_memo);
     let evaluated_args: SmallVec<[TypeId; 4]> = args
       .into_iter()
-      .map(|arg| self.evaluate_with_subst(arg, subst, depth + 1))
+      .map(|arg| self.substitute_only(arg, subst, 0))
       .collect();
+    self.subst_memo = saved_subst_memo;
     let key = RefKey {
       gen: self.caches.generation.load(AtomicOrdering::Relaxed),
       def,
@@ -779,26 +1302,36 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       });
     }
     self.ref_in_progress.insert(key.clone());
-    let expanded = self
-      .expander
-      .expand(&self.store, def, &key.args)
-      .map(|expanded| {
+    // When the expander declines (e.g. SkipSelfExpander leaving nested
+    // `C<U>` as a ref while instantiating `C<T>`), the synthesized Ref is a
+    // *deferred* expansion — not a final answer. Caching it poisons later
+    // `expand_ref(C, [U])` via the shared `EvaluatorCaches` (dual generic
+    // class instantiations → false TS2339 / one-way assignability).
+    let (expanded, cacheable) = match self.expander.expand(&self.store, def, &key.args) {
+      Some(expanded) => {
         let mut next_subst = subst.clone();
         for (idx, param) in expanded.params.iter().enumerate() {
           if let Some(arg) = key.args.get(idx) {
             next_subst = next_subst.with(*param, *arg);
           }
         }
-        self.evaluate_with_subst(expanded.ty, &next_subst, depth + 1)
-      })
-      .unwrap_or_else(|| {
+        (
+          self.evaluate_with_subst(expanded.ty, &next_subst, depth + 1),
+          true,
+        )
+      }
+      None => (
         self.store.intern_type(TypeKind::Ref {
           def,
           args: key.args.to_vec(),
-        })
-      });
+        }),
+        false,
+      ),
+    };
     self.ref_in_progress.remove(&key);
-    self.caches.refs.insert(key, expanded);
+    if cacheable {
+      self.caches.refs.insert(key, expanded);
+    }
     expanded
   }
 
@@ -1178,6 +1711,75 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     );
     #[cfg(feature = "tracing")]
     let _enter = span.enter();
+
+    // tsc `instantiateConstituent`: for a *homomorphic* mapped type
+    // `{[P in keyof T]: X}`, instantiating `T` with a non-object source
+    // performs no mapping and yields the source itself
+    // (`DeepReadonly<number>` is `number`); a union source distributes the
+    // mapped type per member, primitives passing through
+    // (`DeepReadonly<A | undefined>` is `DeepReadonly<A> | undefined`).
+    if let Some(hom_var) = mapped.homomorphic_var {
+      let TypeKind::KeyOf(hom_src) = self.store.type_kind(mapped.source) else {
+        unreachable!("homomorphic_var is only set for keyof sources");
+      };
+      let src_eval = self.evaluate_with_subst(hom_src, subst, depth + 1);
+      // tsc `instantiateConstituent`: mappable = `AnyOrUnknown` |
+      // `InstantiableNonPrimitive` | `Object` | `Intersection` — everything
+      // else (primitives, `never`, `void`, `null`, `undefined`) passes
+      // through unmapped.
+      fn is_mappable(store: &TypeStore, ty: TypeId) -> bool {
+        matches!(
+          store.type_kind(ty),
+          TypeKind::Object(_)
+            | TypeKind::Intersection(_)
+            | TypeKind::Any
+            | TypeKind::Unknown
+            | TypeKind::TypeParam(_)
+            | TypeKind::IndexedAccess { .. }
+            | TypeKind::Conditional { .. }
+            | TypeKind::Mapped(_)
+        )
+      }
+      match self.store.type_kind(src_eval) {
+        TypeKind::Union(members) => {
+          let mut out = Vec::new();
+          for member in members {
+            if is_mappable(&self.store, member) {
+              // Re-map with the homomorphic variable bound to this member
+              // (tsc distributes the mapped type per union constituent). The
+              // source is also replaced because eager substitution paths may
+              // already have baked the union into it.
+              let member_source = self.store.intern_type(TypeKind::KeyOf(member));
+              let member_subst = subst.clone().with(hom_var, member);
+              out.push(self.evaluate_mapped(
+                MappedType {
+                  source: member_source,
+                  ..mapped.clone()
+                },
+                &member_subst,
+                depth + 1,
+              ));
+            } else {
+              out.push(member);
+            }
+          }
+          let result = self.store.union(out);
+          #[cfg(feature = "tracing")]
+          {
+            span.record("result", &tracing::field::debug(&result));
+          }
+          return result;
+        }
+        _ if !is_mappable(&self.store, src_eval) => {
+          #[cfg(feature = "tracing")]
+          {
+            span.record("result", &tracing::field::debug(&src_eval));
+          }
+          return src_eval;
+        }
+        _ => {}
+      }
+    }
 
     let entries = self.mapped_entries(mapped.source, subst, depth + 1);
     #[cfg(feature = "tracing")]
@@ -1737,6 +2339,27 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         _ => self.tuple_index_union(&elems, subst, depth, options),
       },
+      TypeKind::Intersection(members) => {
+        // tsc: indexed access over an intersection gathers the property across
+        // members (`(A & B)[K]` = `A[K] & B[K]` over the members that declare
+        // K; members missing it contribute nothing) — `(Z & {})["a"]` is
+        // `number`, needed for mapped types over `keyof (T & {})`.
+        let mut hits = Vec::new();
+        for member in members {
+          let member_ty = self.evaluate_indexed_access(member, index_eval, subst, depth + 1);
+          if !matches!(
+            self.store.type_kind(self.store.canon(member_ty)),
+            TypeKind::Never
+          ) {
+            hits.push(member_ty);
+          }
+        }
+        if hits.is_empty() {
+          self.store.primitive_ids().never
+        } else {
+          self.store.intersection(hits)
+        }
+      }
       _ => self.store.primitive_ids().unknown,
     };
 
@@ -1968,11 +2591,24 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         acc
       }
-      TypeKind::Unknown | TypeKind::Never | TypeKind::EmptyObject => KeySet::Known(Vec::new()),
+      // tsc `getIndexType`: `keyof never` is the keyof constraint type
+      // `string | number | symbol`, not `never` (verified against tsc 5.9.3).
+      // `KeySet::Unknown` produces exactly that union in `evaluate_keyof`, and
+      // acts as the universal set in key-set intersection, so
+      // `keyof (A | never)` still reduces to `keyof A`.
+      TypeKind::Never => KeySet::Unknown,
+      TypeKind::Unknown | TypeKind::EmptyObject => KeySet::Known(Vec::new()),
       TypeKind::Object(obj) => {
         let mut keys = Vec::new();
         let shape = self.store.shape(self.store.object(obj).shape);
         for prop in shape.properties.iter() {
+          // ES private identifiers (`#foo`) are never keys (tsc:
+          // `privateNamesAndkeyof.ts` — `keyof A` excludes private members).
+          if let PropKey::String(name) = &prop.key {
+            if self.store.name(*name).starts_with('#') {
+              continue;
+            }
+          }
           keys.push(Key::Literal(prop.key.clone()));
         }
         let dummy_name = self.store.intern_name("");
@@ -2038,6 +2674,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     options: crate::TypeOptions,
   ) {
     for prop in shape.properties.iter() {
+      // ES private identifier keys (`#foo`) are not visible to indexed access /
+      // `keyof` string lookup (tsc: `C["#foo"]` → nonexistent property).
+      if let PropKey::String(name) = &prop.key {
+        if self.store.name(*name).starts_with('#') {
+          continue;
+        }
+      }
       if match (key, &prop.key) {
         (Key::Literal(a), b) => prop_keys_equal_for_lookup(self.store.as_ref(), a, b),
         (Key::String, PropKey::String(_)) => true,

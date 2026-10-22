@@ -1,0 +1,143 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignatures.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignatures.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2112,
+      "rust_ms": 1555,
+      "tsc_ms": 557,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignatures.ts",
+            "start": 217,
+            "end": 218,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignatures.ts",
+            "start": 221,
+            "end": 222,
+            "severity": "error",
+            "message": "g is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignatures.ts",
+            "start": 231,
+            "end": 232,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignatures.ts",
+            "start": 221,
+            "end": 222,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 2 extra diagnostic(s); first extra: /assignmentCompatWithGenericCallSignatures.ts:217-218 [TS2322]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/assignmentCompatWithGenericCallSignatures.ts",
+          "start": 217,
+          "end": 218,
+          "severity": "error",
+          "message": "assignment type mismatch"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_extra_diagnostics (shard 57/64) rust=[TS2322,TS2454] tsc=[2454]"
+      },
+      "mismatched": true
+    }
+  ]
+}

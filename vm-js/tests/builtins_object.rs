@@ -114,14 +114,118 @@ fn object_define_property_defines_value() -> Result<(), VmError> {
   let x = scope.alloc_string("x")?;
   let args = [Value::Object(o), Value::String(x), Value::Object(desc)];
 
-  let _ = rt
-    .vm
-    .call_without_host(&mut scope, Value::Object(define_property), Value::Object(object), &args)?;
+  let _ = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(define_property),
+    Value::Object(object),
+    &args,
+  )?;
 
   let x_key = PropertyKey::from_string(x);
   assert_eq!(
     scope.heap().object_get_own_data_property_value(o, &x_key)?,
     Some(Value::Number(1.0))
+  );
+
+  Ok(())
+}
+
+#[test]
+fn object_define_properties_defines_data_and_accessor() -> Result<(), VmError> {
+  let mut rt = TestRealm::new()?;
+  let object = rt.realm.intrinsics().object_constructor();
+
+  let mut scope = rt.heap.scope();
+
+  let define_properties = get_own_data_property(&mut scope, object, "defineProperties")?
+    .expect("Object.defineProperties should exist");
+  let Value::Object(define_properties) = define_properties else {
+    panic!("Object.defineProperties should be a function object");
+  };
+
+  let o = scope.alloc_object()?;
+  scope.push_root(Value::Object(o))?;
+
+  let props = scope.alloc_object()?;
+  scope.push_root(Value::Object(props))?;
+
+  // x: { value: 1 }
+  let x_desc = scope.alloc_object()?;
+  scope.push_root(Value::Object(x_desc))?;
+  define_enumerable_data_property(&mut scope, x_desc, "value", Value::Number(1.0))?;
+  define_enumerable_data_property(&mut scope, props, "x", Value::Object(x_desc))?;
+
+  // y: { get: function() { return 2; } }
+  let y_desc = scope.alloc_object()?;
+  scope.push_root(Value::Object(y_desc))?;
+  let getter_id = rt.vm.register_native_call(return_two_native)?;
+  let getter_name = scope.alloc_string("")?;
+  let getter = scope.alloc_native_function(getter_id, None, getter_name, 0)?;
+  scope.push_root(Value::Object(getter))?;
+  define_enumerable_data_property(&mut scope, y_desc, "get", Value::Object(getter))?;
+  define_enumerable_data_property(&mut scope, props, "y", Value::Object(y_desc))?;
+
+  let args = [Value::Object(o), Value::Object(props)];
+  let _ = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(define_properties),
+    Value::Object(object),
+    &args,
+  )?;
+
+  let x = scope.alloc_string("x")?;
+  let x_key = PropertyKey::from_string(x);
+  assert_eq!(
+    scope.heap().object_get_own_data_property_value(o, &x_key)?,
+    Some(Value::Number(1.0))
+  );
+
+  let y = scope.alloc_string("y")?;
+  let y_val = rt.vm.get(&mut scope, o, PropertyKey::from_string(y))?;
+  assert_eq!(y_val, Value::Number(2.0));
+
+  Ok(())
+}
+
+#[test]
+fn object_create_with_properties_object() -> Result<(), VmError> {
+  let mut rt = TestRealm::new()?;
+  let object = rt.realm.intrinsics().object_constructor();
+
+  let mut scope = rt.heap.scope();
+
+  let create = get_own_data_property(&mut scope, object, "create")?.expect("Object.create exists");
+  let Value::Object(create) = create else {
+    panic!("Object.create should be a function object");
+  };
+
+  let props = scope.alloc_object()?;
+  scope.push_root(Value::Object(props))?;
+  let a_desc = scope.alloc_object()?;
+  scope.push_root(Value::Object(a_desc))?;
+  define_enumerable_data_property(&mut scope, a_desc, "value", Value::Number(7.0))?;
+  define_enumerable_data_property(&mut scope, a_desc, "writable", Value::Bool(true))?;
+  define_enumerable_data_property(&mut scope, a_desc, "enumerable", Value::Bool(true))?;
+  define_enumerable_data_property(&mut scope, a_desc, "configurable", Value::Bool(true))?;
+  define_enumerable_data_property(&mut scope, props, "a", Value::Object(a_desc))?;
+
+  let args = [Value::Null, Value::Object(props)];
+  let o = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(create),
+    Value::Object(object),
+    &args,
+  )?;
+  let Value::Object(o) = o else {
+    panic!("Object.create should return an object");
+  };
+
+  let a = scope.alloc_string("a")?;
+  assert_eq!(
+    scope
+      .heap()
+      .object_get_own_data_property_value(o, &PropertyKey::from_string(a))?,
+    Some(Value::Number(7.0))
   );
 
   Ok(())
@@ -147,9 +251,12 @@ fn object_create_sets_prototype() -> Result<(), VmError> {
   let y_key = PropertyKey::from_string(scope.alloc_string("y")?);
 
   let args = [Value::Object(p)];
-  let o = rt
-    .vm
-    .call_without_host(&mut scope, Value::Object(create), Value::Object(object), &args)?;
+  let o = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(create),
+    Value::Object(object),
+    &args,
+  )?;
   let Value::Object(o) = o else {
     panic!("Object.create should return an object");
   };
@@ -184,9 +291,12 @@ fn object_keys_returns_enumerable_string_keys() -> Result<(), VmError> {
   define_enumerable_data_property(&mut scope, o, "b", Value::Number(2.0))?;
 
   let args = [Value::Object(o)];
-  let result = rt
-    .vm
-    .call_without_host(&mut scope, Value::Object(keys), Value::Object(object), &args)?;
+  let result = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(keys),
+    Value::Object(object),
+    &args,
+  )?;
   let Value::Object(arr) = result else {
     panic!("Object.keys should return an object");
   };
@@ -238,9 +348,12 @@ fn object_assign_copies_enumerable_properties_and_invokes_getters() -> Result<()
   )?;
 
   let args = [Value::Object(target), Value::Object(source)];
-  let out = rt
-    .vm
-    .call_without_host(&mut scope, Value::Object(assign), Value::Object(object), &args)?;
+  let out = rt.vm.call_without_host(
+    &mut scope,
+    Value::Object(assign),
+    Value::Object(object),
+    &args,
+  )?;
   assert_eq!(out, Value::Object(target));
 
   assert_eq!(
@@ -293,7 +406,12 @@ fn object_assign_throws_when_setting_non_writable_target_property() -> Result<()
   let args = [Value::Object(target), Value::Object(source)];
   let err = rt
     .vm
-    .call_without_host(&mut scope, Value::Object(assign), Value::Object(object), &args)
+    .call_without_host(
+      &mut scope,
+      Value::Object(assign),
+      Value::Object(object),
+      &args,
+    )
     .unwrap_err();
   assert!(matches!(err, VmError::TypeError(_)));
 

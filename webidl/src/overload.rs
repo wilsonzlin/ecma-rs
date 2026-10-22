@@ -1,4 +1,7 @@
-use crate::{convert, convert_js_to_idl, IdlType, IdlValue, JsRuntime, PropertyKey, WebIdlError, WellKnownSymbol};
+use crate::{
+  convert, convert_js_to_idl, IdlType, IdlValue, JsRuntime, PropertyKey, WebIdlError,
+  WellKnownSymbol,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Optionality {
@@ -38,15 +41,16 @@ pub fn resolve_overload<R: JsRuntime>(
   let maxarg = overloads.iter().map(|o| o.types.len()).max().unwrap_or(0);
   let argcount = std::cmp::min(maxarg, args.len());
 
-  let mut s: Vec<&Overload> = overloads.iter().filter(|o| o.types.len() == argcount).collect();
+  let mut s: Vec<&Overload> = overloads
+    .iter()
+    .filter(|o| o.types.len() == argcount)
+    .collect();
   if s.is_empty() {
     return Err(type_error(cx, "no matching overload"));
   }
 
   let d = if s.len() > 1 {
-    Some(
-      distinguishing_argument_index(&s).map_err(|_| type_error(cx, "invalid overload set"))?,
-    )
+    Some(distinguishing_argument_index(&s).map_err(|_| type_error(cx, "invalid overload set"))?)
   } else {
     None
   };
@@ -59,7 +63,11 @@ pub fn resolve_overload<R: JsRuntime>(
     while i < d {
       let v = args[i];
       let ty = &s[0].types[i];
-      let opt = s[0].optionality.get(i).copied().unwrap_or(Optionality::Required);
+      let opt = s[0]
+        .optionality
+        .get(i)
+        .copied()
+        .unwrap_or(Optionality::Required);
       if opt == Optionality::Optional && cx.is_undefined(v) {
         values.push(OverloadArg::Missing);
       } else {
@@ -103,7 +111,10 @@ pub fn resolve_overload<R: JsRuntime>(
       if let Some(hint) = hint {
         s.retain(|o| o.types[i].contains_async_sequence_type());
         if s.len() != 1 {
-          return Err(type_error(cx, "ambiguous overload after async sequence selection"));
+          return Err(type_error(
+            cx,
+            "ambiguous overload after async sequence selection",
+          ));
         }
 
         let ty = &s[0].types[i];
@@ -137,7 +148,10 @@ pub fn resolve_overload<R: JsRuntime>(
             s.retain(|o| o.types[i].contains_frozen_array_type());
           }
           if s.len() != 1 {
-            return Err(type_error(cx, "ambiguous overload after iterator-based selection"));
+            return Err(type_error(
+              cx,
+              "ambiguous overload after iterator-based selection",
+            ));
           }
 
           let ty = &s[0].types[i];
@@ -172,7 +186,11 @@ pub fn resolve_overload<R: JsRuntime>(
   while i < argcount {
     let v = args[i];
     let ty = &selected.types[i];
-    let opt = selected.optionality.get(i).copied().unwrap_or(Optionality::Required);
+    let opt = selected
+      .optionality
+      .get(i)
+      .copied()
+      .unwrap_or(Optionality::Required);
     if opt == Optionality::Optional && cx.is_undefined(v) {
       values.push(OverloadArg::Missing);
     } else {

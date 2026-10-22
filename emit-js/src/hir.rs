@@ -1359,6 +1359,9 @@ fn emit_var_decl(
   // Initializers are followed by `,` or `;`, so comma expressions must be
   // parenthesized to avoid being parsed as additional declarators.
   let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
+  if decl.declare {
+    em.write_keyword("declare");
+  }
   match decl.kind {
     VarDeclKind::Const => em.write_keyword("const"),
     VarDeclKind::Let => em.write_keyword("let"),
@@ -1546,8 +1549,9 @@ fn expr_prec(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> Result<Prec,
     | ExprKind::NewTarget => PRIMARY_PRECEDENCE,
     ExprKind::Jsx(_) => PRIMARY_PRECEDENCE,
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => return expr_prec(ctx, body, *expr),
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => return expr_prec(ctx, body, *expr),
     ExprKind::Missing => return Err(EmitError::unsupported("missing expression")),
   };
   Ok(prec)
@@ -1665,8 +1669,9 @@ fn emit_expr_no_parens(
     }
     // TypeScript-only expression wrappers. These are erased when emitting JS.
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => {
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => {
       emit_expr_no_parens(em, ctx, body, *expr)?;
     }
     ExprKind::ImportCall {
@@ -1695,10 +1700,36 @@ fn emit_call(
   body: &Body,
   call: &hir_js::CallExpr,
 ) -> EmitResult {
-  let callee_needs_parens = call.is_new && starts_with_optional_chaining(ctx, body, call.callee);
+  // HIR folds `new (a?.())` into a single Call with both `is_new` and `optional`.
+  // Emitting `new a?.()` is a SyntaxError; emit `new (a?.())` instead.
+  if call.is_new && call.optional {
+    em.write_keyword("new");
+    em.write_punct("(");
+    emit_expr_with_min_prec(em, ctx, body, call.callee, CALL_MEMBER_PRECEDENCE)?;
+    em.write_str("?.(");
+    for (idx, arg) in call.args.iter().enumerate() {
+      if idx > 0 {
+        em.write_punct(",");
+      }
+      if arg.spread {
+        em.write_punct("...");
+      }
+      emit_expr_with_min_prec(em, ctx, body, arg.expr, Prec::LOWEST)?;
+    }
+    em.write_punct(")");
+    em.write_punct(")");
+    return Ok(());
+  }
+
   if call.is_new {
     em.write_keyword("new");
   }
+
+  let callee_needs_parens = if call.is_new {
+    new_callee_needs_parens(ctx, body, call.callee)
+  } else {
+    call.optional && needs_parens_before_optional_chain(ctx, body, call.callee)
+  };
   if callee_needs_parens {
     em.write_punct("(");
   }
@@ -1730,7 +1761,15 @@ fn emit_member(
   body: &Body,
   member: &MemberExpr,
 ) -> EmitResult {
+  let object_needs_parens =
+    member.optional && needs_parens_before_optional_chain(ctx, body, member.object);
+  if object_needs_parens {
+    em.write_punct("(");
+  }
   emit_expr_with_min_prec(em, ctx, body, member.object, CALL_MEMBER_PRECEDENCE)?;
+  if object_needs_parens {
+    em.write_punct(")");
+  }
   let use_brackets = !matches!(member.property, ObjectKey::Ident(_));
   if member.optional {
     if use_brackets {
@@ -2195,8 +2234,9 @@ fn expr_is_arrow_function(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) ->
   match &ctx.expr(body, expr_id).kind {
     ExprKind::FunctionExpr { is_arrow: true, .. } => true,
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => expr_is_arrow_function(ctx, body, *expr),
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => expr_is_arrow_function(ctx, body, *expr),
     _ => false,
   }
 }
@@ -2319,8 +2359,9 @@ fn expr_stmt_tokens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> StmtS
     ),
     ExprKind::Yield { expr: None, .. } => prefix(StmtStartToken::Other, None),
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => expr_stmt_tokens(ctx, body, *expr),
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => expr_stmt_tokens(ctx, body, *expr),
     ExprKind::Assignment { target, .. } => pat_stmt_tokens(ctx, body, *target),
     _ => prefix(StmtStartToken::Other, None),
   }
@@ -2397,10 +2438,39 @@ fn starts_with_optional_chaining(ctx: &HirContext<'_>, body: &Body, expr_id: Exp
     }
     ExprKind::Call(call) => call.optional || starts_with_optional_chaining(ctx, body, call.callee),
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => starts_with_optional_chaining(ctx, body, *expr),
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => starts_with_optional_chaining(ctx, body, *expr),
     _ => false,
   }
+}
+
+fn is_new_expr(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  matches!(
+    &ctx.expr(body, expr_id).kind,
+    ExprKind::Call(call) if call.is_new
+  )
+}
+
+/// See [`crate::precedence::needs_parens_before_optional_chain`].
+fn needs_parens_before_optional_chain(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  match &ctx.expr(body, expr_id).kind {
+    ExprKind::Call(call) if call.is_new => true,
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => needs_parens_before_optional_chain(ctx, body, *expr),
+    _ => false,
+  }
+}
+
+/// See [`crate::precedence::new_callee_needs_parens`].
+fn new_callee_needs_parens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  if starts_with_optional_chaining(ctx, body, expr_id) || is_new_expr(ctx, body, expr_id) {
+    return true;
+  }
+  // Plain call as `new` callee: `new (f())()`, not `new f()()`.
+  matches!(&ctx.expr(body, expr_id).kind, ExprKind::Call(call) if !call.is_new)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2512,8 +2582,9 @@ fn contextual_keyword_start_from_expr(
       propagate_keyword_start(ctx, body, *test, NextTokenAfterKeyword::Other)
     }
     ExprKind::TypeAssertion { expr, .. }
-    | ExprKind::NonNull { expr }
-    | ExprKind::Satisfies { expr, .. } => {
+    | ExprKind::NonNull { expr, .. }
+    | ExprKind::Satisfies { expr, .. }
+    | ExprKind::Instantiation { expr, .. } => {
       propagate_keyword_start(ctx, body, *expr, NextTokenAfterKeyword::Other)
     }
     _ => None,

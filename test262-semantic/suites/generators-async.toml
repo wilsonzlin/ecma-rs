@@ -1,0 +1,22 @@
+# Sync generators, async functions, and `await` expression semantics.
+#
+# Exercises the resumable-body interpreter (vm-js `resumable.rs` / `generator.rs`):
+# GeneratorResume / GeneratorResumeAbrupt (§27.5.3), AsyncFunctionStart (§27.7.5.1),
+# await-as-yield-to-microtask (§6.2.4 / §27.7.5.3), AsyncGenerator (§27.6), and
+# `for await` over async iterables (`@@asyncIterator`) and sync iterables
+# (`CreateAsyncFromSyncIterator`). Residuals: concurrent async-generator queue,
+# AFSI continuation thenable-unwrap / return/throw, exotic yield/await positions.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/statements/generators/**/*.js",
+  "language/expressions/generators/**/*.js",
+  "language/statements/async-function/**/*.js",
+  "language/expressions/async-function/**/*.js",
+  "language/expressions/await/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

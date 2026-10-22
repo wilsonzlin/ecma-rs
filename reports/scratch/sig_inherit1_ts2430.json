@@ -1,0 +1,274 @@
+{
+  "summary": {
+    "total": 2,
+    "outcomes": {
+      "match": 1,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 1
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance.ts",
+      "outcome": "match",
+      "duration_ms": 2102,
+      "rust_ms": 1543,
+      "tsc_ms": 559,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance.ts",
+            "start": 1394,
+            "end": 1396,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance.ts",
+            "start": 1540,
+            "end": 1542,
+            "severity": "error",
+            "message": "Interface 'I3' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance.ts",
+            "start": 1394,
+            "end": 1396,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance.ts",
+            "start": 1540,
+            "end": 1542,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": false,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 60/64) rust=[-] tsc=[2430,2430]"
+      },
+      "mismatched": false
+    },
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2205,
+      "rust_ms": 1627,
+      "tsc_ms": 577,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1125,
+            "end": 1130,
+            "severity": "error",
+            "message": "unresolved type 'Base'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1148,
+            "end": 1149,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1604,
+            "end": 1606,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1754,
+            "end": 1756,
+            "severity": "error",
+            "message": "Interface 'I3' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1148,
+            "end": 1149,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1604,
+            "end": 1606,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance.ts",
+            "start": 1754,
+            "end": 1756,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 1 extra diagnostic(s); first extra: /constructSignatureAssignabilityInInheritance.ts:1125-1130 [TC2008]",
+        "rust": {
+          "engine": "rust",
+          "code": "TC2008",
+          "file": "/constructSignatureAssignabilityInInheritance.ts",
+          "start": 1125,
+          "end": 1130,
+          "severity": "error",
+          "message": "unresolved type 'Base'"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 31/64) rust=[TC2008,TS2454] tsc=[2454,2430,2430]"
+      },
+      "mismatched": true
+    }
+  ]
+}

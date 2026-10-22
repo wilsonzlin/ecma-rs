@@ -15,9 +15,7 @@ fn function_objects_support_prototype_and_properties() -> Result<(), VmError> {
   let proto = scope.alloc_object()?;
   scope.push_root(Value::Object(proto))?;
 
-  scope
-    .heap_mut()
-    .object_set_prototype(func, Some(proto))?;
+  scope.heap_mut().object_set_prototype(func, Some(proto))?;
   assert_eq!(scope.heap().object_prototype(func)?, Some(proto));
 
   let key = PropertyKey::from_string(scope.alloc_string("x")?);
@@ -43,7 +41,9 @@ fn function_objects_support_prototype_and_properties() -> Result<(), VmError> {
   }
 
   assert_eq!(
-    scope.heap().object_get_own_data_property_value(func, &key)?,
+    scope
+      .heap()
+      .object_get_own_data_property_value(func, &key)?,
     Some(Value::Number(1.0))
   );
   Ok(())
@@ -62,9 +62,7 @@ fn function_property_lookups_traverse_prototype_chain() -> Result<(), VmError> {
   let proto = scope.alloc_object()?;
   scope.push_root(Value::Object(proto))?;
 
-  scope
-    .heap_mut()
-    .object_set_prototype(func, Some(proto))?;
+  scope.heap_mut().object_set_prototype(func, Some(proto))?;
 
   let key = PropertyKey::from_string(scope.alloc_string("y")?);
   scope.define_property(
@@ -197,7 +195,9 @@ fn set_existing_data_property_value_works_on_functions() -> Result<(), VmError> 
     .object_set_existing_data_property_value(func, &key, Value::Number(2.0))?;
 
   assert_eq!(
-    scope.heap().object_get_own_data_property_value(func, &key)?,
+    scope
+      .heap()
+      .object_get_own_data_property_value(func, &key)?,
     Some(Value::Number(2.0))
   );
   Ok(())

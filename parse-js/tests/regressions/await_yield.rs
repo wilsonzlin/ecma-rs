@@ -25,7 +25,11 @@ fn await_allows_operand_after_line_terminator_in_async_function() {
   let Some(FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
     panic!("expected function body");
   };
-  assert_eq!(body.len(), 1, "await must not be split by ASI across a newline");
+  assert_eq!(
+    body.len(),
+    1,
+    "await must not be split by ASI across a newline"
+  );
 
   let Stmt::Expr(stmt) = body[0].stx.as_ref() else {
     panic!("expected expression statement");
@@ -102,7 +106,11 @@ fn await_allows_unary_operand_after_line_terminator() {
   let Some(FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
     panic!("expected function body");
   };
-  assert_eq!(body.len(), 1, "await must include unary operands across newlines");
+  assert_eq!(
+    body.len(),
+    1,
+    "await must include unary operands across newlines"
+  );
 
   let Stmt::Expr(stmt) = body[0].stx.as_ref() else {
     panic!("expected expression statement");

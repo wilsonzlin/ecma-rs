@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NamespaceMemberIndex {
   // (parent def, namespace bit) -> (member name -> candidate defs)
   by_parent: HashMap<(DefId, sem_ts::Namespace), HashMap<String, Vec<DefId>>>,

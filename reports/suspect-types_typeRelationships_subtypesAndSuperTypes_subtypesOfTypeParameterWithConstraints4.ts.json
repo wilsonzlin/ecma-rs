@@ -1,0 +1,247 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 1,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    }
+  },
+  "compare_mode": "none",
+  "results": [
+    {
+      "id": "types/typeRelationships/subtypesAndSuperTypes/subtypesOfTypeParameterWithConstraints4.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/subtypesAndSuperTypes/subtypesOfTypeParameterWithConstraints4.ts",
+      "outcome": "match",
+      "duration_ms": 848,
+      "rust_ms": 848,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 725,
+            "end": 732,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 763,
+            "end": 766,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 833,
+            "end": 840,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 871,
+            "end": 874,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 941,
+            "end": 948,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 979,
+            "end": 982,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1052,
+            "end": 1057,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1086,
+            "end": 1089,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1156,
+            "end": 1161,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1190,
+            "end": 1193,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1263,
+            "end": 1268,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1297,
+            "end": 1300,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1370,
+            "end": 1375,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1404,
+            "end": 1407,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1477,
+            "end": 1482,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1511,
+            "end": 1514,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          },
+          {
+            "engine": "rust",
+            "code": "LOWER0003",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1581,
+            "end": 1586,
+            "severity": "warning",
+            "message": "heritage clause expression could not be lowered; using `any`"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2612",
+            "file": "/subtypesOfTypeParameterWithConstraints4.ts",
+            "start": 1615,
+            "end": 1618,
+            "severity": "error",
+            "message": "Property 'foo' will overwrite the base property in 'B1'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "skipped",
+        "diagnostics": [],
+        "error": "comparison disabled"
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    }
+  ]
+}

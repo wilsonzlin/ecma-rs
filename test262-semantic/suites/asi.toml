@@ -1,0 +1,14 @@
+# Automatic Semicolon Insertion (ECMA-262 §12.10).
+#
+# Exercises the parser/evaluator boundary where newline context governs
+# statement termination — a classic source of evaluation-order surprises.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/asi/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

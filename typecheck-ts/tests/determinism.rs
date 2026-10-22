@@ -300,3 +300,97 @@ fn outputs_remain_deterministic() {
     assert_eq!(snapshot, baseline, "iteration {iteration} drifted");
   }
 }
+
+/// Many parallel-checkable bodies plus a deliberate type error so diagnostics
+/// and `TypeId`s both appear in the 1-vs-N snapshot.
+fn many_bodies_host() -> (MemoryHostFixture, Vec<FileKey>) {
+  let mut source = String::from(
+    r#"
+      export const seed: number = 0;
+      export const mismatch: number = "not a number";
+    "#,
+  );
+  for idx in 0..48 {
+    source.push_str(&format!(
+      "export function f{idx}(value: number): number {{ let x = value + {idx}; return x * {idx}; }}\n"
+    ));
+  }
+  let entry = FileKey::new("entry.ts");
+  let mut files = HashMap::new();
+  files.insert(entry.clone(), Arc::<str>::from(source));
+  (
+    MemoryHostFixture {
+      files: Arc::new(files),
+    },
+    vec![entry],
+  )
+}
+
+#[derive(Clone)]
+struct MemoryHostFixture {
+  files: Arc<HashMap<FileKey, Arc<str>>>,
+}
+
+impl Host for MemoryHostFixture {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(file)
+      .cloned()
+      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
+    None
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    CompilerOptions {
+      no_default_lib: true,
+      ..CompilerOptions::default()
+    }
+  }
+
+  fn file_kind(&self, _file: &FileKey) -> FileKind {
+    FileKind::Ts
+  }
+}
+
+fn snapshot_under_rayon_threads(num_threads: usize) -> DeterministicSnapshot {
+  let (host, roots) = many_bodies_host();
+  let pool = rayon::ThreadPoolBuilder::new()
+    .num_threads(num_threads)
+    .build()
+    .unwrap_or_else(|err| panic!("build rayon pool ({num_threads} threads): {err}"));
+  pool.install(|| {
+    let program = Program::new(host, roots.clone());
+    let files: Vec<FileId> = roots
+      .iter()
+      .map(|key| program.file_id(key).expect("root file id"))
+      .collect();
+    snapshot_program(&program, &files)
+  })
+}
+
+/// Doctrine rule 5: `RAYON_NUM_THREADS=1` and `=N` must produce byte-identical
+/// checker outputs. This installs dedicated rayon pools (not the process global)
+/// so the guard is self-contained inside `cargo test`.
+#[test]
+fn check_outputs_identical_under_1_vs_n_rayon_threads() {
+  let one = snapshot_under_rayon_threads(1);
+  let many = snapshot_under_rayon_threads(4);
+  assert_eq!(
+    one, many,
+    "checker snapshot drifted between 1-thread and 4-thread rayon pools \
+     (diagnostics / TypeIds / body side tables must be schedule-independent)"
+  );
+  assert!(
+    !one.diagnostics.is_empty(),
+    "fixture should emit at least one diagnostic so the guard is non-vacuous"
+  );
+  assert!(
+    one.bodies.len() > 8,
+    "fixture should check many bodies (got {})",
+    one.bodies.len()
+  );
+}

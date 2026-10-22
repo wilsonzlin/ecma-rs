@@ -30,22 +30,25 @@ fn roundtrip(source: &str, expected: &str) {
 }
 
 #[test]
-fn emits_unnamed_single_param_function_type() {
-  roundtrip("type F = (string)=>void", "type F = (string) => void;");
+fn emits_bare_single_param_function_type_as_named_any() {
+  // tsc grammar: a bare identifier in a function-type parameter is a *name*
+  // (TS7051 without a type); the parser recovers with synthetic `any`
+  // (`parse-js/tests/regressions/bare_fn_type_param.rs`).
+  roundtrip("type F = (string)=>void", "type F = (string: any) => void;");
 }
 
 #[test]
-fn emits_multiple_unnamed_params_function_type() {
+fn emits_multiple_bare_params_function_type_as_named_any() {
   roundtrip(
     "type G = (string, number)=>string;",
-    "type G = (string, number) => string;",
+    "type G = (string: any, number: any) => string;",
   );
 }
 
 #[test]
-fn emits_mixed_named_and_unnamed_params_function_type() {
+fn emits_mixed_named_and_bare_params_function_type() {
   roundtrip(
     "type H = (x: string, number)=>void;",
-    "type H = (x: string, number) => void;",
+    "type H = (x: string, number: any) => void;",
   );
 }

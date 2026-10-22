@@ -1,6 +1,8 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{cooked_template_segment, emit_template_literal_segment};
-use crate::precedence::{child_min_prec_for_binary, starts_with_optional_chaining, Side};
+use crate::precedence::{
+  child_min_prec_for_binary, needs_parens_before_optional_chain, new_callee_needs_parens, Side,
+};
 use crate::stmt::{emit_class_like, emit_decorators};
 use crate::ts_type::{emit_ts_type, emit_type_expr, emit_type_parameters};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -16,9 +18,9 @@ use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
 use parse_js::operator::{OperatorName, OPERATORS};
 use parse_js::token::TT;
 
-const PRIMARY_PRECEDENCE: u8 = 19;
-const CALL_MEMBER_PRECEDENCE: u8 = 18;
-const POSTFIX_PRECEDENCE: u8 = 17;
+const PRIMARY_PRECEDENCE: u8 = 20;
+const CALL_MEMBER_PRECEDENCE: u8 = 19;
+const POSTFIX_PRECEDENCE: u8 = 18;
 const ARROW_PRECEDENCE: u8 = 3;
 
 /// Context for expression emission. Currently unused but kept to allow
@@ -178,7 +180,8 @@ fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> Emi
       Expr::Unary(_) | Expr::UnaryPostfix(_)
     );
   let force_left_parens = force_left_parens
-    || (binary.stx.operator == OperatorName::NullishCoalescing && is_logical_and_or(&binary.stx.left))
+    || (binary.stx.operator == OperatorName::NullishCoalescing
+      && is_logical_and_or(&binary.stx.left))
     || ((binary.stx.operator == OperatorName::LogicalAnd
       || binary.stx.operator == OperatorName::LogicalOr)
       && is_nullish(&binary.stx.left));
@@ -266,15 +269,27 @@ fn emit_wrapped(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> EmitResult
   Ok(())
 }
 
+fn emit_receiver(
+  em: &mut Emitter,
+  expr: &Node<Expr>,
+  before_optional: bool,
+  ctx: ExprCtx,
+) -> EmitResult {
+  if before_optional && needs_parens_before_optional_chain(expr) {
+    em.write_punct("(");
+    emit_expr_with_min_prec(em, expr, CALL_MEMBER_PRECEDENCE, ctx)?;
+    em.write_punct(")");
+    Ok(())
+  } else {
+    emit_expr_with_min_prec(em, expr, CALL_MEMBER_PRECEDENCE, ctx)
+  }
+}
+
 fn emit_call(em: &mut Emitter, call: &Node<CallExpr>, ctx: ExprCtx) -> EmitResult {
-  if call.stx.optional_chaining {
+  let optional = call.stx.optional_chaining;
+  if optional {
     if let Expr::Instantiation(instantiation) = call.stx.callee.stx.as_ref() {
-      emit_expr_with_min_prec(
-        em,
-        &instantiation.stx.expression,
-        CALL_MEMBER_PRECEDENCE,
-        ctx,
-      )?;
+      emit_receiver(em, &instantiation.stx.expression, true, ctx)?;
       em.write_str("?.");
       em.write_punct("<");
       for (idx, arg) in instantiation.stx.type_arguments.iter().enumerate() {
@@ -303,8 +318,8 @@ fn emit_call(em: &mut Emitter, call: &Node<CallExpr>, ctx: ExprCtx) -> EmitResul
     }
   }
 
-  emit_expr_with_min_prec(em, &call.stx.callee, CALL_MEMBER_PRECEDENCE, ctx)?;
-  if call.stx.optional_chaining {
+  emit_receiver(em, &call.stx.callee, optional, ctx)?;
+  if optional {
     em.write_str("?.(");
   } else {
     em.write_punct("(");
@@ -325,7 +340,7 @@ fn emit_call(em: &mut Emitter, call: &Node<CallExpr>, ctx: ExprCtx) -> EmitResul
 
 fn emit_member(em: &mut Emitter, member: &Node<MemberExpr>, ctx: ExprCtx) -> EmitResult {
   if member.stx.optional_chaining {
-    emit_expr_with_min_prec(em, &member.stx.left, CALL_MEMBER_PRECEDENCE, ctx)?;
+    emit_receiver(em, &member.stx.left, true, ctx)?;
     em.write_str("?.");
   } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
     let rendered = num.stx.value.to_string();
@@ -347,7 +362,7 @@ fn emit_computed_member(
   member: &Node<ComputedMemberExpr>,
   ctx: ExprCtx,
 ) -> EmitResult {
-  emit_expr_with_min_prec(em, &member.stx.object, CALL_MEMBER_PRECEDENCE, ctx)?;
+  emit_receiver(em, &member.stx.object, member.stx.optional_chaining, ctx)?;
   if member.stx.optional_chaining {
     em.write_str("?.[");
   } else {
@@ -418,6 +433,7 @@ fn emit_new_expr(em: &mut Emitter, argument: &Node<Expr>, ctx: ExprCtx) -> EmitR
 
   match argument.stx.as_ref() {
     Expr::Call(call) => {
+      // `new (a?.())`: optional call is not a MemberExpression callee.
       if call.stx.optional_chaining {
         em.write_punct("(");
         emit_call(em, call, ctx)?;
@@ -426,7 +442,7 @@ fn emit_new_expr(em: &mut Emitter, argument: &Node<Expr>, ctx: ExprCtx) -> EmitR
       }
 
       let callee = &call.stx.callee;
-      if starts_with_optional_chaining(callee) {
+      if new_callee_needs_parens(callee) {
         em.write_punct("(");
         emit_expr_with_min_prec(em, callee, CALL_MEMBER_PRECEDENCE, ctx)?;
         em.write_punct(")");
@@ -449,7 +465,7 @@ fn emit_new_expr(em: &mut Emitter, argument: &Node<Expr>, ctx: ExprCtx) -> EmitR
       Ok(())
     }
     _ => {
-      if starts_with_optional_chaining(argument) {
+      if new_callee_needs_parens(argument) {
         em.write_punct("(");
         emit_expr_with_min_prec(em, argument, CALL_MEMBER_PRECEDENCE, ctx)?;
         em.write_punct(")");

@@ -557,9 +557,11 @@ fn avoids_synthetic_enum_object_collisions_with_top_level_identifier_references(
 fn avoids_synthetic_namespace_binding_collisions_with_export_list_locals() {
   // The export list local name `__minify_ts_namespace_static` is stored as a string (not IdExpr),
   // so TS erasure must still treat it as reserved when generating synthetic bindings.
+  // Declare the binding: JS-mode BIND0019 rejects undeclared ExportedBindings (§16.2.1.1).
   let src = r#"
     eval("x");
     export namespace static { export const x = 1; }
+    var __minify_ts_namespace_static;
     export { __minify_ts_namespace_static as leaked };
   "#;
   let (code, parsed) = minify_ts_module(src);
@@ -577,9 +579,11 @@ fn avoids_synthetic_namespace_binding_collisions_with_export_list_locals() {
 
 #[test]
 fn avoids_synthetic_enum_object_collisions_with_export_list_locals() {
+  // Declare the binding: JS-mode BIND0019 rejects undeclared ExportedBindings (§16.2.1.1).
   let src = r#"
     eval("x");
     export enum static { A = 1, B }
+    var __minify_ts_enum_obj_static;
     export { __minify_ts_enum_obj_static as leaked };
   "#;
   let (code, parsed) = minify_ts_module(src);

@@ -47,7 +47,11 @@ use vm_js::VmOptions;
 /// - [`VmError::Syntax`] for parse errors.
 /// - [`VmError::Throw`] for uncaught JS throws.
 /// - [`VmError::Termination`] / [`VmError::OutOfMemory`] for non-catchable termination.
-pub fn execute_script(source: &str, heap_limits: HeapLimits, budget: Budget) -> Result<(), VmError> {
+pub fn execute_script(
+  source: &str,
+  heap_limits: HeapLimits,
+  budget: Budget,
+) -> Result<(), VmError> {
   execute_script_named("<script>", source, heap_limits, budget)
 }
 
@@ -338,7 +342,12 @@ impl<'a> Engine<'a> {
     Ok(())
   }
 
-  fn exec_stmt(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, stmt: &'a Node<Stmt>) -> Result<Control, VmError> {
+  fn exec_stmt(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    stmt: &'a Node<Stmt>,
+  ) -> Result<Control, VmError> {
     self.vm.tick()?;
 
     match stmt.stx.as_ref() {
@@ -404,7 +413,11 @@ impl<'a> Engine<'a> {
   ) -> Result<Control, VmError> {
     match var.stx.mode {
       VarDeclMode::Var => {}
-      _ => return Err(VmError::Unimplemented("only `var` declarations are supported")),
+      _ => {
+        return Err(VmError::Unimplemented(
+          "only `var` declarations are supported",
+        ))
+      }
     }
 
     for decl in var.stx.declarators.iter() {
@@ -471,15 +484,20 @@ impl<'a> Engine<'a> {
       Expr::Func(func) => self.eval_func_expr(scope, ctx, &func.stx),
 
       // Patterns are not expressions (except as assignment targets, handled elsewhere).
-      Expr::IdPat(_) | Expr::ArrPat(_) | Expr::ObjPat(_) => {
-        Err(VmError::Unimplemented("pattern expression in value position"))
-      }
+      Expr::IdPat(_) | Expr::ArrPat(_) | Expr::ObjPat(_) => Err(VmError::Unimplemented(
+        "pattern expression in value position",
+      )),
 
       _ => Err(VmError::Unimplemented("unsupported expression kind")),
     }
   }
 
-  fn eval_member(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, member: &'a MemberExpr) -> Result<Value, VmError> {
+  fn eval_member(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    member: &'a MemberExpr,
+  ) -> Result<Value, VmError> {
     if member.optional_chaining {
       return Err(VmError::Unimplemented("optional chaining"));
     }
@@ -574,7 +592,14 @@ impl<'a> Engine<'a> {
       }
       Expr::Id(id) => {
         // (Shouldn't happen in strict ECMAScript parse mode, but accept anyway.)
-        self.set_identifier(scope, ctx.env, &IdPat { name: id.stx.name.clone() }, value)?;
+        self.set_identifier(
+          scope,
+          ctx.env,
+          &IdPat {
+            name: id.stx.name.clone(),
+          },
+          value,
+        )?;
         Ok(value)
       }
       Expr::Member(member) => {
@@ -586,12 +611,7 @@ impl<'a> Engine<'a> {
           return Err(VmError::Throw(self.type_error));
         };
         let key = scope.alloc_string(&member.stx.right)?;
-        Self::define_data_property(
-          scope,
-          obj,
-          PropertyKey::from_string(key),
-          value,
-        )?;
+        Self::define_data_property(scope, obj, PropertyKey::from_string(key), value)?;
         Ok(value)
       }
       Expr::ComputedMember(member) => {
@@ -611,7 +631,12 @@ impl<'a> Engine<'a> {
     }
   }
 
-  fn eval_call(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, call: &'a CallExpr) -> Result<Value, VmError> {
+  fn eval_call(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    call: &'a CallExpr,
+  ) -> Result<Value, VmError> {
     if call.optional_chaining {
       return Err(VmError::Unimplemented("optional chaining call"));
     }
@@ -630,7 +655,10 @@ impl<'a> Engine<'a> {
         let callee = Self::get_property(scope.heap(), obj, &PropertyKey::from_string(key))?;
         (callee, Value::Object(obj))
       }
-      _ => (self.eval_expr(scope, ctx, &call.callee)?, Value::Object(self.global_this)),
+      _ => (
+        self.eval_expr(scope, ctx, &call.callee)?,
+        Value::Object(self.global_this),
+      ),
     };
 
     let mut args: Vec<Value> = Vec::new();
@@ -647,14 +675,24 @@ impl<'a> Engine<'a> {
     self.call_function(scope, callee, this_arg, &args)
   }
 
-  fn eval_unary(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, unary: &'a UnaryExpr) -> Result<Value, VmError> {
+  fn eval_unary(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    unary: &'a UnaryExpr,
+  ) -> Result<Value, VmError> {
     match unary.operator {
       OperatorName::New => self.eval_new(scope, ctx, &unary.argument),
       _ => Err(VmError::Unimplemented("unsupported unary operator")),
     }
   }
 
-  fn eval_new(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, arg: &'a Node<Expr>) -> Result<Value, VmError> {
+  fn eval_new(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    arg: &'a Node<Expr>,
+  ) -> Result<Value, VmError> {
     // `new` binds more tightly than call in the parse-js AST: `new Foo(x)` is
     // represented as `Unary(New, Call(Foo, [x]))`.
     let (ctor_expr, args_exprs): (&Node<Expr>, Option<&[Node<parse_js::ast::expr::CallArg>]>) =
@@ -684,7 +722,12 @@ impl<'a> Engine<'a> {
     self.construct(scope, ctor_obj, &args)
   }
 
-  fn eval_func_expr(&mut self, scope: &mut Scope<'_>, ctx: ExecCtx, func: &'a FuncExpr) -> Result<Value, VmError> {
+  fn eval_func_expr(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctx: ExecCtx,
+    func: &'a FuncExpr,
+  ) -> Result<Value, VmError> {
     let name = func.name.as_ref().map(|n| n.stx.name.as_str());
     let obj = self.new_user_function(scope, ctx, name, &func.func)?;
     Ok(Value::Object(obj))
@@ -754,7 +797,12 @@ impl<'a> Engine<'a> {
     Ok(fn_obj)
   }
 
-  fn get_identifier(&mut self, scope: &mut Scope<'_>, env: GcObject, id: &'a IdExpr) -> Result<Value, VmError> {
+  fn get_identifier(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcObject,
+    id: &'a IdExpr,
+  ) -> Result<Value, VmError> {
     let key = scope.alloc_string(&id.name)?;
     Ok(Self::get_property(
       scope.heap(),
@@ -763,7 +811,13 @@ impl<'a> Engine<'a> {
     )?)
   }
 
-  fn set_identifier(&mut self, scope: &mut Scope<'_>, env: GcObject, id: &IdPat, value: Value) -> Result<(), VmError> {
+  fn set_identifier(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcObject,
+    id: &IdPat,
+    value: Value,
+  ) -> Result<(), VmError> {
     let key = scope.alloc_string(&id.name)?;
     let key = PropertyKey::from_string(key);
 
@@ -788,12 +842,7 @@ impl<'a> Engine<'a> {
     value: Value,
   ) -> Result<(), VmError> {
     let key = scope.alloc_string(name)?;
-    Self::define_data_property(
-      scope,
-      env,
-      PropertyKey::from_string(key),
-      value,
-    )
+    Self::define_data_property(scope, env, PropertyKey::from_string(key), value)
   }
 
   fn call_function(
@@ -910,7 +959,12 @@ impl<'a> Engine<'a> {
     }
   }
 
-  fn construct(&mut self, scope: &mut Scope<'_>, ctor_obj: GcObject, args: &[Value]) -> Result<Value, VmError> {
+  fn construct(
+    &mut self,
+    scope: &mut Scope<'_>,
+    ctor_obj: GcObject,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
     // Built-in Object: allocate and return directly.
     if self.is_native_object_ctor(scope.heap(), ctor_obj)? {
       return Ok(Value::Object(
@@ -919,8 +973,11 @@ impl<'a> Engine<'a> {
     }
 
     // Determine prototype to install.
-    let proto_val =
-      Self::get_property(scope.heap(), ctor_obj, &PropertyKey::from_string(self.key_prototype))?;
+    let proto_val = Self::get_property(
+      scope.heap(),
+      ctor_obj,
+      &PropertyKey::from_string(self.key_prototype),
+    )?;
     let proto = match proto_val {
       Value::Object(o) => o,
       _ => self.object_prototype,
@@ -929,7 +986,12 @@ impl<'a> Engine<'a> {
     let instance = scope.alloc_object_with_prototype(Some(proto))?;
 
     // Call constructor with `this = instance`.
-    let ret = self.call_function(scope, Value::Object(ctor_obj), Value::Object(instance), args)?;
+    let ret = self.call_function(
+      scope,
+      Value::Object(ctor_obj),
+      Value::Object(instance),
+      args,
+    )?;
 
     // Return value overrides `this` only when it's an object.
     match ret {
@@ -939,8 +1001,8 @@ impl<'a> Engine<'a> {
   }
 
   fn is_native_object_ctor(&self, heap: &Heap, obj: GcObject) -> Result<bool, VmError> {
-    let Some(desc) = heap
-      .object_get_own_property(obj, &PropertyKey::from_symbol(self.sym_function_id))?
+    let Some(desc) =
+      heap.object_get_own_property(obj, &PropertyKey::from_symbol(self.sym_function_id))?
     else {
       return Ok(false);
     };
@@ -959,7 +1021,9 @@ impl<'a> Engine<'a> {
       (Value::Bool(a), Value::Bool(b)) => a == b,
       (Value::Number(a), Value::Number(b)) => a == b,
       (Value::BigInt(a), Value::BigInt(b)) => a == b,
-      (Value::String(a), Value::String(b)) => heap.get_string(a)?.as_code_units() == heap.get_string(b)?.as_code_units(),
+      (Value::String(a), Value::String(b)) => {
+        heap.get_string(a)?.as_code_units() == heap.get_string(b)?.as_code_units()
+      }
       (Value::Symbol(a), Value::Symbol(b)) => a == b,
       (Value::Object(a), Value::Object(b)) => a == b,
       _ => false,
@@ -984,11 +1048,15 @@ impl<'a> Engine<'a> {
       return Ok(Value::String(s));
     }
 
-    Ok(Value::Number(self.to_number(scope, a)? + self.to_number(scope, b)?))
+    Ok(Value::Number(
+      self.to_number(scope, a)? + self.to_number(scope, b)?,
+    ))
   }
 
   fn op_mul(&mut self, scope: &mut Scope<'_>, a: Value, b: Value) -> Result<Value, VmError> {
-    Ok(Value::Number(self.to_number(scope, a)? * self.to_number(scope, b)?))
+    Ok(Value::Number(
+      self.to_number(scope, a)? * self.to_number(scope, b)?,
+    ))
   }
 
   fn to_number(&mut self, scope: &mut Scope<'_>, v: Value) -> Result<f64, VmError> {
@@ -1020,8 +1088,8 @@ impl<'a> Engine<'a> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use vm_js::TerminationReason;
   use vm_js::Termination;
+  use vm_js::TerminationReason;
 
   #[test]
   fn new_object_and_property_set_get() {
@@ -1060,7 +1128,9 @@ mod tests {
 
     let err = execute_script(src, limits, budget).unwrap_err();
     match err {
-      VmError::Termination(Termination { reason, .. }) => assert_eq!(reason, TerminationReason::OutOfFuel),
+      VmError::Termination(Termination { reason, .. }) => {
+        assert_eq!(reason, TerminationReason::OutOfFuel)
+      }
       other => panic!("expected termination, got {other:?}"),
     }
   }

@@ -5,7 +5,6 @@ use diagnostics::{Diagnostic, FileId};
 use hir_js::DefId;
 
 use crate::lib_support::{CompilerOptions, FileKind};
-use crate::BodyId;
 use crate::FatalError;
 use crate::FileKey;
 
@@ -81,11 +80,18 @@ pub struct ModuleResolutionInput {
   pub resolved: Option<FileId>,
 }
 
+/// Program-wide semantic environment consumed by the tracked body-check query.
+///
+/// Holds `None` until `ProgramState` finishes declaration analysis and
+/// publishes a context via
+/// [`Database::set_body_context`](crate::db::Database::set_body_context).
+/// Handle equality is the semantic equality defined on
+/// [`BodyCheckContext`](crate::db::BodyCheckContext); the tracked
+/// `body_context_tracked` wrapper turns that equality into salsa backdating so
+/// republishing an equivalent environment does not re-check bodies.
 #[salsa::input]
-pub struct BodyResultInput {
-  pub body: BodyId,
-  #[return_ref]
-  pub result: Arc<crate::BodyCheckResult>,
+pub struct BodyContextInput {
+  pub context: Option<crate::db::queries::body_check::BodyContextHandle>,
 }
 
 #[salsa::input]

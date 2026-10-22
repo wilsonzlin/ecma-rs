@@ -36,11 +36,18 @@ impl ProgramState {
       Stmt::AmbientVarDecl(var) => {
         let span = loc_to_span(file, stmt.loc);
         let name = var.stx.name.clone();
-        let typ = var
-          .stx
-          .type_annotation
-          .as_ref()
-          .map(|t| self.type_from_type_expr(t));
+        // HIR-only binder slice: when the file is already lowered, leave the
+        // annotation unset. `type_of_def` / body seeds recompute from
+        // `hir_js::DefData::declared_type` (semantics/bindings are incomplete here).
+        let typ = if self.hir_lowered.contains_key(&file) {
+          None
+        } else {
+          var
+            .stx
+            .type_annotation
+            .as_ref()
+            .map(|t| self.type_from_type_expr(t))
+        };
         let symbol = self.alloc_symbol();
         let def_id = self.alloc_def();
         self.record_symbol(file, span.range, symbol);
@@ -146,7 +153,12 @@ impl ProgramState {
       Stmt::TypeAliasDecl(alias) => {
         let span = loc_to_span(file, stmt.loc);
         let name = alias.stx.name.clone();
-        let ty = self.type_from_type_expr(&alias.stx.type_expr);
+        // Seed unknown when HIR is present; `type_of_def` recomputes from HIR.
+        let ty = if self.hir_lowered.contains_key(&file) {
+          self.store.primitive_ids().unknown
+        } else {
+          self.type_from_type_expr(&alias.stx.type_expr)
+        };
         if let TypeExpr::TypeReference(reference) = alias.stx.type_expr.stx.as_ref() {
           if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
             if let Some(binding) = bindings.get(type_name) {

@@ -1,10 +1,10 @@
 use crate::execution_context::ModuleId;
 use crate::module_record::ModuleNamespaceCache;
 use crate::module_record::ResolveExportResult;
-use crate::{LoadedModuleRequest, ModuleRequest};
 use crate::module_record::SourceTextModuleRecord;
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::{cmp_utf16, GcObject, Realm, Scope, Value, VmError};
+use crate::{LoadedModuleRequest, ModuleRequest};
 
 /// Minimal in-memory module graph used to exercise ECMA-262 module record algorithms.
 ///
@@ -155,9 +155,12 @@ impl ModuleGraph {
   }
 
   /// Implements ECMA-262 `GetImportedModule(referrer, request)`.
-  pub fn get_imported_module(&self, referrer: ModuleId, request: &ModuleRequest) -> Option<ModuleId> {
-    self
-      .modules[module_index(referrer)]
+  pub fn get_imported_module(
+    &self,
+    referrer: ModuleId,
+    request: &ModuleRequest,
+  ) -> Option<ModuleId> {
+    self.modules[module_index(referrer)]
       .loaded_modules
       .iter()
       .find(|loaded| loaded.request.spec_equal(request))

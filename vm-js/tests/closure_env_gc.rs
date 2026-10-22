@@ -49,7 +49,10 @@ fn native_function_closure_env_keeps_env_and_bindings_alive_across_gc() -> Resul
   heap.collect_garbage();
   assert!(!heap.is_valid_object(func));
   assert!(!heap.is_valid_env(env));
-  assert!(matches!(heap.get_string(captured), Err(VmError::InvalidHandle)));
+  assert!(matches!(
+    heap.get_string(captured),
+    Err(VmError::InvalidHandle)
+  ));
   Ok(())
 }
 
@@ -80,4 +83,3 @@ fn outer_env_kept_alive_via_closure_chain() -> Result<(), VmError> {
 
   Ok(())
 }
-

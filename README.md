@@ -11,15 +11,19 @@ Today the repo contains:
 - **Emitter/printer**: `emit-js` (AST → text, deterministic formatting)
 - **Minifier**: `minify-js` (+ `minify-js-cli`, + `minify-js-nodejs` package)
 - **Optimizer**: `optimize-js` (SSA-based optimizer and decompiler)
+- **VM stack**: `vm-js`, `runtime-js`, `webidl`, `webidl-vm-js`
 
-## Architecture docs (start here)
+## Documentation
 
-- **North-star design**: [`AGENTS.md`](./AGENTS.md) — authoritative architecture + implementation playbook.
-- **Current crate boundaries**: [`docs/architecture.md`](./docs/architecture.md) — what exists today and how the crates connect.
-- **Local setup for conformance + difftsc**: [`docs/quickstart.md`](./docs/quickstart.md) (also links into [`typecheck-ts-harness/README.md`](./typecheck-ts-harness/README.md)).
-- **Runnable examples**: [`docs/examples.md`](./docs/examples.md) — copy/paste `cargo run` examples for the core crate APIs.
+The knowledge base is the [wiki](./wiki/index.md) (architecture, rationale, workflows,
+testing, status). Agent working rules remain in [`AGENTS.md`](./AGENTS.md).
 
-The workspace dependency graph in [`docs/deps.md`](./docs/deps.md) is generated; run `just docs` to refresh it.
+- Architecture: [wiki/architecture/overview.md](./wiki/architecture/overview.md),
+  [engine.md](./wiki/architecture/engine.md)
+- Setup / CI / examples: [wiki/engineering/workflows.md](./wiki/engineering/workflows.md)
+- Diagnostics: [wiki/architecture/diagnostics.md](./wiki/architecture/diagnostics.md)
+- Dependency graph (generated): [wiki/architecture/deps.md](./wiki/architecture/deps.md)
+  — refresh with `just docs`
 
 ## Quick start
 
@@ -29,7 +33,7 @@ If you're setting up a checkout for TypeScript conformance / differential testin
 just setup
 ```
 
-This bootstraps submodules + `typecheck-ts-harness` npm deps, generates `Cargo.lock`, and runs a small sanity check. See [`docs/quickstart.md`](./docs/quickstart.md) for details.
+This bootstraps submodules + `typecheck-ts-harness` npm deps, generates `Cargo.lock`, and runs a small sanity check. Details: [wiki/engineering/workflows.md](./wiki/engineering/workflows.md).
 
 This workspace intentionally does **not** commit `Cargo.lock` (it is gitignored). To run commands that match CI’s `--locked` behaviour, generate it first:
 
@@ -45,27 +49,17 @@ just ci
 
 Note: CI runs the same commands with `--locked` after generating `Cargo.lock`; the `just` recipes omit `--locked` for convenience.
 
-`just ci` runs:
-
-- `cargo fmt --all --check`
-- `./scripts/check_utf8_apis.sh`
-- `./scripts/check_diagnostic_codes.sh`
-- `cargo clippy --workspace --all-targets --all-features`
-- `cargo check --workspace --all-targets`
-- `cargo test --workspace`
-- `./scripts/gen_deps_graph.sh` (then verifies `docs/deps.md` is unchanged)
+`just ci` runs formatting, utf8/diagnostic guards, clippy, check, test, and regenerates
+the dependency graph (then verifies `wiki/architecture/deps.md` is unchanged).
 
 ### Run the in-repo examples
-
-The repository includes compiled examples demonstrating the public APIs of the
-core crates (especially `typecheck-ts`):
 
 ```bash
 cargo run -p typecheck-ts --example memory_host_basic
 cargo run -p typecheck-ts --example json_snapshot
 ```
 
-See [`docs/examples.md`](./docs/examples.md) for the full list.
+Full list: [wiki/engineering/workflows.md#runnable-examples](./wiki/engineering/workflows.md#runnable-examples).
 
 ### Run the CLIs
 
@@ -149,17 +143,15 @@ Which CI jobs use them:
 
 ## UTF-8 / source-text policy
 
-All “source text” APIs in this workspace use `&str` / `Arc<str>` (valid UTF-8). This keeps:
-
-- spans/offsets consistent (byte offsets in UTF-8),
-- identifier handling correct,
-- and prevents a split-brain between “bytes” and “text” entrypoints.
-
-The repo enforces this with [`scripts/check_utf8_apis.sh`](./scripts/check_utf8_apis.sh) (also exercised by `diagnostics/tests/utf8_api_guard.rs`).
+All “source text” APIs use `&str` / `Arc<str>` (valid UTF-8): spans are UTF-8 byte
+offsets, identifier handling stays correct, and there is no bytes/text split-brain.
+Enforced by [`scripts/check_utf8_apis.sh`](./scripts/check_utf8_apis.sh).
 
 ## Determinism, incremental queries, and profiling
 
-High-level goals (see [`AGENTS.md`](./AGENTS.md) for the full playbook):
+High-level goals (full playbook: [`AGENTS.md`](./AGENTS.md); wiki:
+[determinism](./wiki/architecture/determinism.md),
+[engine](./wiki/architecture/engine.md)):
 
 - **Determinism**: stable ordering/IDs/diagnostics regardless of parallelism.
 - **Incremental-ready**: coarse-grained, query-based computation (parse → HIR → bind → check).

@@ -1,6 +1,6 @@
 use vm_js::{
-  GcObject, Heap, HeapLimits, NativeFunctionId, Scope, Value, Vm, VmError, VmHostHooks, VmOptions,
-  VmHost,
+  GcObject, Heap, HeapLimits, NativeFunctionId, Scope, Value, Vm, VmError, VmHost, VmHostHooks,
+  VmOptions,
 };
 
 fn return_first_native_slot(
@@ -66,13 +66,8 @@ fn native_handler_can_read_its_own_slots_via_callee_handle() -> Result<(), VmErr
   let call_id = vm.register_native_call(return_first_native_slot)?;
   let captured = scope.alloc_object()?;
   let name = scope.alloc_string("f")?;
-  let func = scope.alloc_native_function_with_slots(
-    call_id,
-    None,
-    name,
-    0,
-    &[Value::Object(captured)],
-  )?;
+  let func =
+    scope.alloc_native_function_with_slots(call_id, None, name, 0, &[Value::Object(captured)])?;
 
   let result = vm.call_without_host(&mut scope, Value::Object(func), Value::Undefined, &[])?;
   assert_eq!(result, Value::Object(captured));

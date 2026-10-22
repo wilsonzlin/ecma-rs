@@ -74,6 +74,9 @@ impl InitState {
 pub struct Env {
   vars: HashMap<FlowKey, TypeId>,
   init: HashMap<BindingKey, InitState>,
+  /// When set, TS2454 use-before-assignment is suppressed (tsc unreachable flow
+  /// from a bare `true`/`false` condition opposite branch).
+  suppress_da: bool,
 }
 
 impl Env {
@@ -81,7 +84,16 @@ impl Env {
     Env {
       vars: HashMap::new(),
       init: HashMap::new(),
+      suppress_da: false,
     }
+  }
+
+  pub fn suppress_da(&self) -> bool {
+    self.suppress_da
+  }
+
+  pub fn set_suppress_da(&mut self, suppress: bool) {
+    self.suppress_da = suppress;
   }
 
   pub fn with_initial(initial: &[(FlowBindingId, BindingKey, TypeId)]) -> Self {
@@ -228,6 +240,13 @@ impl Env {
         self.init.insert(key, joined);
         changed = true;
       }
+    }
+    // Reachable predecessors win: only keep DA suppression when *all* joined
+    // flows are unreachable for definite-assignment purposes.
+    let joined_suppress = self.suppress_da && other.suppress_da;
+    if self.suppress_da != joined_suppress {
+      self.suppress_da = joined_suppress;
+      changed = true;
     }
     changed
   }

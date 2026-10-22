@@ -1,8 +1,8 @@
 use std::cell::Cell;
 
 use vm_js::{
-  GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, Scope, Value, Vm, VmError,
-  VmHost, VmHostHooks, VmOptions,
+  GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, Scope, Value, Vm, VmError, VmHost,
+  VmHostHooks, VmOptions,
 };
 
 thread_local! {
@@ -13,7 +13,11 @@ fn reset_thread_locals() {
   FINALLY_CALLS.with(|c| c.set(0));
 }
 
-fn get_own_data_property(heap: &mut Heap, obj: GcObject, name: &str) -> Result<Option<Value>, VmError> {
+fn get_own_data_property(
+  heap: &mut Heap,
+  obj: GcObject,
+  name: &str,
+) -> Result<Option<Value>, VmError> {
   let mut scope = heap.scope();
   let key = PropertyKey::from_string(scope.alloc_string(name)?);
   scope.heap().object_get_own_data_property_value(obj, &key)
@@ -48,8 +52,14 @@ fn try_returns_value(
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
-  assert_eq!(args.get(0).copied().unwrap_or(Value::Undefined), Value::Number(1.0));
-  assert_eq!(args.get(1).copied().unwrap_or(Value::Undefined), Value::Number(2.0));
+  assert_eq!(
+    args.get(0).copied().unwrap_or(Value::Undefined),
+    Value::Number(1.0)
+  );
+  assert_eq!(
+    args.get(1).copied().unwrap_or(Value::Undefined),
+    Value::Number(2.0)
+  );
   Ok(Value::Number(42.0))
 }
 
@@ -113,7 +123,10 @@ fn promise_finally_on_fulfill_runs_callback_and_preserves_value() -> Result<(), 
   };
 
   assert_eq!(FINALLY_CALLS.with(|c| c.get()), 0);
-  assert!(vm.microtask_queue().len() > 0, "expected finally() to enqueue a microtask");
+  assert!(
+    vm.microtask_queue().len() > 0,
+    "expected finally() to enqueue a microtask"
+  );
 
   vm.perform_microtask_checkpoint(&mut heap)?;
 
@@ -173,7 +186,10 @@ fn promise_finally_on_reject_runs_callback_and_preserves_reason() -> Result<(), 
   };
 
   assert_eq!(FINALLY_CALLS.with(|c| c.get()), 0);
-  assert!(vm.microtask_queue().len() > 0, "expected finally() to enqueue a microtask");
+  assert!(
+    vm.microtask_queue().len() > 0,
+    "expected finally() to enqueue a microtask"
+  );
 
   vm.perform_microtask_checkpoint(&mut heap)?;
 
@@ -291,7 +307,10 @@ fn promise_with_resolvers_returns_object_with_callable_resolve_reject() -> Resul
     )?;
   }
   assert_eq!(heap.promise_state(record_promise)?, PromiseState::Fulfilled);
-  assert_eq!(heap.promise_result(record_promise)?, Some(Value::Number(1.0)));
+  assert_eq!(
+    heap.promise_result(record_promise)?,
+    Some(Value::Number(1.0))
+  );
 
   realm.teardown(&mut heap);
   Ok(())

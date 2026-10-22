@@ -1,37 +1,37 @@
 use crate::error::Termination;
 use crate::error::TerminationReason;
 use crate::error::VmError;
+use crate::exec::RuntimeEnv;
 use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
-use crate::exec::RuntimeEnv;
-use crate::function::{CallHandler, ConstructHandler, EcmaFunctionId, NativeConstructId, NativeFunctionId, ThisMode};
-use crate::GcObject;
-use crate::Heap;
+use crate::function::{
+  CallHandler, ConstructHandler, EcmaFunctionId, NativeConstructId, NativeFunctionId, ThisMode,
+};
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
-use crate::jobs::VmJobContext;
 use crate::jobs::VmHost;
 use crate::jobs::VmHostHooks;
+use crate::jobs::VmJobContext;
 use crate::microtasks::MicrotaskQueue;
-use crate::RootId;
-use crate::source::StackFrame;
 use crate::source::SourceText;
+use crate::source::StackFrame;
+use crate::EnvRootId;
+use crate::GcEnv;
+use crate::GcObject;
+use crate::Heap;
 use crate::Intrinsics;
 use crate::PropertyKey;
+use crate::Realm;
 use crate::RealmId;
+use crate::RootId;
 use crate::Scope;
 use crate::Value;
-use diagnostics::FileId;
-use parse_js::ast::class_or_object::{
-  ClassOrObjGetter, ClassOrObjMethod, ClassOrObjSetter, ClassOrObjVal, ObjMember, ObjMemberType,
-};
-use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::Stmt;
-use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use parse_js::ast::stx::TopLevel;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
+use std::ptr::NonNull;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,16 +39,15 @@ use std::time::Instant;
 use std::{mem, ops};
 
 /// A native (host-implemented) function call handler.
-pub type NativeCall =
-  for<'a> fn(
-    &mut Vm,
-    &mut Scope<'a>,
-    host: &mut dyn VmHost,
-    hooks: &mut dyn VmHostHooks,
-    callee: GcObject,
-    this: Value,
-    args: &[Value],
-  ) -> Result<Value, VmError>;
+pub type NativeCall = for<'a> fn(
+  &mut Vm,
+  &mut Scope<'a>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError>;
 
 /// A native (host-implemented) function constructor handler.
 pub type NativeConstruct = for<'a> fn(
@@ -68,23 +67,40 @@ pub(crate) enum EcmaFunctionKind {
   /// A function or arrow function expression (`function() {}` / `() => {}`).
   Expr,
   /// An object literal method/getter/setter definition (e.g. `f() {}` / `get x() {}`).
-  ///
-  /// These are parsed by wrapping the snippet in an object literal expression: `({ <snippet> })`.
   ObjectMember,
+}
+
+/// Owns a parsed program AST (classic script or `eval` input).
+///
+/// Function objects retain an [`Arc`] of this so their bodies stay valid after the originating
+/// `exec_script` / `eval` returns. Call-time re-parsing of source snippets is intentionally
+/// avoided: a top-level re-parse would lose function-code context (`new.target`, `super`,
+/// strictness) that the original tree already has.
+#[derive(Debug)]
+pub(crate) struct ParsedProgram {
+  pub(crate) top: Node<TopLevel>,
 }
 
 #[derive(Debug)]
 pub(crate) struct EcmaFunctionCode {
   pub(crate) source: Arc<SourceText>,
+  /// Inclusive start of the function's source span (cache key / diagnostics).
   pub(crate) span_start: u32,
+  /// Exclusive end of the function's source span (cache key / diagnostics).
+  #[allow(dead_code)]
   pub(crate) span_end: u32,
+  /// Declaration shape used in the registration cache key.
+  #[allow(dead_code)]
   pub(crate) kind: EcmaFunctionKind,
-  /// How many bytes of synthetic prefix were inserted when parsing the snippet.
-  ///
-  /// This is used to translate `Loc` offsets from the cached AST back into offsets in the original
-  /// source text (e.g. function expressions are parsed by wrapping them in parentheses).
+  /// Always `0` for retained ASTs: `Loc` values are absolute offsets in [`Self::source`].
+  /// Kept so call sites can keep passing a uniform `(base_offset, prefix_len)` pair into
+  /// `run_ecma_function` (historically non-zero when snippets were re-parsed with wraps).
+  #[allow(dead_code)]
   pub(crate) prefix_len: u32,
-  parsed: Option<Arc<Node<Func>>>,
+  /// Keeps [`Self::func`] valid for the lifetime of this code entry.
+  program: Arc<ParsedProgram>,
+  /// Points into [`Self::program`]'s tree (the `Node<Func>` registered at closure creation).
+  func: NonNull<Node<Func>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,15 +206,36 @@ pub struct Vm {
   host_hooks_override: Option<*mut (dyn VmHostHooks + 'static)>,
   ecma_functions: Vec<EcmaFunctionCode>,
   ecma_function_cache: HashMap<EcmaFunctionKey, EcmaFunctionId>,
-  // Per-realm intrinsic graph used by built-in native function implementations.
+  /// Stack of parsed programs currently being evaluated (script / `eval` / function body).
+  ///
+  /// [`Vm::register_ecma_function`] captures the top entry together with a pointer into that
+  /// program's AST so call-time execution does not re-parse.
+  program_stack: Vec<Arc<ParsedProgram>>,
+  // Active-realm intrinsic graph used by built-in native function implementations.
   //
-  // For now `vm-js` assumes a single active realm per `Vm`. When multiple realms are supported,
-  // this will likely become realm-indexed state.
+  // Secondary realms created via `$262.createRealm` (or [`Vm::create_realm`]) keep their own
+  // [`Intrinsics`] in [`Vm::realm_table`]; switch the active set when entering foreign-realm
+  // `eval` / jobs.
   intrinsics: Option<Intrinsics>,
+  /// Per-global-object realm records (primary + `$262.createRealm` secondaries).
+  realm_table: HashMap<u64, RealmTableEntry>,
+  /// Owned secondary realms (teardown on [`crate::JsRuntime`] drop).
+  secondary_realms: Vec<Realm>,
   #[cfg(test)]
   native_calls_len_override: Option<usize>,
   #[cfg(test)]
   native_constructs_len_override: Option<usize>,
+}
+
+/// Lookup record for a realm keyed by its global object's [`HeapId`](crate::HeapId) bits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RealmTableEntry {
+  pub global: GcObject,
+  pub id: RealmId,
+  pub intrinsics: Intrinsics,
+  pub global_lexical_env: GcEnv,
+  /// Persistent root for `global_lexical_env` when this entry owns it (secondary realms).
+  pub global_lex_root: Option<EnvRootId>,
 }
 
 impl std::fmt::Debug for Vm {
@@ -217,7 +254,10 @@ impl std::fmt::Debug for Vm {
     ds.field("host_hooks_override", &self.host_hooks_override.is_some());
     ds.field("ecma_functions", &self.ecma_functions.len());
     ds.field("ecma_function_cache", &self.ecma_function_cache.len());
+    ds.field("program_stack", &self.program_stack.len());
     ds.field("intrinsics", &self.intrinsics);
+    ds.field("realm_table", &self.realm_table.len());
+    ds.field("secondary_realms", &self.secondary_realms.len());
     #[cfg(test)]
     {
       ds.field("native_calls_len_override", &self.native_calls_len_override);
@@ -276,7 +316,11 @@ impl<'vm> ExecutionContextGuard<'vm> {
   fn new(vm: &'vm mut Vm, ctx: ExecutionContext) -> Self {
     vm.push_execution_context(ctx);
     let expected_len = vm.execution_context_stack.len();
-    Self { vm, ctx, expected_len }
+    Self {
+      vm,
+      ctx,
+      expected_len,
+    }
   }
 }
 
@@ -310,6 +354,51 @@ impl Drop for ExecutionContextGuard<'_> {
     debug_assert!(
       popped.is_some(),
       "ExecutionContextGuard dropped with empty execution context stack"
+    );
+  }
+}
+
+/// RAII helper that pushes a [`ParsedProgram`] on creation and pops it on drop.
+#[derive(Debug)]
+#[must_use = "dropping the guard pops the parsed program; bind it to keep the program active"]
+pub(crate) struct ProgramGuard<'vm> {
+  vm: &'vm mut Vm,
+  expected_len: usize,
+}
+
+impl<'vm> ProgramGuard<'vm> {
+  fn new(vm: &'vm mut Vm, program: Arc<ParsedProgram>) -> Self {
+    vm.program_stack.push(program);
+    let expected_len = vm.program_stack.len();
+    Self { vm, expected_len }
+  }
+}
+
+impl ops::Deref for ProgramGuard<'_> {
+  type Target = Vm;
+
+  fn deref(&self) -> &Self::Target {
+    &*self.vm
+  }
+}
+
+impl ops::DerefMut for ProgramGuard<'_> {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut *self.vm
+  }
+}
+
+impl Drop for ProgramGuard<'_> {
+  fn drop(&mut self) {
+    debug_assert_eq!(
+      self.vm.program_stack.len(),
+      self.expected_len,
+      "ProgramGuard dropped after stack length changed (did you manually pop?)"
+    );
+    let popped = self.vm.program_stack.pop();
+    debug_assert!(
+      popped.is_some(),
+      "ProgramGuard dropped with empty program stack"
     );
   }
 }
@@ -362,9 +451,7 @@ impl Drop for VmFrameGuard<'_> {
 }
 
 impl Vm {
-  fn erase_host_hooks_lifetime(
-    host: &mut dyn VmHostHooks,
-  ) -> *mut (dyn VmHostHooks + 'static) {
+  fn erase_host_hooks_lifetime(host: &mut dyn VmHostHooks) -> *mut (dyn VmHostHooks + 'static) {
     let ptr: *mut (dyn VmHostHooks + '_) = host;
     // SAFETY: We only use this pointer while the embedder-provided `host` reference is alive.
     unsafe { mem::transmute::<*mut (dyn VmHostHooks + '_), *mut (dyn VmHostHooks + 'static)>(ptr) }
@@ -391,7 +478,10 @@ impl Vm {
       host_hooks_override: None,
       ecma_functions: Vec::new(),
       ecma_function_cache: HashMap::new(),
+      program_stack: Vec::new(),
       intrinsics: None,
+      realm_table: HashMap::new(),
+      secondary_realms: Vec::new(),
       #[cfg(test)]
       native_calls_len_override: None,
       #[cfg(test)]
@@ -576,6 +666,118 @@ impl Vm {
     self.intrinsics
   }
 
+  /// Registers a realm's intrinsics under its global object (and optionally activates them).
+  pub(crate) fn register_realm(
+    &mut self,
+    global: GcObject,
+    id: RealmId,
+    intrinsics: Intrinsics,
+    global_lexical_env: GcEnv,
+    global_lex_root: Option<EnvRootId>,
+    activate: bool,
+  ) {
+    self.realm_table.insert(
+      global.id().0,
+      RealmTableEntry {
+        global,
+        id,
+        intrinsics,
+        global_lexical_env,
+        global_lex_root,
+      },
+    );
+    if activate {
+      self.intrinsics = Some(intrinsics);
+    }
+  }
+
+  /// Updates the global lexical environment recorded for `global` (primary realm after
+  /// [`RuntimeEnv`] construction).
+  pub(crate) fn set_realm_global_lexical_env(
+    &mut self,
+    global: GcObject,
+    global_lexical_env: GcEnv,
+  ) {
+    if let Some(entry) = self.realm_table.get_mut(&global.id().0) {
+      entry.global_lexical_env = global_lexical_env;
+    }
+  }
+
+  /// Intrinsics for the realm whose global object is `global`.
+  pub fn intrinsics_for_global(&self, global: GcObject) -> Option<Intrinsics> {
+    self
+      .realm_table
+      .get(&global.id().0)
+      .map(|e| e.intrinsics)
+      .or(self.intrinsics)
+  }
+
+  /// Intrinsics for `func`'s [[Realm]] (stored as that realm's global object), falling back to the
+  /// active realm.
+  pub fn intrinsics_for_function(
+    &self,
+    heap: &Heap,
+    func: GcObject,
+  ) -> Result<Option<Intrinsics>, VmError> {
+    Ok(match heap.get_function_realm(func)? {
+      Some(global) => self.intrinsics_for_global(global),
+      None => self.intrinsics(),
+    })
+  }
+
+  /// If `eval_obj` is some registered realm's `%eval%`, return that realm's global, lexical env,
+  /// and intrinsics.
+  pub(crate) fn realm_for_eval_intrinsic(
+    &self,
+    eval_obj: GcObject,
+  ) -> Option<(GcObject, GcEnv, Intrinsics, RealmId)> {
+    self.realm_table.values().find_map(|e| {
+      if e.intrinsics.eval() == eval_obj {
+        Some((e.global, e.global_lexical_env, e.intrinsics, e.id))
+      } else {
+        None
+      }
+    })
+  }
+
+  /// Creates a new secondary realm, registers it, and returns its global object.
+  ///
+  /// The realm is retained on this VM until [`Vm::teardown_secondary_realms`] (called from
+  /// [`crate::JsRuntime`] drop). Does **not** replace the active [`Vm::intrinsics`].
+  pub fn create_realm(&mut self, heap: &mut Heap) -> Result<GcObject, VmError> {
+    let realm = Realm::new_with_activation(self, heap, false)?;
+    let global = realm.global_object();
+    let id = realm.id();
+    let intrinsics = *realm.intrinsics();
+    let mut scope = heap.scope();
+    scope.push_root(Value::Object(global))?;
+    let lex = scope.env_create(None)?;
+    let lex_root = scope.heap_mut().add_env_root(lex)?;
+    drop(scope);
+    self.register_realm(global, id, intrinsics, lex, Some(lex_root), false);
+    self.secondary_realms.push(realm);
+    Ok(global)
+  }
+
+  /// Tears down all secondary realms and their owned global-lexical env roots.
+  pub fn teardown_secondary_realms(&mut self, heap: &mut Heap) {
+    let secondary_keys: Vec<u64> = self
+      .secondary_realms
+      .iter()
+      .map(|r| r.global_object().id().0)
+      .collect();
+    for key in secondary_keys {
+      if let Some(entry) = self.realm_table.remove(&key) {
+        if let Some(root) = entry.global_lex_root {
+          heap.remove_env_root(root);
+        }
+      }
+    }
+    for mut realm in self.secondary_realms.drain(..) {
+      realm.teardown(heap);
+    }
+  }
+
   pub fn interrupt_handle(&self) -> InterruptHandle {
     self.interrupt_handle.clone()
   }
@@ -707,12 +909,32 @@ impl Vm {
     Ok(NativeConstructId(idx))
   }
 
+  /// Pushes `program` as the active parsed AST for function registration / nested evaluation.
+  pub(crate) fn enter_program(&mut self, program: Arc<ParsedProgram>) -> ProgramGuard<'_> {
+    ProgramGuard::new(self, program)
+  }
+
+  /// Pushes `program` without an RAII guard (paired with [`Self::pop_program`]).
+  pub(crate) fn push_program(&mut self, program: Arc<ParsedProgram>) {
+    self.program_stack.push(program);
+  }
+
+  /// Pops the program pushed by [`Self::push_program`].
+  pub(crate) fn pop_program(&mut self) {
+    let _ = self.program_stack.pop();
+  }
+
+  /// Registers an ECMAScript function body by retaining a pointer into the active [`ParsedProgram`].
+  ///
+  /// `func` must be a node inside the current top-of-stack program AST. The program `Arc` is stored
+  /// alongside the pointer so the body remains valid after the originating evaluation returns.
   pub(crate) fn register_ecma_function(
     &mut self,
     source: Arc<SourceText>,
     span_start: u32,
     span_end: u32,
     kind: EcmaFunctionKind,
+    func: &Node<Func>,
   ) -> Result<EcmaFunctionId, VmError> {
     let key = EcmaFunctionKey {
       source: Arc::as_ptr(&source),
@@ -724,6 +946,14 @@ impl Vm {
       return Ok(id);
     }
 
+    let program = self
+      .program_stack
+      .last()
+      .cloned()
+      .ok_or(VmError::Unimplemented(
+        "ECMAScript function registered without an active parsed program",
+      ))?;
+
     let idx = u32::try_from(self.ecma_functions.len())
       .map_err(|_| VmError::LimitExceeded("too many ECMAScript functions registered"))?;
 
@@ -732,19 +962,19 @@ impl Vm {
       .try_reserve(1)
       .map_err(|_| VmError::OutOfMemory)?;
 
-    let prefix_len = match kind {
-      EcmaFunctionKind::Decl => 0,
-      EcmaFunctionKind::Expr => 1,
-      EcmaFunctionKind::ObjectMember => 2,
-    };
+    // SAFETY: `func` is borrowed from the active `ParsedProgram` tree. We store that same `Arc` in
+    // `EcmaFunctionCode::program`, so the `NonNull` stays valid for as long as the code entry lives.
+    let func_ptr = NonNull::from(func);
 
     self.ecma_functions.push(EcmaFunctionCode {
       source,
       span_start,
       span_end,
       kind,
-      prefix_len,
-      parsed: None,
+      // Retained ASTs use absolute `Loc` offsets in `source`; no synthetic wrap prefix.
+      prefix_len: 0,
+      program,
+      func: func_ptr,
     });
 
     let id = EcmaFunctionId(idx);
@@ -752,218 +982,19 @@ impl Vm {
     Ok(id)
   }
 
-  fn ecma_function_ast(&mut self, id: EcmaFunctionId) -> Result<Arc<Node<Func>>, VmError> {
-    let (source, span_start, span_end, kind) = {
-      let code = self
-        .ecma_functions
-        .get(id.0 as usize)
-        .ok_or(VmError::InvalidHandle)?;
-      if let Some(parsed) = &code.parsed {
-        return Ok(parsed.clone());
-      }
-      (code.source.clone(), code.span_start, code.span_end, code.kind)
-    };
-
-    let text: &str = &source.text;
-    let mut start = span_start as usize;
-    let mut end = span_end as usize;
-    start = start.min(text.len());
-    end = end.min(text.len());
-    if start > end {
-      return Err(VmError::Unimplemented("invalid ECMAScript function source span"));
-    }
-    let snippet = text
-      .get(start..end)
-      .ok_or(VmError::Unimplemented("invalid ECMAScript function source slice"))?;
-
-    // `vm-js` reparses function snippets on-demand by slicing the original source text using spans
-    // recorded during the initial parse.
-    //
-    // `parse-js` spans for some expression nodes can currently include trailing delimiter tokens
-    // from the enclosing syntax (e.g. `;` from expression statements, `)` from call arguments).
-    // When we later parse expression snippets by wrapping them in parentheses (e.g. `(<expr>)`), an
-    // included delimiter would become invalid syntax (e.g. `(<expr>;)`, `(<expr>))`).
-    //
-    // Trim a trailing semicolon eagerly (common for expression statements), and on parse failure
-    // retry after removing other likely delimiter suffixes.
-    let mut snippet = snippet;
-    if kind == EcmaFunctionKind::Expr {
-      let trimmed = snippet.trim_end();
-      snippet = trimmed
-        .strip_suffix(';')
-        .unwrap_or(trimmed)
-        .trim_end();
-    }
-
-    let opts = ParseOptions {
-      dialect: Dialect::Ecma,
-      source_type: SourceType::Script,
-    };
-
-    let mut wrapped: String = String::new();
-    let top = match kind {
-      EcmaFunctionKind::Decl => parse_with_options(snippet, opts)
-        .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?,
-      EcmaFunctionKind::ObjectMember => {
-        let capacity = snippet
-          .len()
-          .checked_add(4)
-          .ok_or(VmError::OutOfMemory)?;
-        wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
-        wrapped.push_str("({");
-        wrapped.push_str(snippet);
-        wrapped.push_str("})");
-        parse_with_options(&wrapped, opts)
-          .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?
-      }
-      EcmaFunctionKind::Expr => {
-        let mut attempt: usize = 0;
-        loop {
-          wrapped.clear();
-          let capacity = snippet
-            .len()
-            .checked_add(2)
-            .ok_or(VmError::OutOfMemory)?;
-          wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
-          wrapped.push('(');
-          wrapped.push_str(snippet);
-          wrapped.push(')');
-
-          match parse_with_options(&wrapped, opts) {
-            Ok(top) => break top,
-            Err(err) => {
-              // Retry by stripping a likely delimiter suffix if present.
-              //
-              // This should be rare: it indicates our saved snippet span included a trailing token
-              // from the enclosing syntax rather than the function expression itself.
-              if attempt >= 4 {
-                return Err(VmError::Syntax(vec![err.to_diagnostic(FileId(0))]));
-              }
-
-              let trimmed = snippet.trim_end();
-              let mut next = None;
-              for suffix in [')', ',', ']', '}'] {
-                if let Some(stripped) = trimmed.strip_suffix(suffix) {
-                  next = Some(stripped.trim_end());
-                  break;
-                }
-              }
-
-              let Some(next) = next else {
-                return Err(VmError::Syntax(vec![err.to_diagnostic(FileId(0))]));
-              };
-
-              snippet = next;
-              attempt += 1;
-            }
-          }
-        }
-      }
-    };
-
-    let mut body = top.stx.body;
-    if body.len() != 1 {
-      return Err(VmError::Unimplemented(
-        "ECMAScript function snippet did not parse to a single statement",
-      ));
-    }
-
-    let stmt = body
-      .pop()
-      .ok_or(VmError::Unimplemented("missing statement in parsed function snippet"))?;
-
-    let func = match kind {
-      EcmaFunctionKind::Decl => match *stmt.stx {
-        Stmt::FunctionDecl(decl) => decl.stx.function,
-        _ => {
-          return Err(VmError::Unimplemented(
-            "ECMAScript function declaration snippet did not parse as a function declaration",
-          ));
-        }
-      },
-      EcmaFunctionKind::Expr => match *stmt.stx {
-        Stmt::Expr(expr_stmt) => {
-          let expr = expr_stmt.stx.expr;
-          match *expr.stx {
-            AstExpr::Func(func_expr) => func_expr.stx.func,
-            AstExpr::ArrowFunc(arrow_expr) => arrow_expr.stx.func,
-            _ => {
-              return Err(VmError::Unimplemented(
-                "ECMAScript function expression snippet did not parse as a function expression",
-              ));
-            }
-          }
-        }
-        _ => {
-          return Err(VmError::Unimplemented(
-            "ECMAScript function expression snippet did not parse as an expression statement",
-          ));
-        }
-      },
-      EcmaFunctionKind::ObjectMember => match *stmt.stx {
-        Stmt::Expr(expr_stmt) => {
-          let expr = expr_stmt.stx.expr;
-          match *expr.stx {
-            AstExpr::LitObj(obj_expr) => {
-              let member = obj_expr
-                .stx
-                .members
-                .into_iter()
-                .next()
-                .ok_or(VmError::Unimplemented(
-                  "ECMAScript object member snippet did not contain any members",
-                ))?;
-              let ObjMember { typ } = *member.stx;
-              match typ {
-                ObjMemberType::Valued { val, .. } => match val {
-                  ClassOrObjVal::Method(method) => {
-                    let ClassOrObjMethod { func } = *method.stx;
-                    func
-                  }
-                  ClassOrObjVal::Getter(getter) => {
-                    let ClassOrObjGetter { func } = *getter.stx;
-                    func
-                  }
-                  ClassOrObjVal::Setter(setter) => {
-                    let ClassOrObjSetter { func } = *setter.stx;
-                    func
-                  }
-                  _ => {
-                    return Err(VmError::Unimplemented(
-                      "ECMAScript object member snippet did not parse as a method/getter/setter",
-                    ));
-                  }
-                },
-                _ => {
-                  return Err(VmError::Unimplemented(
-                    "ECMAScript object member snippet did not parse as a valued member",
-                  ));
-                }
-              }
-            }
-            _ => {
-              return Err(VmError::Unimplemented(
-                "ECMAScript object member snippet did not parse as an object literal expression",
-              ));
-            }
-          }
-        }
-        _ => {
-          return Err(VmError::Unimplemented(
-            "ECMAScript object member snippet did not parse as an expression statement",
-          ));
-        }
-      },
-    };
-
-    let func = Arc::new(func);
-
-    let slot = self
+  /// Returns the retained function AST plus the `Arc` that keeps it alive.
+  ///
+  /// The returned `NonNull` may be turned into `&Node<Func>` only while the `Arc<ParsedProgram>`
+  /// (or another clone) is held.
+  fn ecma_function_body(
+    &self,
+    id: EcmaFunctionId,
+  ) -> Result<(Arc<SourceText>, Arc<ParsedProgram>, NonNull<Node<Func>>), VmError> {
+    let code = self
       .ecma_functions
-      .get_mut(id.0 as usize)
+      .get(id.0 as usize)
       .ok_or(VmError::InvalidHandle)?;
-    slot.parsed = Some(func.clone());
-    Ok(func)
+    Ok((code.source.clone(), code.program.clone(), code.func))
   }
 
   fn dispatch_native_call(
@@ -1287,7 +1318,12 @@ impl Vm {
       },
       CallHandler::User(_) => (Arc::<str>::from("<user>"), 0, 0),
     };
-    let frame = StackFrame { function: function_name, source, line, col };
+    let frame = StackFrame {
+      function: function_name,
+      source,
+      line,
+      col,
+    };
 
     let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
@@ -1346,21 +1382,53 @@ impl Vm {
     Ok(Some(value))
   }
 
-  /// ECMAScript `GetMethod(V, P)` (partial).
+  /// ECMAScript `GetMethod(V, P)`.
   ///
-  /// Note: `GetMethod` uses `GetV`, which in turn uses `ToObject`. Full `ToObject` boxing semantics
-  /// are not implemented yet for `vm-js`; for now this returns
-  /// `VmError::Unimplemented(\"GetMethod on non-object\")` when `value` is not an object.
+  /// Uses `GetV` semantics: `null`/`undefined` throw a catchable `TypeError` (via `ToObject`);
+  /// other primitives resolve against the matching intrinsic prototype without allocating a
+  /// wrapper when possible (delegating to [`Self::get_method_from_object`] after a best-effort
+  /// `Object(value)` box for exotic cases).
   pub fn get_method(
     &mut self,
     scope: &mut Scope<'_>,
     value: Value,
     key: PropertyKey,
   ) -> Result<Option<Value>, VmError> {
-    let Value::Object(obj) = value else {
-      return Err(VmError::Unimplemented("GetMethod on non-object"));
-    };
-    self.get_method_from_object(scope, obj, key)
+    match value {
+      Value::Object(obj) => self.get_method_from_object(scope, obj, key),
+      Value::Undefined | Value::Null => {
+        let intr = self
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = crate::error_object::new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "GetMethod: cannot convert undefined or null to object",
+        )?;
+        Err(VmError::Throw(err))
+      }
+      other => {
+        // Box via `%Object%` then GetMethod on the result (covers Number/String/… wrappers).
+        let intr = self
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let object_ctor = Value::Object(intr.object_constructor());
+        let mut box_scope = scope.reborrow();
+        box_scope.push_root(other)?;
+        box_scope.push_root(object_ctor)?;
+        // `Vm::call` requires host+hooks; use the no-host path for intrinsic boxing.
+        let boxed =
+          self.call_without_host(&mut box_scope, object_ctor, Value::Undefined, &[other])?;
+        let Value::Object(obj) = boxed else {
+          return Err(VmError::InvariantViolation(
+            "Object(..) conversion returned non-object",
+          ));
+        };
+        box_scope.push_root(Value::Object(obj))?;
+        self.get_method_from_object(&mut box_scope, obj, key)
+      }
+    }
   }
 
   /// Constructs `callee` with the provided arguments and `new_target`.
@@ -1527,7 +1595,12 @@ impl Vm {
         None => (Arc::<str>::from("<call>"), 0, 0),
       },
     };
-    let frame = StackFrame { function: function_name, source, line, col };
+    let frame = StackFrame {
+      function: function_name,
+      source,
+      line,
+      col,
+    };
 
     let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated construction that may not pass through the
@@ -1545,13 +1618,7 @@ impl Vm {
         new_target,
       ),
       ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(
-        &mut scope,
-        host,
-        hooks,
-        code_id,
-        callee_obj,
-        args,
-        new_target,
+        &mut scope, host, hooks, code_id, callee_obj, args, new_target,
       ),
     };
 
@@ -1575,7 +1642,7 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    let (this_mode, is_strict, realm, outer, bound_this, bound_new_target) = {
+    let (this_mode, is_strict, realm, outer, bound_this, bound_new_target, is_class_constructor) = {
       let f = scope.heap().get_function(callee)?;
       (
         f.this_mode,
@@ -1584,15 +1651,24 @@ impl Vm {
         f.closure_env,
         f.bound_this,
         f.bound_new_target,
+        f.is_class_constructor,
       )
     };
 
+    if is_class_constructor {
+      let err = crate::builtins::create_type_error(
+        self,
+        scope,
+        hooks,
+        "Class constructor cannot be invoked without 'new'",
+      )?;
+      return Err(VmError::Throw(err));
+    }
+
     let this = match this_mode {
-      ThisMode::Lexical => {
-        bound_this.ok_or(VmError::Unimplemented(
-          "arrow function missing captured lexical this",
-        ))?
-      }
+      ThisMode::Lexical => bound_this.ok_or(VmError::Unimplemented(
+        "arrow function missing captured lexical this",
+      ))?,
       ThisMode::Strict => this,
       ThisMode::Global => match this {
         Value::Undefined | Value::Null => match realm {
@@ -1610,33 +1686,59 @@ impl Vm {
       ThisMode::Strict | ThisMode::Global => Value::Undefined,
     };
 
-    let global_object =
-      realm.ok_or(VmError::Unimplemented("ECMAScript function missing [[Realm]]"))?;
+    let global_object = realm.ok_or(VmError::Unimplemented(
+      "ECMAScript function missing [[Realm]]",
+    ))?;
 
-    let func_ast = self.ecma_function_ast(code_id)?;
-    let code_meta = self
-      .ecma_functions
-      .get(code_id.0 as usize)
-      .ok_or(VmError::InvalidHandle)?;
+    let (source, program, func_ptr) = self.ecma_function_body(code_id)?;
+    let program_for_body = program.clone();
+    let mut program_guard = self.enter_program(program);
+    // SAFETY: `func_ptr` was registered from a node inside `program`, and `program_guard` (plus the
+    // clone stored in `EcmaFunctionCode`) keeps that tree alive for this call.
+    let func_ast = unsafe { func_ptr.as_ref() };
 
     let func_env = scope.env_create(outer)?;
-    let mut env = RuntimeEnv::new_with_var_env(scope.heap_mut(), global_object, func_env, func_env)?;
+    let mut env =
+      RuntimeEnv::new_with_var_env(scope.heap_mut(), global_object, func_env, func_env)?;
 
-    let result = crate::exec::run_ecma_function(
-      self,
-      scope,
-      host,
-      hooks,
-      &mut env,
-      code_meta.source.clone(),
-      code_meta.span_start,
-      code_meta.prefix_len,
-      is_strict,
-      this,
-      new_target,
-      func_ast.as_ref(),
-      args,
-    );
+    let result = if func_ast.stx.async_ || func_ast.stx.generator {
+      // Suspendable bodies: capture the activation into a heap state machine instead of running
+      // recursively (returns the generator object / result promise).
+      crate::generator::call_suspendable_function(
+        &mut *program_guard,
+        scope,
+        host,
+        hooks,
+        &mut env,
+        source,
+        is_strict,
+        this,
+        func_ast,
+        args,
+        callee,
+        program_for_body,
+      )
+    } else {
+      crate::exec::run_ecma_function(
+        &mut *program_guard,
+        scope,
+        host,
+        hooks,
+        &mut env,
+        source,
+        // Retained ASTs carry absolute `Loc` offsets in `source`.
+        0,
+        0,
+        is_strict,
+        this,
+        /* this_uninitialized */ false,
+        new_target,
+        Some(callee),
+        func_ast,
+        args,
+      )
+      .map(|r| r.value)
+    };
 
     env.teardown(scope.heap_mut());
     result
@@ -1656,17 +1758,35 @@ impl Vm {
       let f = scope.heap().get_function(callee)?;
       (
         f.is_strict,
-        f.realm
-          .ok_or(VmError::Unimplemented("ECMAScript function missing [[Realm]]"))?,
+        f.realm.ok_or(VmError::Unimplemented(
+          "ECMAScript function missing [[Realm]]",
+        ))?,
         f.closure_env,
       )
     };
 
+    // Generator/async functions have no [[Construct]] (spec: not constructors).
+    {
+      let (_, _, func_ptr) = self.ecma_function_body(code_id)?;
+      // SAFETY: the registered program (held by `EcmaFunctionCode`) keeps the node alive.
+      let func_ast = unsafe { func_ptr.as_ref() };
+      if func_ast.stx.async_ || func_ast.stx.generator {
+        let err = crate::builtins::create_type_error(
+          self,
+          scope,
+          hooks,
+          "generator/async function is not a constructor",
+        )?;
+        return Err(VmError::Throw(err));
+      }
+    }
+
     // GetPrototypeFromConstructor(newTarget, %Object.prototype%).
-    let default_proto = self
+    let intr = self
       .intrinsics()
-      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
-      .object_prototype();
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    let default_proto = intr.object_prototype();
+    let reference_error_prototype = intr.reference_error_prototype();
     let proto = match new_target {
       Value::Object(nt) => {
         let mut proto_scope = scope.reborrow();
@@ -1674,8 +1794,14 @@ impl Vm {
         let key_s = proto_scope.alloc_string("prototype")?;
         proto_scope.push_root(Value::String(key_s))?;
         let key = PropertyKey::from_string(key_s);
-        let value =
-          proto_scope.ordinary_get_with_host_and_hooks(self, host, hooks, nt, key, Value::Object(nt))?;
+        let value = proto_scope.ordinary_get_with_host_and_hooks(
+          self,
+          host,
+          hooks,
+          nt,
+          key,
+          Value::Object(nt),
+        )?;
         match value {
           Value::Object(o) => o,
           _ => default_proto,
@@ -1684,40 +1810,82 @@ impl Vm {
       _ => default_proto,
     };
 
+    let is_derived = scope.heap().function_is_derived_constructor(callee)?;
+
     let mut this_scope = scope.reborrow();
-    let this_obj = this_scope.alloc_object_with_prototype(Some(proto))?;
-    this_scope.push_root(Value::Object(this_obj))?;
+    let (this_arg, this_uninitialized) = if is_derived {
+      // Derived constructors leave `this` uninitialized until `super()` (ECMA-262 §10.2.2).
+      (Value::Undefined, true)
+    } else {
+      let this_obj = this_scope.alloc_object_with_prototype(Some(proto))?;
+      this_scope.push_root(Value::Object(this_obj))?;
+      this_scope.push_root(Value::Object(callee))?;
+      // InitializeInstanceElements(O, F) before running the constructor body.
+      this_scope
+        .heap_mut()
+        .initialize_instance_private_elements(this_obj, callee)?;
+      (Value::Object(this_obj), false)
+    };
 
     let func_env = this_scope.env_create(outer)?;
-    let mut env = RuntimeEnv::new_with_var_env(this_scope.heap_mut(), global_object, func_env, func_env)?;
+    let mut env =
+      RuntimeEnv::new_with_var_env(this_scope.heap_mut(), global_object, func_env, func_env)?;
 
-    let func_ast = self.ecma_function_ast(code_id)?;
-    let code_meta = self
-      .ecma_functions
-      .get(code_id.0 as usize)
-      .ok_or(VmError::InvalidHandle)?;
+    let (source, program, func_ptr) = self.ecma_function_body(code_id)?;
+    let mut program_guard = self.enter_program(program);
+    // SAFETY: `func_ptr` was registered from a node inside `program`, and `program_guard` (plus the
+    // clone stored in `EcmaFunctionCode`) keeps that tree alive for this call.
+    let func_ast = unsafe { func_ptr.as_ref() };
 
     let result = crate::exec::run_ecma_function(
-      self,
+      &mut *program_guard,
       &mut this_scope,
       host,
       hooks,
       &mut env,
-      code_meta.source.clone(),
-      code_meta.span_start,
-      code_meta.prefix_len,
+      source,
+      // Retained ASTs carry absolute `Loc` offsets in `source`.
+      0,
+      0,
       is_strict,
-      Value::Object(this_obj),
+      this_arg,
+      this_uninitialized,
       new_target,
-      func_ast.as_ref(),
+      Some(callee),
+      func_ast,
       args,
     );
+    drop(program_guard);
 
     env.teardown(this_scope.heap_mut());
 
-    match result? {
+    let body = result?;
+    match body.value {
       Value::Object(o) => Ok(Value::Object(o)),
-      _ => Ok(Value::Object(this_obj)),
+      _ if is_derived => {
+        if !body.this_initialized {
+          let err = crate::error_object::new_error(
+            &mut this_scope,
+            reference_error_prototype,
+            "ReferenceError",
+            "Must call super constructor in derived class before returning from derived constructor",
+          )?;
+          Err(VmError::Throw(err))
+        } else {
+          match body.this {
+            Value::Object(o) => Ok(Value::Object(o)),
+            _ => Err(VmError::InvariantViolation(
+              "derived constructor this binding is not an object",
+            )),
+          }
+        }
+      }
+      _ => match this_arg {
+        Value::Object(o) => Ok(Value::Object(o)),
+        _ => Err(VmError::InvariantViolation(
+          "base constructor missing this object",
+        )),
+      },
     }
   }
 }

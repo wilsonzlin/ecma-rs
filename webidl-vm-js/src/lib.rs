@@ -301,7 +301,9 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     self.root(value)?;
 
     let key = Self::to_vm_property_key(key);
-    self.scope.create_data_property_or_throw(object, key, value)?;
+    self
+      .scope
+      .create_data_property_or_throw(object, key, value)?;
     Ok(())
   }
 
@@ -329,9 +331,10 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     self.root(Value::Object(object))?;
     self.root(method)?;
 
-    let iterator = self
-      .vm
-      .call(&mut self.scope, method, Value::Object(object), &[])?;
+    let iterator =
+      self
+        .vm
+        .call_without_host(&mut self.scope, method, Value::Object(object), &[])?;
     let Value::Object(iterator) = iterator else {
       return Err(self.type_error("Iterator method did not return an object"));
     };
@@ -350,9 +353,10 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
       return Err(self.type_error("IteratorNext(iterator): next is undefined/null"));
     };
 
-    let result = self
-      .vm
-      .call(&mut self.scope, next_method, Value::Object(iterator), &[])?;
+    let result =
+      self
+        .vm
+        .call_without_host(&mut self.scope, next_method, Value::Object(iterator), &[])?;
     let Value::Object(result_obj) = result else {
       return Err(self.type_error("IteratorNext(iterator): next() did not return an object"));
     };
@@ -375,7 +379,7 @@ mod tests {
   use super::VmJsWebIdlCx;
   use vm_js::{
     GcObject, Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyKey as VmPropertyKey,
-    PropertyKind, Realm, Scope, Value, Vm, VmError, VmHostHooks, VmOptions,
+    PropertyKind, Realm, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
   };
   use webidl::{
     conversions, index_to_property_key, record_to_js_object, sequence_to_js_array, DomString,
@@ -581,7 +585,10 @@ mod tests {
         }
       })
       .collect::<Vec<_>>();
-    assert_eq!(keys, vec!["0".to_string(), "1".to_string(), "length".to_string()]);
+    assert_eq!(
+      keys,
+      vec!["0".to_string(), "1".to_string(), "length".to_string()]
+    );
     Ok(())
   }
 
@@ -651,7 +658,8 @@ mod tests {
   fn getter_call_handler(
     _vm: &mut Vm,
     scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     _callee: GcObject,
     this: Value,
     _args: &[Value],
@@ -662,7 +670,8 @@ mod tests {
   fn noop_call_handler(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     _callee: GcObject,
     _this: Value,
     _args: &[Value],
@@ -677,7 +686,7 @@ mod tests {
 
     // Create a method function and a getter function.
     let method;
-      let getter;
+    let getter;
     {
       let noop_id: NativeFunctionId = vm.register_native_call(noop_call_handler)?;
       let getter_id: NativeFunctionId = vm.register_native_call(getter_call_handler)?;
@@ -835,7 +844,8 @@ mod tests {
   fn iterator_method_call_handler(
     vm: &mut Vm,
     scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     callee: GcObject,
     this: Value,
     args: &[Value],
@@ -846,7 +856,8 @@ mod tests {
   fn iterator_next_call(
     _vm: &mut Vm,
     scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     _callee: GcObject,
     this: Value,
     _args: &[Value],
@@ -975,7 +986,9 @@ mod tests {
 
       let iter_name = cx.scope.alloc_string("iterator")?;
       let iter_id = cx.vm.register_native_call(iterator_method_call_handler)?;
-      let iter_fn = cx.scope.alloc_native_function(iter_id, None, iter_name, 0)?;
+      let iter_fn = cx
+        .scope
+        .alloc_native_function(iter_id, None, iter_name, 0)?;
 
       let sym = cx.well_known_symbol(webidl::WellKnownSymbol::Iterator)?;
       let key = VmPropertyKey::from_symbol(sym);

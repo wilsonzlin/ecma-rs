@@ -224,8 +224,21 @@ fn map_export(
       }
     }
   }
+  // Classes/enums have a type-side DefId (instance / enum members) and a
+  // synthetic value-side DefId (constructor / enum object). VALUE exports must
+  // publish the value-side type so `import { Foo }; new Foo()` is constructable.
+  let value_side = |def: DefId| -> DefId {
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      state.value_defs.get(&def).copied().unwrap_or(def)
+    } else {
+      def
+    }
+  };
+  let preferred_any_value = preferred_any.map(value_side);
+  let preferred_def_value = preferred_def.map(value_side);
+
   if type_id.is_none() {
-    type_id = match preferred_any {
+    type_id = match preferred_any_value {
       Some(def) => state.export_type_for_def(def)?,
       None => None,
     };
@@ -242,18 +255,18 @@ fn map_export(
       }
     }
   }
-  let symbol = preferred_any
+  let symbol = preferred_any_value
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
 
   let mut entry = ExportEntry {
     symbol,
-    def: preferred_def,
+    def: preferred_def_value,
     type_id,
   };
 
   if entry.type_id.is_none() {
-    if let Some(def) = preferred_any {
+    if let Some(def) = preferred_any_value {
       entry.type_id = state.export_type_for_def(def)?;
     }
   }

@@ -256,6 +256,43 @@ impl ProgramState {
           DefMatchKind::TypeAlias => DefKind::TypeAlias(TypeAliasData {
             typ: self.interned_unknown(),
           }),
+          _ if def.path.kind == HirDefKind::EnumMember => {
+            // Enum members are not untyped bindings. Without a declared type they
+            // were lowered as bare `Var`s and `--noImplicitAny` falsely emitted
+            // TC3000 on `A = "A"` / `B = "B"` (e.g. SPI fixture C13).
+            DefKind::Var(VarData {
+              typ: enum_member_declared_type(self, lowered, def),
+              init: None,
+              body: def.body.unwrap_or(MISSING_BODY),
+              mode: VarDeclMode::Const,
+            })
+          }
+          _ if def.path.kind == HirDefKind::StaticBlock => {
+            // Static blocks are not value bindings; typing them as bare `Var`s
+            // produced spurious TC3000 on `<static_block>` under `--noImplicitAny`.
+            DefKind::Var(VarData {
+              typ: Some(self.store.primitive_ids().void),
+              init: None,
+              body: def.body.unwrap_or(MISSING_BODY),
+              mode: VarDeclMode::Var,
+            })
+          }
+          _ if def.path.kind == HirDefKind::Field => {
+            // Ambient / `declare class` fields are not subject to TS7008
+            // (`privateNameAmbientNoImplicitAny`). Seed `any` so `type_of_def`
+            // does not emit. Concrete unannotated fields still go through
+            // `--noImplicitAny` as TS7008 (not TC3000).
+            DefKind::Var(VarData {
+              typ: if def.is_ambient {
+                Some(self.store.primitive_ids().any)
+              } else {
+                None
+              },
+              init: None,
+              body: def.body.unwrap_or(MISSING_BODY),
+              mode: VarDeclMode::Var,
+            })
+          }
           _ => DefKind::Var(VarData {
             typ: None,
             init: None,
@@ -285,11 +322,38 @@ impl ProgramState {
 
       if !is_var_declarator {
         if is_file_level_binding(def) {
+          let new_is_type_only = matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_));
           bindings
             .entry(raw_name.clone())
             .and_modify(|binding| {
               binding.symbol = data.symbol;
-              binding.def = Some(def_id);
+              // TYPE-only decls must not clobber an existing VALUE binding
+              // (`class C` + `interface C` declaration merging). Otherwise the
+              // later `value_defs` remap never sees the class DefId and
+              // `new C()` resolves through the interface type.
+              let existing_is_value = binding.def.is_some_and(|existing| {
+                new_def_data.get(&existing).is_some_and(|existing_data| {
+                  !matches!(
+                    existing_data.kind,
+                    DefKind::Interface(_) | DefKind::TypeAlias(_)
+                  )
+                })
+              });
+              // tsc: a repeatedly-declared `var` keeps its *first*
+              // declaration's type (subsequent declarations are TS2403
+              // candidates, not the binding's type). Later `var` decls must
+              // not clobber the first `var`'s def — otherwise seeded bindings
+              // carry the *last* declaration's type
+              // (`forStatementsMultipleInvalidDecl`).
+              let keep_first_var = matches!(data.kind, DefKind::Var(_))
+                && binding.def.is_some_and(|existing| {
+                  new_def_data
+                    .get(&existing)
+                    .is_some_and(|existing_data| matches!(existing_data.kind, DefKind::Var(_)))
+                });
+              if !(new_is_type_only && existing_is_value) && !keep_first_var {
+                binding.def = Some(def_id);
+              }
             })
             .or_insert(SymbolBinding {
               symbol: data.symbol,
@@ -305,14 +369,27 @@ impl ProgramState {
         } else {
           raw_name.clone()
         };
-        exports.insert(
-          export_name,
-          ExportEntry {
-            symbol: data.symbol,
-            def: Some(def_id),
-            type_id: new_interned_def_types.get(&def_id).copied(),
-          },
-        );
+        let new_is_type_only = matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_));
+        let existing_is_value = exports.get(&export_name).is_some_and(|entry| {
+          entry.def.is_some_and(|existing| {
+            new_def_data.get(&existing).is_some_and(|existing_data| {
+              !matches!(
+                existing_data.kind,
+                DefKind::Interface(_) | DefKind::TypeAlias(_)
+              )
+            })
+          })
+        });
+        if !(new_is_type_only && existing_is_value) {
+          exports.insert(
+            export_name,
+            ExportEntry {
+              symbol: data.symbol,
+              def: Some(def_id),
+              type_id: new_interned_def_types.get(&def_id).copied(),
+            },
+          );
+        }
       }
 
       new_def_data.insert(def_id, data);
@@ -421,6 +498,11 @@ impl ProgramState {
     self.interned_def_types = new_interned_def_types;
     self.interned_type_params = new_interned_type_params;
     self.interned_type_param_decls = new_interned_type_param_decls;
+    self.interned_enum_defs = self
+      .def_data
+      .iter()
+      .filter_map(|(id, data)| matches!(data.kind, DefKind::Enum(_)).then_some(*id))
+      .collect();
 
     self.symbol_to_def.clear();
     for (def, data) in self.def_data.iter() {
@@ -436,4 +518,30 @@ impl ProgramState {
 
     id_mapping
   }
+}
+
+/// Declared type for an enum member def, used so `--noImplicitAny` does not
+/// treat `A = "A"` as an untyped binding (TC3000).
+fn enum_member_declared_type(
+  state: &ProgramState,
+  lowered: &LowerResult,
+  def: &hir_js::DefData,
+) -> Option<tti::TypeId> {
+  let parent = def.parent?;
+  let parent_def = lowered.def(parent)?;
+  let hir_js::DefTypeInfo::Enum { members } = parent_def.type_info.as_ref()? else {
+    return None;
+  };
+  let member = members.iter().find(|m| m.name == def.name)?;
+  let prim = state.store.primitive_ids();
+  Some(match &member.value {
+    hir_js::EnumMemberValue::Number(n) => state.store.intern_type(tti::TypeKind::NumberLiteral(
+      ordered_float::OrderedFloat::from(*n),
+    )),
+    hir_js::EnumMemberValue::String(s) => {
+      let id = state.store.intern_name(s.clone());
+      state.store.intern_type(tti::TypeKind::StringLiteral(id))
+    }
+    hir_js::EnumMemberValue::Computed => prim.any,
+  })
 }

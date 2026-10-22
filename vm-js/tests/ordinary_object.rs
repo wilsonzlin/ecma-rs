@@ -1,4 +1,6 @@
-use vm_js::{Heap, HeapLimits, PropertyDescriptorPatch, PropertyKey, Value, Vm, VmError, VmOptions};
+use vm_js::{
+  Heap, HeapLimits, PropertyDescriptorPatch, PropertyKey, Value, Vm, VmError, VmOptions,
+};
 
 #[test]
 fn define_own_property_respects_extensible() -> Result<(), VmError> {
@@ -246,7 +248,8 @@ fn ordinary_get_traverses_prototype_chain() -> Result<(), VmError> {
 }
 
 #[test]
-fn ordinary_set_creates_own_property_on_receiver_when_writable_in_prototype() -> Result<(), VmError> {
+fn ordinary_set_creates_own_property_on_receiver_when_writable_in_prototype() -> Result<(), VmError>
+{
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
   let mut scope = heap.scope();

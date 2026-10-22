@@ -6,14 +6,14 @@ use crate::hir::{
   ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit,
   FunctionBody, FunctionData, HirFile, Import, ImportBinding, ImportEquals, ImportEqualsTarget,
   ImportEs, ImportKind, ImportNamed, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
-  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, ModuleAttributes,
-  ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat,
-  PatKind, Stmt, StmtKind, StringLiteral, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp,
-  UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
+  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LocalData, LocalKind, LowerResult, MemberExpr,
+  ModuleAttributes, ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp,
+  ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind, StringLiteral, SwitchCase, TemplateLiteral,
+  TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
-  ImportSpecifierId, NameId, PatId, StmtId, MISSING_BODY, MISSING_DEF,
+  ImportSpecifierId, LocalId, NameId, PatId, StmtId, MISSING_BODY, MISSING_DEF,
 };
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
@@ -69,19 +69,33 @@ impl<T: Drive + DriveMut> From<&Node<T>> for RawNode {
 
 pub(crate) struct LoweringContext {
   file: FileId,
+  file_kind: FileKind,
   cancelled: Option<Arc<AtomicBool>>,
   diagnostics: Vec<Diagnostic>,
   parent_stack: Vec<Option<RawNode>>,
+  /// Whether `var`/`let`/`const`/`using` bindings allocate `DefKind::Var` /
+  /// `VarDeclarator` DefIds in the current scope.
+  ///
+  /// Top-level, namespace, and module scopes allocate (default `true`).
+  /// Function / method / arrow / static-block bodies do not — those bindings
+  /// live only in [`Body::locals`] as [`LocalKind::Var`].
+  allocate_var_defs: Vec<bool>,
 }
 
 impl LoweringContext {
-  fn new(file: FileId, cancelled: Option<Arc<AtomicBool>>) -> Self {
+  fn new(file: FileId, file_kind: FileKind, cancelled: Option<Arc<AtomicBool>>) -> Self {
     Self {
       file,
+      file_kind,
       cancelled,
       diagnostics: Vec::new(),
       parent_stack: vec![None],
+      allocate_var_defs: vec![true],
     }
+  }
+
+  fn is_dts(&self) -> bool {
+    matches!(self.file_kind, FileKind::Dts)
   }
 
   #[inline]
@@ -164,6 +178,20 @@ impl LoweringContext {
     self.parent_stack.pop();
     result
   }
+
+  fn allocates_var_defs(&self) -> bool {
+    self.allocate_var_defs.last().copied().unwrap_or(true)
+  }
+
+  fn with_var_def_allocation<F, R>(&mut self, allocate: bool, f: F) -> R
+  where
+    F: FnOnce(&mut LoweringContext) -> R,
+  {
+    self.allocate_var_defs.push(allocate);
+    let result = f(self);
+    self.allocate_var_defs.pop();
+    result
+  }
 }
 
 #[derive(Debug)]
@@ -185,7 +213,7 @@ struct DefDescriptor<'a> {
   type_source: Option<TypeSource<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum DefSource<'a> {
   None,
   ClassDecl(&'a Node<ClassDecl>),
@@ -196,7 +224,15 @@ enum DefSource<'a> {
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
   Enum(&'a Node<EnumDecl>),
+  /// Variable declarator (may own an initializer body).
   Var(&'a AstVarDeclarator, VarDeclKind),
+  /// Simple identifier binding under a [`Var`] declarator. Used to attach
+  /// `DefData.declared_type` for value-side `type_of_def` without AST walks.
+  /// Destructuring bindings keep [`None`] — the annotation types the pattern,
+  /// not each nested name.
+  VarBinding(&'a AstVarDeclarator),
+  /// `declare const/let/var name: T` ambient binding.
+  AmbientVar(&'a Node<AmbientVarDecl>),
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
   Getter(&'a Node<parse_js::ast::class_or_object::ClassOrObjGetter>),
   Setter(&'a Node<parse_js::ast::class_or_object::ClassOrObjSetter>),
@@ -432,13 +468,11 @@ impl<'a> DefSource<'a> {
         }
       }
       DefSource::ClassStaticBlock(_) => Some(BodyKind::Class),
-      DefSource::Function(decl) => decl
-        .stx
-        .function
-        .stx
-        .body
-        .as_ref()
-        .map(|_| BodyKind::Function),
+      // Always allocate a Function body so overload signatures and
+      // `declare function` carry `FunctionData` (param/return annotations +
+      // `has_body: false`). Distinguishing implementation vs signature is
+      // `FunctionData.has_body`, not body presence.
+      DefSource::Function(_) => Some(BodyKind::Function),
       DefSource::ArrowFunction(_) | DefSource::FuncExpr(_) => Some(BodyKind::Function),
       DefSource::Method(method) => method
         .stx
@@ -463,6 +497,7 @@ impl<'a> DefSource<'a> {
         .map(|_| BodyKind::Function),
       DefSource::Enum(_) => None,
       DefSource::Var(decl, _) => decl.initializer.as_ref().map(|_| BodyKind::Initializer),
+      DefSource::VarBinding(_) | DefSource::AmbientVar(_) => None,
       DefSource::ClassDecl(_) | DefSource::ClassExpr(_) => Some(BodyKind::Class),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
       DefSource::None => None,
@@ -479,7 +514,8 @@ impl<'a> DefSource<'a> {
       DefSource::ArrowFunction(node) => Some(RawNode::from(*node)),
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
       DefSource::Enum(node) => Some(RawNode::from(*node)),
-      DefSource::Var(_, _) => None,
+      DefSource::Var(_, _) | DefSource::VarBinding(_) => None,
+      DefSource::AmbientVar(node) => Some(RawNode::from(*node)),
       DefSource::Method(node) => Some(RawNode::from(*node)),
       DefSource::Getter(node) => Some(RawNode::from(*node)),
       DefSource::Setter(node) => Some(RawNode::from(*node)),
@@ -510,7 +546,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
   ast: &Node<TopLevel>,
   cancelled: Option<Arc<AtomicBool>>,
 ) -> (LowerResult, Vec<Diagnostic>) {
-  let mut ctx = LoweringContext::new(file, cancelled);
+  let mut ctx = LoweringContext::new(file, file_kind, cancelled);
   let mut names = NameInterner::default();
   let mut descriptors = Vec::new();
   let mut module_items = Vec::new();
@@ -571,6 +607,9 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     }
     if let Some(node) = desc.node {
       parent_nodes.insert(node, def_id);
+      // Interfaces/aliases set `node` without a `DefSource` ptr; still register
+      // for `def_for_node` so body lowering emits `StmtKind::Decl`.
+      def_lookup.node_to_def.entry(node).or_insert(def_id);
     }
     planned.push(PlannedDef {
       desc,
@@ -617,6 +656,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
       is_default_export: desc.is_default_export,
       body: body_id,
       type_info: None,
+      declared_type: None,
     };
 
     if let Some(type_source) = desc.type_source {
@@ -644,6 +684,23 @@ pub fn lower_file_with_diagnostics_with_cancellation(
           });
         }
       }
+    }
+
+    // Value-side TypeScript annotations mirrored onto DefData.declared_type so
+    // type_of_def / declared_type_for_span do not re-walk the AST:
+    // - class fields (public and private/#name)
+    // - module/namespace var declarators + simple Id bindings
+    // - ambient `declare const/let/var` bindings
+    let declared_ann = match &desc.source {
+      DefSource::ClassField(member) => member.stx.type_annotation.as_ref(),
+      DefSource::Var(decl, _) | DefSource::VarBinding(decl) => decl.type_annotation.as_ref(),
+      DefSource::AmbientVar(av) => av.stx.type_annotation.as_ref(),
+      _ => None,
+    };
+    if let Some(ann) = declared_ann {
+      let arenas = types.entry(def_id).or_default();
+      let mut type_lowerer = TypeLowerer::new(def_id, arenas, &mut names, &mut span_map, &mut ctx);
+      def_data.declared_type = Some(type_lowerer.lower_type_expr(ann));
     }
 
     if let Some(body) = body {
@@ -789,6 +846,7 @@ fn empty_body(owner: DefId, kind: BodyKind, span: TextRange) -> Body {
     exprs: Vec::new(),
     stmts: Vec::new(),
     pats: Vec::new(),
+    locals: Vec::new(),
     root_stmts: Vec::new(),
     function: None,
     class: None,
@@ -1011,6 +1069,8 @@ fn lower_body_from_source(
       Some(builder.finish())
     }
     DefSource::Enum(_) => None,
+    // Value-side annotation carriers — no executable body of their own.
+    DefSource::VarBinding(_) | DefSource::AmbientVar(_) => None,
     DefSource::None => None,
   }
 }
@@ -1051,6 +1111,7 @@ fn lower_var_body(
     ctx.to_range(decl.pattern.loc),
     StmtKind::Var(VarDecl {
       kind,
+      declare: false,
       declarators: vec![VarDeclarator {
         pat: pat_id,
         init,
@@ -1161,6 +1222,14 @@ fn lower_function_body(
       .map(std::mem::take)
       .unwrap_or_default();
     let type_annotation = param_type_annotations.get(idx).copied().unwrap_or(None);
+    // Parameter bindings live only in Body.locals (no DefKind::Param DefIds).
+    alloc_pat_locals(
+      &param.stx.pattern.stx.pat,
+      LocalKind::Param,
+      Some(idx as u32),
+      &mut builder,
+      ctx,
+    );
     params.push(Param {
       pat,
       decorators,
@@ -1197,6 +1266,7 @@ fn lower_function_body(
     async_: func.stx.async_,
     generator: func.stx.generator,
     is_arrow,
+    has_body: func.stx.body.is_some(),
     body,
   });
 
@@ -1635,11 +1705,12 @@ fn lower_stmt(
     AstStmt::Try(tr) => {
       let block = lower_block_stmt(&tr.stx.wrapped, builder, ctx);
       let catch = if let Some(catch) = &tr.stx.catch {
-        let param = catch
-          .stx
-          .parameter
-          .as_ref()
-          .map(|p| lower_pat(&p.stx.pat, builder, ctx));
+        let param = catch.stx.parameter.as_ref().map(|p| {
+          let pat = lower_pat(&p.stx.pat, builder, ctx);
+          // Catch bindings live only in Body.locals.
+          alloc_pat_locals(&p.stx.pat, LocalKind::Catch, None, builder, ctx);
+          pat
+        });
         let mut catch_stmts = Vec::new();
         for stmt in catch.stx.body.iter() {
           catch_stmts.push(lower_stmt(stmt, builder, ctx));
@@ -1696,6 +1767,30 @@ fn lower_stmt(
         StmtKind::Empty
       }
     }
+    // Keep interface/alias/enum decls in the body stmt stream so body-check
+    // `seed_type_decls_*` can resolve nested `var x: I` annotations (otherwise
+    // they fall through to `Empty` and emit false TC2008).
+    AstStmt::InterfaceDecl(intf) => {
+      if let Some(def_id) = builder.def_lookup.def_for_node(intf) {
+        StmtKind::Decl(def_id)
+      } else {
+        StmtKind::Empty
+      }
+    }
+    AstStmt::TypeAliasDecl(alias) => {
+      if let Some(def_id) = builder.def_lookup.def_for_node(alias) {
+        StmtKind::Decl(def_id)
+      } else {
+        StmtKind::Empty
+      }
+    }
+    AstStmt::EnumDecl(en) => {
+      if let Some(def_id) = builder.def_lookup.def_for_node(en) {
+        StmtKind::Decl(def_id)
+      } else {
+        StmtKind::Empty
+      }
+    }
     AstStmt::Break(br) => {
       let label = br.stx.label.as_ref().map(|l| builder.intern_name(l));
       StmtKind::Break(label)
@@ -1727,6 +1822,14 @@ fn lower_var_decl_stmt(
   let mut declarators: Vec<VarDeclarator> = Vec::new();
   for declarator in decl.stx.declarators.iter() {
     let pat_id = lower_pat(&declarator.pattern.stx.pat, builder, ctx);
+    // Body vars live in Body.locals (no body-local DefKind::Var DefIds).
+    alloc_pat_locals(
+      &declarator.pattern.stx.pat,
+      LocalKind::Var,
+      None,
+      builder,
+      ctx,
+    );
     let init = declarator
       .initializer
       .as_ref()
@@ -1742,7 +1845,12 @@ fn lower_var_decl_stmt(
       type_annotation,
     });
   }
-  VarDecl { kind, declarators }
+  VarDecl {
+    kind,
+    // `.d.ts` vars are ambient even without an explicit `declare` keyword.
+    declare: decl.stx.declare || ctx.is_dts(),
+    declarators,
+  }
 }
 
 fn lower_namespace_body(
@@ -1775,8 +1883,11 @@ fn lower_for_head(
         parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
       };
       let pat_id = lower_pat(&pat_decl.stx.pat, builder, ctx);
+      // for-in/of Decl bindings are body-local LocalIds only.
+      alloc_pat_locals(&pat_decl.stx.pat, LocalKind::Var, None, builder, ctx);
       ForHead::Var(VarDecl {
         kind,
+        declare: false,
         declarators: vec![VarDeclarator {
           pat: pat_id,
           init: None,
@@ -1819,11 +1930,30 @@ fn lower_expr(
 ) -> ExprId {
   use parse_js::operator::OperatorName;
 
-  // TypeScript instantiation expressions (`expr<T>`) are erased at runtime. For
-  // now, lower them as their inner expression so downstream consumers (e.g.
-  // flow checking) still see the actual callee/member structure.
+  // TypeScript instantiation expressions (`expr<T>`): keep a HIR wrapper with
+  // `TypeExprId` type args (body checker / TypeResolver) while remaining
+  // transparent for emit/optimize/flow (same family as `as` / `satisfies`).
   if let AstExpr::Instantiation(inst) = expr.stx.as_ref() {
-    return lower_expr(&inst.stx.expression, builder, ctx);
+    let inner = lower_expr(&inst.stx.expression, builder, ctx);
+    let type_args = inst
+      .stx
+      .type_arguments
+      .iter()
+      .map(|arg| builder.lower_type_expr(arg, ctx))
+      .collect();
+    let span = ctx.to_range(expr.loc);
+    let parenthesized = expr
+      .assoc
+      .get::<parse_js::ast::node::ParenthesizedExpr>()
+      .is_some();
+    return builder.alloc_expr_with_paren(
+      span,
+      ExprKind::Instantiation {
+        expr: inner,
+        type_args,
+      },
+      parenthesized,
+    );
   }
 
   let span = ctx.to_range(expr.loc);
@@ -2050,6 +2180,12 @@ fn lower_expr(
     }
     AstExpr::NonNullAssertion(nn) => ExprKind::NonNull {
       expr: lower_expr(&nn.stx.expression, builder, ctx),
+      operand_parenthesized: nn
+        .stx
+        .expression
+        .assoc
+        .get::<parse_js::ast::node::ParenthesizedExpr>()
+        .is_some(),
     },
     AstExpr::SatisfiesExpr(sat) => ExprKind::Satisfies {
       expr: lower_expr(&sat.stx.expression, builder, ctx),
@@ -2088,7 +2224,11 @@ fn lower_expr(
     _ => ExprKind::Missing,
   };
 
-  builder.alloc_expr(span, kind)
+  let parenthesized = expr
+    .assoc
+    .get::<parse_js::ast::node::ParenthesizedExpr>()
+    .is_some();
+  builder.alloc_expr_with_paren(span, kind, parenthesized)
 }
 
 fn lower_call_expr(
@@ -2600,6 +2740,7 @@ struct BodyBuilder<'a> {
   exprs: Vec<Expr>,
   stmts: Vec<Stmt>,
   pats: Vec<Pat>,
+  locals: Vec<LocalData>,
   root_stmts: Vec<StmtId>,
   function: Option<FunctionData>,
   class: Option<ClassBody>,
@@ -2628,6 +2769,7 @@ impl<'a> BodyBuilder<'a> {
       exprs: Vec::new(),
       stmts: Vec::new(),
       pats: Vec::new(),
+      locals: Vec::new(),
       root_stmts: Vec::new(),
       function: None,
       class: None,
@@ -2639,8 +2781,21 @@ impl<'a> BodyBuilder<'a> {
   }
 
   fn alloc_expr(&mut self, span: TextRange, kind: ExprKind) -> ExprId {
+    self.alloc_expr_with_paren(span, kind, false)
+  }
+
+  fn alloc_expr_with_paren(
+    &mut self,
+    span: TextRange,
+    kind: ExprKind,
+    parenthesized: bool,
+  ) -> ExprId {
     let id = ExprId(self.exprs.len() as u32);
-    self.exprs.push(Expr { span, kind });
+    self.exprs.push(Expr {
+      span,
+      kind,
+      parenthesized,
+    });
     self.span_map.add_expr(span, self.body_id, id);
     id
   }
@@ -2650,6 +2805,22 @@ impl<'a> BodyBuilder<'a> {
     self.pats.push(Pat { span, kind });
     self.span_map.add_pat(span, self.body_id, id);
     id
+  }
+
+  fn alloc_local(&mut self, data: LocalData) -> LocalId {
+    let id = LocalId(self.locals.len() as u32);
+    self.locals.push(data);
+    id
+  }
+
+  fn pat_id_for_span(&self, span: TextRange) -> Option<PatId> {
+    self
+      .pats
+      .iter()
+      .enumerate()
+      .rev()
+      .find(|(_, pat)| pat.span == span)
+      .map(|(idx, _)| PatId(idx as u32))
   }
 
   fn alloc_stmt(&mut self, span: TextRange, kind: StmtKind) -> StmtId {
@@ -2686,6 +2857,9 @@ impl<'a> BodyBuilder<'a> {
     for pat in &self.pats {
       include(pat.span);
     }
+    for local in &self.locals {
+      include(local.span);
+    }
     let body_span = body_span
       .filter(|span| !span.is_empty())
       .unwrap_or(self.span);
@@ -2698,6 +2872,7 @@ impl<'a> BodyBuilder<'a> {
       exprs: self.exprs,
       stmts: self.stmts,
       pats: self.pats,
+      locals: self.locals,
       root_stmts: self.root_stmts,
       function: self.function,
       class: self.class,
@@ -2910,7 +3085,7 @@ fn collect_stmt<'a>(
         names,
         module_item,
         is_item,
-        ambient,
+        ambient || var_decl.stx.declare,
         in_global,
         ctx,
       );
@@ -2991,21 +3166,24 @@ fn collect_stmt<'a>(
       }
       if let Some(body) = &module.stx.body {
         let body_start = descriptors.len();
+        // Module members keep DefKind::Var even when nested inside a function.
         ctx.with_parent(Some(module_raw), |ctx| {
-          let body_module_item = matches!(module.stx.name, ModuleName::String(_));
-          for st in body.iter() {
-            collect_stmt(
-              st,
-              descriptors,
-              module_items,
-              names,
-              body_module_item,
-              false,
-              decl_ambient,
-              in_global,
-              ctx,
-            );
-          }
+          ctx.with_var_def_allocation(true, |ctx| {
+            let body_module_item = matches!(module.stx.name, ModuleName::String(_));
+            for st in body.iter() {
+              collect_stmt(
+                st,
+                descriptors,
+                module_items,
+                names,
+                body_module_item,
+                false,
+                decl_ambient,
+                in_global,
+                ctx,
+              );
+            }
+          });
         });
         let has_export_assignment = body
           .iter()
@@ -3025,24 +3203,28 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::GlobalDecl(global) => {
-      for st in global.stx.body.iter() {
-        collect_stmt(
-          st,
-          descriptors,
-          module_items,
-          names,
-          false,
-          true,
-          true,
-          true,
-          ctx,
-        );
-      }
+      // `declare global` members keep DefKind::Var DefIds.
+      ctx.with_var_def_allocation(true, |ctx| {
+        for st in global.stx.body.iter() {
+          collect_stmt(
+            st,
+            descriptors,
+            module_items,
+            names,
+            false,
+            true,
+            true,
+            true,
+            ctx,
+          );
+        }
+      });
     }
     AstStmt::InterfaceDecl(intf) => {
       let name_id = names.intern(&intf.stx.name);
       let text = names.resolve(name_id).unwrap().to_string();
       let decl_ambient = ambient || intf.stx.declare;
+      let intf_raw = RawNode::from(intf);
       let mut desc = DefDescriptor::new(
         DefKind::Interface,
         name_id,
@@ -3054,6 +3236,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
+      desc.node = Some(intf_raw);
       desc.type_source = Some(TypeSource::Interface(intf));
       desc.is_exported = intf.stx.export;
       descriptors.push(desc);
@@ -3073,6 +3256,7 @@ fn collect_stmt<'a>(
       let name_id = names.intern(&ta.stx.name);
       let text = names.resolve(name_id).unwrap().to_string();
       let decl_ambient = ambient || ta.stx.declare;
+      let ta_raw = RawNode::from(ta);
       let mut desc = DefDescriptor::new(
         DefKind::TypeAlias,
         name_id,
@@ -3084,6 +3268,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
+      desc.node = Some(ta_raw);
       desc.type_source = Some(TypeSource::TypeAlias(ta));
       desc.is_exported = ta.stx.export;
       descriptors.push(desc);
@@ -3277,9 +3462,10 @@ fn collect_stmt<'a>(
         is_item,
         true,
         in_global,
-        DefSource::None,
+        DefSource::AmbientVar(av),
       );
       desc.parent = parent;
+      desc.node = Some(RawNode::from(av));
       desc.is_exported = av.stx.export;
       descriptors.push(desc);
       if av.stx.export && record_module_item {
@@ -3308,20 +3494,11 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
-      // Mark the AST node so parameters can resolve their parent `DefId`.
       desc.node = Some(func_raw);
       desc.is_exported = af.stx.export;
       descriptors.push(desc);
-      ctx.with_parent(Some(func_raw), |ctx| {
-        collect_func_params_from_parts(
-          &af.stx.parameters,
-          descriptors,
-          names,
-          true,
-          in_global,
-          ctx,
-        );
-      });
+      // Ambient function parameters do not allocate DefIds / Body.locals;
+      // signature typing comes from the ambient function's type info.
       if af.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
@@ -3719,19 +3896,22 @@ fn collect_class_members<'a>(
         desc.is_static = true;
         descriptors.push(desc);
         ctx.with_parent(Some(block_raw), |ctx| {
-          for stmt in block.stx.body.iter() {
-            collect_stmt(
-              stmt,
-              descriptors,
-              module_items,
-              names,
-              false,
-              false,
-              ambient,
-              in_global,
-              ctx,
-            );
-          }
+          // Static blocks are executable bodies: LocalId-only for vars.
+          ctx.with_var_def_allocation(false, |ctx| {
+            for stmt in block.stx.body.iter() {
+              collect_stmt(
+                stmt,
+                descriptors,
+                module_items,
+                names,
+                false,
+                false,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
+          });
         });
       }
       ClassOrObjVal::IndexSignature(_) => {}
@@ -3778,11 +3958,27 @@ fn collect_namespace<'a>(
   desc.is_exported = ns.stx.export || (!module_item && parent.is_some());
   desc.type_source = Some(TypeSource::Namespace);
   descriptors.push(desc);
-  ctx.with_parent(Some(ns_raw), |ctx| match &ns.stx.body {
-    NamespaceBody::Block(stmts) => {
-      for st in stmts.iter() {
-        collect_stmt(
-          st,
+  // Namespace members keep DefKind::Var even when nested inside a function body.
+  ctx.with_parent(Some(ns_raw), |ctx| {
+    ctx.with_var_def_allocation(true, |ctx| match &ns.stx.body {
+      NamespaceBody::Block(stmts) => {
+        for st in stmts.iter() {
+          collect_stmt(
+            st,
+            descriptors,
+            module_items,
+            names,
+            false,
+            false,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
+      }
+      NamespaceBody::Namespace(inner) => {
+        collect_namespace(
+          inner,
           descriptors,
           module_items,
           names,
@@ -3793,20 +3989,7 @@ fn collect_namespace<'a>(
           ctx,
         );
       }
-    }
-    NamespaceBody::Namespace(inner) => {
-      collect_namespace(
-        inner,
-        descriptors,
-        module_items,
-        names,
-        false,
-        false,
-        ambient,
-        in_global,
-        ctx,
-      );
-    }
+    })
   });
 }
 
@@ -3822,54 +4005,64 @@ fn collect_var_decl<'a>(
   ctx: &mut LoweringContext,
 ) {
   let parent = ctx.current_parent();
-  let kind = match var_decl.stx.mode {
-    parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
-    parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
-    parse_js::ast::stmt::decl::VarDeclMode::Var => VarDeclKind::Var,
-    parse_js::ast::stmt::decl::VarDeclMode::Using => VarDeclKind::Using,
-    parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
-  };
+  let allocate_defs = ctx.allocates_var_defs();
   for declarator in var_decl.stx.declarators.iter() {
-    let declarator_raw = RawNode(declarator as *const _ as *const ());
-    let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
+    if allocate_defs {
+      let kind = match var_decl.stx.mode {
+        parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
+        parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
+        parse_js::ast::stmt::decl::VarDeclMode::Var => VarDeclKind::Var,
+        parse_js::ast::stmt::decl::VarDeclMode::Using => VarDeclKind::Using,
+        parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
+      };
+      let declarator_raw = RawNode(declarator as *const _ as *const ());
+      let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
+      let (decl_name, decl_name_text) = pat_names
+        .first()
+        .map(|(id, _)| (*id, names.resolve(*id).unwrap().to_string()))
+        .unwrap_or_else(|| {
+          let name = names.intern("<var_decl>");
+          (name, names.resolve(name).unwrap().to_string())
+        });
 
-    let (decl_name, decl_name_text) = pat_names
-      .first()
-      .map(|(id, _)| (*id, names.resolve(*id).unwrap().to_string()))
-      .unwrap_or_else(|| {
-        let name = names.intern("<var_decl>");
-        (name, names.resolve(name).unwrap().to_string())
-      });
-
-    let mut declarator_desc = DefDescriptor::new(
-      DefKind::VarDeclarator,
-      decl_name,
-      decl_name_text,
-      ctx.to_range(declarator.pattern.loc),
-      is_item,
-      ambient,
-      in_global,
-      DefSource::Var(declarator, kind),
-    );
-    declarator_desc.parent = parent;
-    declarator_desc.node = Some(declarator_raw);
-    declarator_desc.is_exported = var_decl.stx.export;
-    descriptors.push(declarator_desc);
-
-    for (id, span) in pat_names {
-      let mut desc = DefDescriptor::new(
-        DefKind::Var,
-        id,
-        names.resolve(id).unwrap().to_string(),
-        span,
+      let mut declarator_desc = DefDescriptor::new(
+        DefKind::VarDeclarator,
+        decl_name,
+        decl_name_text,
+        ctx.to_range(declarator.pattern.loc),
         is_item,
         ambient,
         in_global,
-        DefSource::None,
+        DefSource::Var(declarator, kind),
       );
-      desc.parent = Some(declarator_raw);
-      desc.is_exported = var_decl.stx.export;
-      descriptors.push(desc);
+      declarator_desc.parent = parent;
+      declarator_desc.node = Some(declarator_raw);
+      declarator_desc.is_exported = var_decl.stx.export;
+      descriptors.push(declarator_desc);
+
+      // Simple `let x: T` — annotation is the binding's type. Destructuring
+      // keeps DefSource::None (annotation types the pattern, not each name).
+      let simple_id_binding = matches!(declarator.pattern.stx.pat.stx.as_ref(), AstPat::Id(_));
+      for (id, span) in pat_names {
+        let binding_source = if simple_id_binding {
+          DefSource::VarBinding(declarator)
+        } else {
+          DefSource::None
+        };
+        let mut desc = DefDescriptor::new(
+          DefKind::Var,
+          id,
+          names.resolve(id).unwrap().to_string(),
+          span,
+          is_item,
+          ambient,
+          in_global,
+          binding_source,
+        );
+        desc.parent = Some(declarator_raw);
+        desc.is_exported = var_decl.stx.export;
+        descriptors.push(desc);
+      }
     }
 
     collect_exprs_from_pat(
@@ -4834,6 +5027,17 @@ fn collect_expr<'a>(
         ctx,
       );
     }
+    AstExpr::Instantiation(inst) => {
+      collect_expr(
+        &inst.stx.expression,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+    }
     AstExpr::JsxElem(elem) => {
       collect_jsx_elem(
         elem,
@@ -5086,15 +5290,8 @@ fn collect_func_params<'a>(
         ctx,
       );
     }
-    collect_pat_defs(
-      &param.stx.pattern,
-      DefKind::Param,
-      descriptors,
-      names,
-      ambient,
-      in_global,
-      ctx,
-    );
+    // Params are body-local only (`LocalKind::Param`); do not allocate
+    // `DefKind::Param` DefIds. Still walk default-value exprs for nested defs.
     if let Some(default) = &param.stx.default_value {
       collect_expr(
         default,
@@ -5118,7 +5315,8 @@ fn collect_func_body<'a>(
   in_global: bool,
   ctx: &mut LoweringContext,
 ) {
-  match &func.stx.body {
+  // Executable bodies: vars/lets/consts are LocalId-only (no DefKind::Var).
+  ctx.with_var_def_allocation(false, |ctx| match &func.stx.body {
     Some(FuncBody::Block(block)) => {
       for stmt in block.iter() {
         collect_stmt(
@@ -5146,60 +5344,30 @@ fn collect_func_body<'a>(
       );
     }
     None => {}
-  }
+  })
 }
 
-fn collect_func_params_from_parts<'a>(
-  params: &'a [Node<AmbientFunctionParameter>],
-  descriptors: &mut Vec<DefDescriptor<'a>>,
-  names: &mut NameInterner,
-  ambient: bool,
-  in_global: bool,
+/// Allocate pattern bindings into [`Body::locals`].
+///
+/// Params, body vars, and catch bindings are LocalId-only; they do not allocate
+/// DefIds.
+fn alloc_pat_locals(
+  pat: &Node<AstPat>,
+  kind: LocalKind,
+  param_index: Option<u32>,
+  builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
 ) {
-  let parent = ctx.current_parent();
-  for param in params.iter() {
-    let id = names.intern(&param.stx.name);
-    let span = ctx.to_range(param.loc);
-    let mut desc = DefDescriptor::new(
-      DefKind::Param,
-      id,
-      names.resolve(id).unwrap().to_string(),
-      span,
-      false,
-      ambient,
-      in_global,
-      DefSource::None,
-    );
-    desc.parent = parent;
-    descriptors.push(desc);
-  }
-}
-
-fn collect_pat_defs<'a>(
-  pat_decl: &'a Node<parse_js::ast::stmt::decl::PatDecl>,
-  kind: DefKind,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
-  names: &mut NameInterner,
-  ambient: bool,
-  in_global: bool,
-  ctx: &mut LoweringContext,
-) {
-  let parent = ctx.current_parent();
-  for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
-    let text = names.resolve(name_id).unwrap().to_string();
-    let mut desc = DefDescriptor::new(
+  let binding_names = collect_pat_names(pat, builder.names, ctx);
+  for (name, span) in binding_names {
+    let pat_id = builder.pat_id_for_span(span);
+    builder.alloc_local(LocalData {
+      name,
       kind,
-      name_id,
-      text,
       span,
-      false,
-      ambient,
-      in_global,
-      DefSource::None,
-    );
-    desc.parent = parent;
-    descriptors.push(desc);
+      pat: pat_id,
+      param_index,
+    });
   }
 }
 

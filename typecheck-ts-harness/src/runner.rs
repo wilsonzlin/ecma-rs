@@ -2101,9 +2101,9 @@ mod tests {
 
   #[test]
   fn shard_parse_rejects_invalid() {
-    assert!(Shard::parse("bad").is_err());
-    assert!(Shard::parse("1/0").is_err());
-    assert!(Shard::parse("2/2").is_err());
+    assert!(crate::parse_shard("bad").is_err());
+    assert!(crate::parse_shard("1/0").is_err());
+    assert!(crate::parse_shard("2/2").is_err());
   }
 
   #[test]

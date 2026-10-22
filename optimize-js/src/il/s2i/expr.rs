@@ -1207,8 +1207,9 @@ impl<'p> HirSourceToInst<'p> {
       ExprKind::ImportMeta => Ok(Arg::Builtin("import.meta".to_string())),
       ExprKind::NewTarget => Ok(Arg::Builtin("new.target".to_string())),
       ExprKind::TypeAssertion { expr, .. }
-      | ExprKind::NonNull { expr }
-      | ExprKind::Satisfies { expr, .. } => self.compile_expr(*expr),
+      | ExprKind::NonNull { expr, .. }
+      | ExprKind::Satisfies { expr, .. }
+      | ExprKind::Instantiation { expr, .. } => self.compile_expr(*expr),
       ExprKind::Unary { op, expr } => self.compile_unary_expr(span, *op, *expr),
       ExprKind::Update { op, expr, prefix } => self.compile_update_expr(span, *op, *expr, *prefix),
       ExprKind::Assignment { op, target, value } => {

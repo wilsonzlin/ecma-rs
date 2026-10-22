@@ -124,3 +124,43 @@ pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
     _ => false,
   }
 }
+
+/// `new` expressions (AST: `Unary` with [`OperatorName::New`]).
+pub fn is_new_expr(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Unary(u) if u.stx.operator == OperatorName::New
+  )
+}
+
+/// ECMA-262: `OptionalChain` may follow a `MemberExpression` / `CallExpression`, but a
+/// `NewExpression` that is not also a `MemberExpression` cannot be the left-hand side of
+/// `?.` without parentheses. In particular, bare `new F` (and nested `new new F()`) must
+/// be written `(new F)?.…` — `new F?.…` is a SyntaxError ("Invalid optional chain from
+/// new expression").
+///
+/// We parenthesize *any* `new` receiver before `?.` / `?.()` / `?.[]`. That is slightly
+/// more parentheses than the minimum for `new F()?.x` (which is already a
+/// `MemberExpression`), but it is always valid, preserves AST round-trips, and keeps the
+/// AST and HIR emitters aligned (HIR collapses `new F` / `new F()` when args are empty).
+pub fn needs_parens_before_optional_chain(expr: &Node<Expr>) -> bool {
+  match expr.stx.as_ref() {
+    Expr::Unary(u) if u.stx.operator == OperatorName::New => true,
+    Expr::Instantiation(inst) => needs_parens_before_optional_chain(&inst.stx.expression),
+    _ => false,
+  }
+}
+
+/// Whether `callee` must be parenthesized when emitting `new <callee>(…)`.
+///
+/// ECMA-262 `new MemberExpression Arguments`: the callee position is a
+/// `MemberExpression`, not a full `LeftHandSideExpression`. So:
+/// - optional chains need parens (`new (a?.b)()`),
+/// - plain calls need parens (`new (f())()` — otherwise `new f()()` is `(new f())()`),
+/// - nested `new` needs parens (`new (new F)()` / `new (new F())()`).
+pub fn new_callee_needs_parens(callee: &Node<Expr>) -> bool {
+  if starts_with_optional_chaining(callee) || is_new_expr(callee) {
+    return true;
+  }
+  matches!(callee.stx.as_ref(), Expr::Call(_))
+}

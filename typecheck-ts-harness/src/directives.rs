@@ -129,6 +129,8 @@ pub struct HarnessOptions {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub use_define_for_class_fields: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub strict_property_initialization: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub no_emit_on_error: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub declaration: Option<bool>,
@@ -136,6 +138,17 @@ pub struct HarnessOptions {
   pub module_resolution: Option<String>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub types: Vec<String>,
+  /// `@allowJs`: whether JavaScript source files participate in the program.
+  /// Without this, tsc refuses to check `.js`/`.jsx` inputs and reports TS6504
+  /// ("File is a JavaScript file. Did you mean to enable the 'allowJs'
+  /// option?"), which pollutes the differential baseline for the many upstream
+  /// jsdoc/salsa fixtures that carry `@allowJs`/`@checkJs`.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub allow_js: Option<bool>,
+  /// `@checkJs`: whether JavaScript source files are type-checked. Implies
+  /// `allowJs` on the tsc side.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub check_js: Option<bool>,
 }
 
 impl HarnessOptions {
@@ -158,12 +171,17 @@ impl HarnessOptions {
         "skiplibcheck" => options.skip_lib_check = parse_bool(value),
         "noemit" => options.no_emit = parse_bool(value),
         "usedefineforclassfields" => options.use_define_for_class_fields = parse_bool(value),
+        "strictpropertyinitialization" => {
+          options.strict_property_initialization = parse_bool(value)
+        }
         "noemitonerror" => options.no_emit_on_error = parse_bool(value),
         "declaration" => options.declaration = parse_bool(value),
         "moduleresolution" => {
           options.module_resolution = value.map(|v| v.trim().to_ascii_lowercase())
         }
         "types" => options.types = parse_list(value),
+        "allowjs" => options.allow_js = parse_bool(value),
+        "checkjs" => options.check_js = parse_bool(value),
         _ => {}
       }
     }
@@ -195,6 +213,7 @@ impl HarnessOptions {
       opts.strict_null_checks = strict;
       opts.no_implicit_any = strict;
       opts.strict_function_types = strict;
+      opts.strict_property_initialization = strict;
     }
     if let Some(value) = self.no_implicit_any {
       opts.no_implicit_any = value;
@@ -214,9 +233,16 @@ impl HarnessOptions {
     if let Some(value) = self.use_define_for_class_fields {
       opts.use_define_for_class_fields = value;
     }
+    if let Some(value) = self.strict_property_initialization {
+      opts.strict_property_initialization = value;
+    }
     if let Some(value) = self.skip_lib_check {
       opts.skip_lib_check = value;
     }
+    // `@checkJs` gates semantic diagnostics for `.js`/`.jsx` files (tsc:
+    // allowJs without checkJs is parse-only). `allowJs` itself only controls
+    // which files the harness includes, not checker behavior.
+    opts.check_js = self.check_js;
     if let Some(value) = self.no_emit {
       opts.no_emit = value;
     }
@@ -285,6 +311,10 @@ impl HarnessOptions {
     map.insert(
       "useDefineForClassFields".to_string(),
       Value::Bool(compiler.use_define_for_class_fields),
+    );
+    map.insert(
+      "strictPropertyInitialization".to_string(),
+      Value::Bool(compiler.strict_property_initialization),
     );
     if let Some(value) = self.no_lib {
       map.insert("noLib".to_string(), Value::Bool(value));
@@ -356,6 +386,19 @@ impl HarnessOptions {
         "types".to_string(),
         Value::Array(self.types.iter().cloned().map(Value::String).collect()),
       );
+    }
+
+    // Forward JS-checking options so tsc actually type-checks `.js`/`.jsx`
+    // inputs instead of reporting the spurious TS6504 "did you mean to enable
+    // allowJs" diagnostic. `checkJs` implies `allowJs` in tsc, so honor either.
+    if let Some(value) = self.check_js {
+      map.insert("checkJs".to_string(), Value::Bool(value));
+      if value && self.allow_js.is_none() {
+        map.insert("allowJs".to_string(), Value::Bool(true));
+      }
+    }
+    if let Some(value) = self.allow_js {
+      map.insert("allowJs".to_string(), Value::Bool(value));
     }
 
     map
@@ -557,6 +600,7 @@ mod tests {
     assert!(compiler.strict_function_types);
     assert!(!compiler.no_implicit_any);
     assert!(compiler.strict_null_checks);
+    assert!(compiler.strict_property_initialization);
     assert!(!compiler.no_default_lib);
     assert_eq!(
       compiler.libs,
@@ -608,6 +652,35 @@ mod tests {
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
       Some(vec!["foo", "bar"])
+    );
+  }
+
+  #[test]
+  fn forwards_allow_js_and_check_js_to_tsc() {
+    // Upstream jsdoc/salsa fixtures carry `@allowJs`/`@checkJs`; without
+    // forwarding these, tsc reports the spurious TS6504 for `.js` inputs and the
+    // differential baseline is polluted. See conformance case
+    // `jsdoc/checkJsdocTypeTag5.ts` (`@checkJs: true @allowJs: true`).
+    let directives = vec![dir("checkjs", Some("true")), dir("allowjs", Some("true"))];
+    let options = HarnessOptions::from_directives(&directives);
+    assert_eq!(options.allow_js, Some(true));
+    assert_eq!(options.check_js, Some(true));
+
+    let tsc = options.to_tsc_options_map();
+    assert_eq!(tsc.get("allowJs"), Some(&Value::Bool(true)));
+    assert_eq!(tsc.get("checkJs"), Some(&Value::Bool(true)));
+  }
+
+  #[test]
+  fn check_js_implies_allow_js_on_tsc_side() {
+    let directives = vec![dir("checkjs", Some("true"))];
+    let options = HarnessOptions::from_directives(&directives);
+    let tsc = options.to_tsc_options_map();
+    assert_eq!(tsc.get("checkJs"), Some(&Value::Bool(true)));
+    assert_eq!(
+      tsc.get("allowJs"),
+      Some(&Value::Bool(true)),
+      "checkJs must imply allowJs so tsc checks the .js file"
     );
   }
 

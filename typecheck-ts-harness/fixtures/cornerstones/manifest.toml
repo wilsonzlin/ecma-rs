@@ -1,0 +1,16 @@
+# Cornerstone litmus ladder — curated fixtures for theory cornerstones.
+# Run (tsc baselines already committed under baselines/cornerstones/):
+#   cargo run -p typecheck-ts-harness --release --features with-node -- \
+#     difftsc --suite typecheck-ts-harness/fixtures/cornerstones \
+#     --compare-rust --use-baselines --manifest typecheck-ts-harness/fixtures/cornerstones/manifest.toml
+#
+# Unit/litmus twins: typecheck-ts/tests/litmus/cornerstone_*
+
+# All six cornerstones graduated vs tsc baselines (2026-07-25).
+# const_satisfies: satisfies TS2322 primary span on object-literal property key
+#   (via check_assignable)
+# excess_props: TS2353 on property key span
+# cfa_narrowing: typeofNarrow return number|string via primitive→String/Number
+#   interface members after CFA narrowing
+# overload_resolution: TS2769 on argument span
+# distributive_conditionals / keyof_mapped: green earlier

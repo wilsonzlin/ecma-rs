@@ -207,8 +207,8 @@ fn non_callable_resolvers_construct(
 }
 
 #[test]
-fn promise_resolve_and_reject_use_new_promise_capability_for_custom_constructors() -> Result<(), VmError>
-{
+fn promise_resolve_and_reject_use_new_promise_capability_for_custom_constructors(
+) -> Result<(), VmError> {
   reset_thread_locals();
 
   let mut vm = Vm::new(VmOptions::default());
@@ -236,7 +236,9 @@ fn promise_resolve_and_reject_use_new_promise_capability_for_custom_constructors
       Value::Object(c),
       &[Value::Number(1.0)],
     )?;
-    let promise_obj = LAST_PROMISE.with(|c| c.get()).expect("constructor should set LAST_PROMISE");
+    let promise_obj = LAST_PROMISE
+      .with(|c| c.get())
+      .expect("constructor should set LAST_PROMISE");
     assert_eq!(v, Value::Object(promise_obj));
     assert_eq!(RESOLVE_CALLS.with(|c| c.get()), 1);
     assert_eq!(REJECT_CALLS.with(|c| c.get()), 0);
@@ -253,7 +255,9 @@ fn promise_resolve_and_reject_use_new_promise_capability_for_custom_constructors
       Value::Object(c),
       &[Value::Number(2.0)],
     )?;
-    let promise_obj = LAST_PROMISE.with(|c| c.get()).expect("constructor should set LAST_PROMISE");
+    let promise_obj = LAST_PROMISE
+      .with(|c| c.get())
+      .expect("constructor should set LAST_PROMISE");
     assert_eq!(v, Value::Object(promise_obj));
     assert_eq!(RESOLVE_CALLS.with(|c| c.get()), 0);
     assert_eq!(REJECT_CALLS.with(|c| c.get()), 1);
@@ -352,4 +356,3 @@ fn new_promise_capability_non_callable_resolve_reject_throws_type_error() -> Res
   realm.teardown(&mut heap);
   Ok(())
 }
-

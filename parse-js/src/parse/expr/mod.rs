@@ -34,6 +34,7 @@ use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
 use crate::lex::KEYWORDS_MAPPING;
+use crate::loc::Loc;
 use crate::operator::Associativity;
 use crate::operator::OperatorName;
 use crate::operator::OPERATORS;
@@ -62,6 +63,70 @@ impl Asi {
       can_end_with_asi: false,
       did_end_with_asi: false,
     }
+  }
+}
+
+/// `true` when `expr` is an unparenthesized `new` without Arguments.
+///
+/// Per ECMA-262, `new MemberExpression Arguments` is itself a MemberExpression and may
+/// be followed by OptionalChain (`new F()?.x`). Bare `new NewExpression` (no Arguments)
+/// is only a NewExpression, so `new F?.x` / `new F?.()` are SyntaxErrors unless the
+/// `new` is parenthesized: `(new F)?.x`.
+fn is_bare_new_expression(expr: &Node<Expr>) -> bool {
+  if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+    return false;
+  }
+  match expr.stx.as_ref() {
+    Expr::Unary(u) if u.stx.operator == OperatorName::New => {
+      !matches!(u.stx.argument.stx.as_ref(), Expr::Call(_))
+    }
+    Expr::Instantiation(inst) => is_bare_new_expression(&inst.stx.expression),
+    _ => false,
+  }
+}
+
+/// Unparenthesized `&&` / `||` binary (not `??`).
+fn is_unparen_logical_and_or(expr: &Node<Expr>) -> bool {
+  if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+    return false;
+  }
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(b)
+      if matches!(
+        b.stx.operator,
+        OperatorName::LogicalAnd | OperatorName::LogicalOr
+      )
+  )
+}
+
+/// Unparenthesized `??` binary.
+fn is_unparen_nullish_coalesce(expr: &Node<Expr>) -> bool {
+  if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+    return false;
+  }
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(b) if b.stx.operator == OperatorName::NullishCoalescing
+  )
+}
+
+/// Whether `expr` is an OptionalExpression (unparenthesized chain involving `?.`).
+///
+/// Parentheses break the production: `(a?.b)`\`tpl\` is legal; `a?.b`\`tpl\` is not.
+fn is_optional_expression(expr: &Node<Expr>) -> bool {
+  if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+    return false;
+  }
+  match expr.stx.as_ref() {
+    Expr::Member(m) if m.stx.optional_chaining => true,
+    Expr::ComputedMember(m) if m.stx.optional_chaining => true,
+    Expr::Call(c) if c.stx.optional_chaining => true,
+    Expr::Member(m) => is_optional_expression(&m.stx.left),
+    Expr::ComputedMember(m) => is_optional_expression(&m.stx.object),
+    Expr::Call(c) => is_optional_expression(&c.stx.callee),
+    Expr::Instantiation(inst) => is_optional_expression(&inst.stx.expression),
+    _ => false,
   }
 }
 
@@ -124,6 +189,71 @@ impl<'a> Parser<'a> {
     let out = self.expr(ctx, terminators);
     self.allow_bare_ts_type_args = prev;
     out
+  }
+
+  /// ClassHeritage must be a LeftHandSideExpression (ECMA-262 §15.7).
+  pub fn class_heritage(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Expr>> {
+    let prev = self.allow_bare_ts_type_args;
+    self.allow_bare_ts_type_args = true;
+    // AssignmentExpression (no comma): precedence 2 is above Comma.
+    let out = self.expr_with_min_prec(
+      ctx,
+      2,
+      [TT::BraceOpen, TT::KeywordImplements],
+      &mut Asi::no(),
+    );
+    self.allow_bare_ts_type_args = prev;
+    let expr = out?;
+    if self.is_strict_ecmascript() && !Self::is_left_hand_side_expression(&expr) {
+      return Err(expr.error(SyntaxErrorType::InvalidClassHeritage));
+    }
+    Ok(expr)
+  }
+
+  fn is_left_hand_side_expression(expr: &Node<Expr>) -> bool {
+    // ParenthesizedExpression is a PrimaryExpression, hence a LeftHandSideExpression,
+    // regardless of the inner Expression (e.g. `extends (a + b)` is legal).
+    if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+      return true;
+    }
+    match expr.stx.as_ref() {
+      Expr::Id(_)
+      | Expr::This(_)
+      | Expr::Super(_)
+      | Expr::NewTarget(_)
+      | Expr::ImportMeta(_)
+      | Expr::Import(_)
+      | Expr::LitNum(_)
+      | Expr::LitStr(_)
+      | Expr::LitBool(_)
+      | Expr::LitNull(_)
+      | Expr::LitBigInt(_)
+      | Expr::LitRegex(_)
+      | Expr::LitArr(_)
+      | Expr::LitObj(_)
+      | Expr::LitTemplate(_)
+      | Expr::Func(_)
+      | Expr::ArrowFunc(_)
+      | Expr::Class(_)
+      | Expr::TaggedTemplate(_) => true,
+      Expr::Member(m) => Self::is_left_hand_side_expression(&m.stx.left),
+      Expr::ComputedMember(m) => Self::is_left_hand_side_expression(&m.stx.object),
+      Expr::Call(c) => Self::is_left_hand_side_expression(&c.stx.callee),
+      Expr::Instantiation(i) => Self::is_left_hand_side_expression(&i.stx.expression),
+      // tsc `isLeftHandSideExpressionKind`: NonNullExpression is a LHS.
+      Expr::NonNullAssertion(n) => Self::is_left_hand_side_expression(&n.stx.expression),
+      Expr::Unary(u) if u.stx.operator == OperatorName::New => {
+        // `new super` / `new super()` are not valid NewExpressions.
+        match u.stx.argument.stx.as_ref() {
+          Expr::Super(_) => false,
+          Expr::Call(c) if matches!(c.stx.callee.stx.as_ref(), Expr::Super(_)) => false,
+          Expr::Call(_) => true,
+          _ => Self::is_left_hand_side_expression(&u.stx.argument),
+        }
+      }
+      // Parentheses are assoc markers on the same node; Binary/Unary/etc. stay non-LHS.
+      _ => false,
+    }
   }
 
   fn ts_type_arguments_after_chevron_left(
@@ -241,6 +371,31 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
     terminators: [TT; N],
   ) -> SyntaxResult<Node<ArrowFuncExpr>> {
+    // Nested arrows (e.g. default values while speculating an outer paren list
+    // as parameters) must not sticky-set `arrow_parse_committed` for the outer
+    // speculation. Save/restore around this call; only a failure *after this
+    // arrow's own `=>`* leaves the flag set so callers refuse to backtrack.
+    let saved_committed = self.arrow_parse_committed;
+    self.arrow_parse_committed = false;
+    let result = self.arrow_func_expr_inner(ctx, terminators);
+    match &result {
+      Ok(_) => {
+        self.arrow_parse_committed = saved_committed;
+      }
+      Err(_) => {
+        if !self.arrow_parse_committed {
+          self.arrow_parse_committed = saved_committed;
+        }
+      }
+    }
+    result
+  }
+
+  fn arrow_func_expr_inner<const N: usize>(
+    &mut self,
+    ctx: ParseCtx,
+    terminators: [TT; N],
+  ) -> SyntaxResult<Node<ArrowFuncExpr>> {
     let func = self.with_loc(|p| {
       // Check if current token is 'async' followed by '=>'
       // In that case, 'async' is the parameter name, not the async keyword
@@ -312,7 +467,9 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        let params = p.func_params(ctx)?;
+        // ArrowParameters inherit [?Yield, ?Await] from the enclosing context, but
+        // YieldExpression / AwaitExpression in the parameter list are early errors.
+        let params = p.func_params(ctx.with_rules(ctx.rules.for_formal_parameters()))?;
         // TypeScript: return type annotation (after params, before =>) - may be type predicate.
         let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
@@ -323,6 +480,9 @@ impl<'a> Parser<'a> {
         (type_parameters, params, return_type, arrow)
       };
 
+      // Committed to an arrow function once `=>` is present: speculative
+      // "arrow vs grouping" callers must not backtrack from subsequent errors.
+      p.arrow_parse_committed = true;
       if arrow.preceded_by_line_terminator {
         // Illegal under Automatic Semicolon Insertion rules.
         return Err(arrow.error(SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters));
@@ -335,45 +495,41 @@ impl<'a> Parser<'a> {
         yield_expr_allowed: false,
       });
       let simple_params = Parser::is_simple_parameter_list(&parameters);
-      // `new.target` is syntactically allowed in arrow functions (and is lexically
-      // resolved at runtime). Track this similarly to non-arrow function bodies so
-      // `new.target` parses correctly even when the arrow function is parsed as a
-      // standalone expression (e.g. when `vm-js` reparses an arrow function snippet).
-      let prev_new_target_allowed = p.new_target_allowed;
-      p.new_target_allowed += 1;
-      let body = (|| -> SyntaxResult<_> {
-        match p.peek().typ {
-          TT::BraceOpen => {
-            let contains_use_strict =
-              p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
-            if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
-              return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
-                "`use strict` directive not allowed with a non-simple parameter list",
-              )));
-            }
+      // `new.target` is allowed in an arrow body only when an enclosing non-arrow
+      // function (or class field/static-block) already provides a `new.target`
+      // binding. Arrows inherit `new_target_allowed` from the enclosing context;
+      // they must not invent one (ECMA-262 §13.3.12 / static semantics; TS17013).
+      let body = match p.peek().typ {
+        TT::BraceOpen => {
+          let contains_use_strict =
+            p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
+          if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+            return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+              "`use strict` directive not allowed with a non-simple parameter list",
+            )));
+          }
 
-            let prev_strict_mode = p.strict_mode;
-            if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
-              p.strict_mode += 1;
-            }
-            let res = (|| {
-              p.validate_formal_parameters(None, &parameters, simple_params, true)?;
-              p.parse_func_block_body(fn_body_ctx)
-            })();
-            p.strict_mode = prev_strict_mode;
-            Ok(res?.into())
+          let prev_strict_mode = p.strict_mode;
+          if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+            p.strict_mode += 1;
           }
-          _ => {
+          let res = (|| {
             p.validate_formal_parameters(None, &parameters, simple_params, true)?;
-            Ok(
-              p.expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
-                .into(),
-            )
-          }
+            p.parse_func_block_body(fn_body_ctx)
+          })();
+          p.strict_mode = prev_strict_mode;
+          res?.into()
         }
-      })();
-      p.new_target_allowed = prev_new_target_allowed;
-      let body = body?;
+        _ => {
+          p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+          // ConciseBody is an AssignmentExpression (ECMA-262 §14.2): a top-level
+          // comma belongs to the *enclosing* sequence expression, so parse one
+          // precedence level above Comma (same idiom as `class_heritage`).
+          // `x => a, b` is `(x => a), b`, not `x => (a, b)`.
+          p.expr_with_min_prec(fn_body_ctx, 2, terminators, &mut Asi::can())?
+            .into()
+        }
+      };
       if terminators.contains(&TT::Colon) && p.peek().typ != TT::Colon {
         return Err(
           p.peek()
@@ -400,8 +556,10 @@ impl<'a> Parser<'a> {
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     // Try and parse as arrow function signature first.
-    // If we fail, backtrack and parse as grouping instead.
-    // After we see `=>`, we assume it's definitely an arrow function and do not backtrack.
+    // If we fail before `=>`, backtrack and parse as grouping instead.
+    // After we see `=>`, we are committed to an arrow function and must not
+    // backtrack — otherwise body early errors (e.g. top-level `new.target`) are
+    // swallowed and resurface as a misleading empty-grouping `PS0002`.
 
     // NOTE: We originally implemented conversion from parameters to expression to prevent the need
     // for backtracking. However, this ended up being too complex for little performance gain,
@@ -409,16 +567,27 @@ impl<'a> Parser<'a> {
     // as arrow function fails quickly. Complex patterns like `{a, b: { c: [d, e] } = f }` are
     // unlikely to be used as operands in a grouping.
 
-    self
-      .rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
-        Ok(expr) => Ok(Some(expr.into_wrapped())),
-        Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => {
-          Err(err)
-        }
-        Err(_) => Ok(None),
-      })
-      .transpose()
-      .unwrap_or_else(|| self.grouping(ctx, asi))
+    self.arrow_parse_committed = false;
+    match self.rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
+      Ok(expr) => Ok(Some(expr.into_wrapped())),
+      Err(err) if p.arrow_parse_committed => Err(err),
+      Err(err)
+        if matches!(
+          err.typ,
+          SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters
+            | SyntaxErrorType::InvalidRestParameter
+        ) =>
+      {
+        // Rest-parameter grammar errors are unambiguous even before `=>`; do not
+        // swallow them as a failed arrow speculation and reparse as grouping.
+        Err(err)
+      }
+      Err(_) => Ok(None),
+    }) {
+      Ok(Some(expr)) => Ok(expr),
+      Ok(None) => self.grouping(ctx, asi),
+      Err(err) => Err(err),
+    }
   }
 
   pub fn func_expr(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<FuncExpr>> {
@@ -446,14 +615,17 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        // Parameters and body use the function's own context, not the parent's
+        // Body may allow yield/await expressions; FormalParameters must not
+        // (ECMA-262 §15.5.1 / §15.1.1 — Contains YieldExpression / AwaitExpression).
         let fn_ctx = ctx.with_rules(ParsePatternRules {
           await_allowed: if is_module { false } else { !is_async },
           yield_allowed: if is_module { false } else { !generator },
           await_expr_allowed: is_async,
           yield_expr_allowed: generator,
         });
-        let parameters = p.func_params(fn_ctx)?;
+        let param_ctx = fn_ctx.with_rules(fn_ctx.rules.for_formal_parameters());
+        // Parameter defaults evaluate in the function's binding environment.
+        let parameters = p.with_non_arrow_func_bindings(|p| p.func_params(param_ctx))?;
         // TypeScript: return type annotation - may be type predicate
         let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
@@ -518,7 +690,7 @@ impl<'a> Parser<'a> {
 
         let extends = p
           .consume_if(TT::KeywordExtends)
-          .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+          .and_then(|| p.class_heritage(ctx))?;
 
         // TypeScript: implements clause
         let mut implements = Vec::new();
@@ -577,7 +749,7 @@ impl<'a> Parser<'a> {
 
         let extends = p
           .consume_if(TT::KeywordExtends)
-          .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+          .and_then(|| p.class_heritage(ctx))?;
 
         // TypeScript: implements clause
         let mut implements = Vec::new();
@@ -624,9 +796,18 @@ impl<'a> Parser<'a> {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
     };
     let name = self.string(t.loc);
+    // IdentifierReference / LabelIdentifier [Await]/[Yield]: StringValue checks
+    // catch escaped forms (`\u0061wait` / `yi\u0065ld`) that lex as Identifier.
+    // Strict reserved words similarly key off StringValue, not the raw escape spelling.
+    let string_value = self.identifier_string_value(t.loc);
+    if (!ctx.rules.await_allowed && string_value == "await")
+      || (!ctx.rules.yield_allowed && string_value == "yield")
+    {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+    }
     if self.is_strict_ecmascript()
       && self.is_strict_mode()
-      && Parser::is_strict_mode_reserved_word(&name)
+      && Parser::is_strict_mode_reserved_word(&string_value)
     {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
     }
@@ -933,10 +1114,20 @@ impl<'a> Parser<'a> {
                 let mut callee = p.expr_operand(ctx, terminators, asi)?;
 
                 // Consume member access chains (`new Foo.bar()`).
+                //
+                // ECMA-262: `new`'s callee is a MemberExpression. An OptionalExpression
+                // is not, so `?.` / `?.[]` / `?.()` cannot appear in this position
+                // (`new a?.b`, `new a?.[b]`, `new a?.()` — SyntaxError; mirrors TS1209).
+                // Parenthesized forms like `new (a?.b)` are fine: the chain is inside
+                // PrimaryExpression and never reaches this loop as a `?.` token.
                 loop {
                   match p.peek().typ {
-                    TT::Dot | TT::QuestionDot => {
-                      let optional = p.peek().typ == TT::QuestionDot;
+                    TT::QuestionDot
+                    | TT::QuestionDotBracketOpen
+                    | TT::QuestionDotParenthesisOpen => {
+                      return Err(p.peek().error(SyntaxErrorType::InvalidOptionalChainFromNew));
+                    }
+                    TT::Dot => {
                       p.consume();
 
                       let checkpoint = p.checkpoint();
@@ -945,14 +1136,18 @@ impl<'a> Parser<'a> {
                       let mut right = right_tok.loc;
                       match right_tok.typ {
                         TT::Identifier | TT::PrivateMember => {
-                          prop = p.string(right);
+                          // IdentifierName StringValue: decode `\uXXXX` / `\u{…}` escapes.
+                          p.report_bare_private_hash_if_needed(&right_tok);
+                          prop = p.identifier_string_value(right);
                         }
                         t if KEYWORDS_MAPPING.contains_key(&t) => {
-                          prop = p.string(right);
+                          prop = p.identifier_string_value(right);
                         }
                         _ => {
                           if !p.should_recover() {
-                            return Err(right_tok.error(SyntaxErrorType::ExpectedSyntax("property name")));
+                            return Err(
+                              right_tok.error(SyntaxErrorType::ExpectedSyntax("property name")),
+                            );
                           }
                           if matches!(
                             right_tok.typ,
@@ -973,7 +1168,7 @@ impl<'a> Parser<'a> {
                       callee = Node::new(
                         callee.loc + right,
                         MemberExpr {
-                          optional_chaining: optional,
+                          optional_chaining: false,
                           left: callee,
                           right: prop,
                         },
@@ -981,8 +1176,7 @@ impl<'a> Parser<'a> {
                       .into_wrapped();
                       continue;
                     }
-                    TT::BracketOpen | TT::QuestionDotBracketOpen => {
-                      let optional = p.peek().typ == TT::QuestionDotBracketOpen;
+                    TT::BracketOpen => {
                       p.consume();
 
                       let member = if p.should_recover() {
@@ -1003,7 +1197,7 @@ impl<'a> Parser<'a> {
                       callee = Node::new(
                         callee.loc + end.loc,
                         ComputedMemberExpr {
-                          optional_chaining: optional,
+                          optional_chaining: false,
                           object: callee,
                           member,
                         },
@@ -1025,9 +1219,9 @@ impl<'a> Parser<'a> {
                     p.require(TT::ChevronLeft)?;
                     let (type_arguments, close_loc) =
                       match p.ts_type_arguments_after_chevron_left(ctx) {
-                      Ok(res) => res,
-                      Err(_) => return Ok(None),
-                    };
+                        Ok(res) => res,
+                        Err(_) => return Ok(None),
+                      };
 
                     let next = p.peek();
                     let tagged_template = !next.preceded_by_line_terminator
@@ -1072,6 +1266,22 @@ impl<'a> Parser<'a> {
                   .into_wrapped();
                 }
 
+                // `new super` / `new super()` are SyntaxErrors: SuperCall is not a
+                // MemberExpression under NewExpression. `new super.x` / `new super[x]()`
+                // use SuperProperty and are legal.
+                if p.is_strict_ecmascript() {
+                  let illegal_new_super = match callee.stx.as_ref() {
+                    Expr::Super(_) => true,
+                    Expr::Call(c) if matches!(c.stx.callee.stx.as_ref(), Expr::Super(_)) => true,
+                    _ => false,
+                  };
+                  if illegal_new_super {
+                    return Err(callee.error(SyntaxErrorType::ExpectedSyntax(
+                      "new cannot be used with super",
+                    )));
+                  }
+                }
+
                 callee
               } else {
                 p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
@@ -1094,7 +1304,7 @@ impl<'a> Parser<'a> {
               operator.name,
               OperatorName::PrefixIncrement | OperatorName::PrefixDecrement
             ) {
-              p.validate_strict_assignment_target_expr(&operand)?;
+              p.validate_update_operand(&operand)?;
             }
 
             // ES strict mode (incl. modules): `delete IdentifierReference` is a syntax error.
@@ -1129,9 +1339,17 @@ impl<'a> Parser<'a> {
     {
       return Ok(match t1.typ {
         TT::ParenthesisOpen | TT::ChevronLeft => {
+          self.arrow_parse_committed = false;
           match self.rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
             Ok(expr) => Ok(Some(expr.into_wrapped())),
-            Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => {
+            Err(err) if p.arrow_parse_committed => Err(err),
+            Err(err)
+              if matches!(
+                err.typ,
+                SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters
+                  | SyntaxErrorType::InvalidRestParameter
+              ) =>
+            {
               Err(err)
             }
             Err(_) => Ok(None),
@@ -1221,11 +1439,23 @@ impl<'a> Parser<'a> {
       TT::LiteralString => self.lit_str()?.into_wrapped(),
       TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_wrapped(),
       TT::ParenthesisOpen => self.arrow_function_or_grouping_expr(ctx, terminators, asi)?,
-      // ES2022: Private identifier in expression position (e.g., `#field in obj`)
-      TT::PrivateMember => self.with_loc(|p| {
-        let name = p.consume_as_string();
-        Ok(IdExpr { name })
-      })?.into_wrapped(),
+      // Bare PrivateIdentifier is not a PrimaryExpression. Legal `#id in ShiftExpression`
+      // is handled in `expr_with_min_prec`; `. #id` / `?. #id` are member operators.
+      // TypeScript recovery still materialises an IdExpr so downstream can diagnose.
+      TT::PrivateMember => {
+        let tok = self.peek();
+        self.report_bare_private_hash_if_needed(&tok);
+        if self.should_recover() {
+          self
+            .with_loc(|p| {
+              let name = p.consume_as_string();
+              Ok(IdExpr { name })
+            })?
+            .into_wrapped()
+        } else {
+          return Err(tok.error(SyntaxErrorType::InvalidPrivateIdentifier));
+        }
+      }
       // TypeScript recovery: allow keywords in expression position as identifier references.
       // This matches pattern recovery and keeps parsing moving for invalid programs like
       // `var x = [await];` in module contexts.
@@ -1237,14 +1467,31 @@ impl<'a> Parser<'a> {
         .into_wrapped(),
       TT::Invalid => {
         let raw = self.bytes(t0.loc);
+        if raw.starts_with("/*") {
+          return Err(t0.error(SyntaxErrorType::UnterminatedMultilineComment));
+        }
+        if raw == "<!--" || raw == "-->" {
+          return Err(t0.error(SyntaxErrorType::HtmlCommentInModule));
+        }
         let starts_like_number = raw
           .chars()
           .next()
           .is_some_and(|c| c.is_ascii_digit() || c == '.');
-        if starts_like_number && raw.ends_with('n') {
-          return Err(t0.error(SyntaxErrorType::MalformedLiteralBigInt));
-        }
         if starts_like_number {
+          // Lexer marks a well-formed NumericLiteral Invalid when IdentifierStart follows
+          // immediately (ECMA-262 §12.9.3); distinguish from truly malformed numbers.
+          let after = Loc(t0.loc.1, self.source_range().1);
+          let followed_by_ident_start = self
+            .bytes(after)
+            .chars()
+            .next()
+            .is_some_and(crate::lex::is_identifier_start);
+          if followed_by_ident_start {
+            return Err(t0.error(SyntaxErrorType::NumericLiteralFollowedByIdentifier));
+          }
+          if raw.ends_with('n') {
+            return Err(t0.error(SyntaxErrorType::MalformedLiteralBigInt));
+          }
           return Err(t0.error(SyntaxErrorType::MalformedLiteralNumber));
         }
         match raw.chars().next() {
@@ -1266,6 +1513,37 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
+    // ECMA-262 RelationalExpression[+In]: `PrivateIdentifier in ShiftExpression`.
+    // Only legal at relational precedence (and below); ShiftExpression / Unary
+    // positions must reject bare `#id` and nested `#a in #b in c`.
+    let in_prec = OPERATORS[&OperatorName::In].precedence;
+    if min_prec <= in_prec
+      && self.peek().typ == TT::PrivateMember
+      && !terminators.contains(&TT::KeywordIn)
+    {
+      let checkpoint = self.checkpoint();
+      let name_tok = self.consume();
+      let name = self.string(name_tok.loc);
+      if self.peek().typ == TT::KeywordIn {
+        // Only report after committing — this path peeks via consume+restore.
+        self.report_bare_private_hash_if_needed(&name_tok);
+        self.consume(); // `in`
+        let right = self.expr_with_min_prec(ctx, in_prec + 1, terminators, asi)?;
+        let left = Node::new(name_tok.loc, IdExpr { name }).into_wrapped();
+        let private_in = Node::new(
+          left.loc + right.loc,
+          BinaryExpr {
+            operator: OperatorName::In,
+            left,
+            right,
+          },
+        )
+        .into_wrapped();
+        return self.expr_with_min_prec_after_left(ctx, private_in, min_prec, terminators, asi);
+      }
+      self.restore_checkpoint(checkpoint);
+    }
+
     let left = self.expr_operand(ctx, terminators, asi)?;
     self.expr_with_min_prec_after_left(ctx, left, min_prec, terminators, asi)
   }
@@ -1333,7 +1611,7 @@ impl<'a> Parser<'a> {
             self.restore_checkpoint(cp);
             break;
           };
-          self.validate_strict_assignment_target_expr(&left)?;
+          self.validate_update_operand(&left)?;
           left = Node::new(
             left.loc + t.loc,
             UnaryPostfixExpr {
@@ -1382,24 +1660,44 @@ impl<'a> Parser<'a> {
             }
             return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
           }
+          // UpdateExpression is not a MemberExpression, so it cannot be a tag.
+          let is_update = match left.stx.as_ref() {
+            Expr::UnaryPostfix(_) => true,
+            Expr::Unary(u) => matches!(
+              u.stx.operator,
+              OperatorName::PrefixIncrement | OperatorName::PrefixDecrement
+            ),
+            _ => false,
+          };
+          if self.is_strict_ecmascript() && is_update {
+            return Err(t.error(SyntaxErrorType::ExpectedSyntax(
+              "tagged template after update expression",
+            )));
+          }
+          // ECMA-262 OptionalChain early error: `?.`… TemplateLiteral /
+          // OptionalChain TemplateLiteral.
+          if is_optional_expression(&left) {
+            return Err(t.error(SyntaxErrorType::OptionalChainTaggedTemplate));
+          }
           let loc = t.loc;
           self.restore_checkpoint(cp);
           // ES2018: Tagged templates allow invalid escape sequences
           let function = left;
           let (parts, template_parts) = self.lit_template_parts_with_template_data(ctx, true)?;
-          let mut node = Node::new(
-            function.loc + loc,
-            TaggedTemplateExpr {
-              function,
-              parts,
-            },
-          );
+          let mut node = Node::new(function.loc + loc, TaggedTemplateExpr { function, parts });
           node.assoc.set(template_parts);
           left = node.into_wrapped();
           continue;
         }
-        // TypeScript: Type assertion: expr as Type or expr as const
+        // TypeScript: Type assertion: expr as Type or expr as const.
+        // Precedence sits between relational (`in`) and equality (see
+        // PRECEDENCE_LEVELS empty slot): `a in b as T` → `(a in b) as T`.
         TT::KeywordAs if self.is_typescript() => {
+          let as_prec = OPERATORS[&OperatorName::In].precedence.saturating_sub(1);
+          if as_prec < min_prec {
+            self.restore_checkpoint(cp);
+            break;
+          }
           if asi_allowed && t.preceded_by_line_terminator {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
@@ -1433,8 +1731,13 @@ impl<'a> Parser<'a> {
           }
           continue;
         }
-        // TypeScript: Satisfies expression: expr satisfies Type
+        // TypeScript: Satisfies expression: expr satisfies Type (same prec as `as`).
         TT::KeywordSatisfies if self.is_typescript() => {
+          let as_prec = OPERATORS[&OperatorName::In].precedence.saturating_sub(1);
+          if as_prec < min_prec {
+            self.restore_checkpoint(cp);
+            break;
+          }
           if asi_allowed && t.preceded_by_line_terminator {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
@@ -1458,6 +1761,9 @@ impl<'a> Parser<'a> {
           let next = self.peek();
           // Match existing optional chaining call behavior (?.() token) by disallowing newlines here.
           if next.typ == TT::ChevronLeft && !next.preceded_by_line_terminator {
+            if is_bare_new_expression(&left) {
+              return Err(t.error(SyntaxErrorType::InvalidOptionalChainFromNew));
+            }
             if let Some((type_arguments, close_loc, arguments, end_loc)) = self.rewindable(|p| {
               p.require(TT::ChevronLeft)?;
               let (type_arguments, close_loc) = match p.ts_type_arguments_after_chevron_left(ctx) {
@@ -1621,6 +1927,33 @@ impl<'a> Parser<'a> {
           let next_min_prec =
             operator.precedence + (operator.associativity == Associativity::Left) as u8;
 
+          // ECMA-262: OptionalChain may follow MemberExpression / CallExpression, but not a
+          // bare NewExpression (`new F` without Arguments). `new F()?.x` is legal (Arguments
+          // make it a MemberExpression); `new F?.x` / `(new F)?.x` differ — the latter needs
+          // parentheses. Unparenthesized `new` without a Call argument is rejected here.
+          let is_optional_chain = matches!(
+            operator.name,
+            OperatorName::OptionalChainingCall
+              | OperatorName::OptionalChainingMemberAccess
+              | OperatorName::OptionalChainingComputedMemberAccess
+          );
+          if is_optional_chain && is_bare_new_expression(&left) {
+            return Err(t.error(SyntaxErrorType::InvalidOptionalChainFromNew));
+          }
+
+          // ECMA-262 ShortCircuitExpression: CoalesceExpression and LogicalORExpression
+          // are alternatives; `??` must not mix with `&&`/`||` without parentheses.
+          if operator.name == OperatorName::NullishCoalescing && is_unparen_logical_and_or(&left) {
+            return Err(t.error(SyntaxErrorType::MixedNullishLogicalOperators));
+          }
+          if matches!(
+            operator.name,
+            OperatorName::LogicalAnd | OperatorName::LogicalOr
+          ) && is_unparen_nullish_coalesce(&left)
+          {
+            return Err(t.error(SyntaxErrorType::MixedNullishLogicalOperators));
+          }
+
           left = match operator.name {
             OperatorName::Call | OperatorName::OptionalChainingCall => {
               let arguments = self.call_args(ctx)?;
@@ -1686,16 +2019,58 @@ impl<'a> Parser<'a> {
               .into_wrapped()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
+              // `?.` may be whitespace-separated from Arguments / `[` (lexer only fuses
+              // `?.(` / `?.[` when adjacent). Spec OptionalChain allows `?. Arguments`.
+              if operator.name == OperatorName::OptionalChainingMemberAccess {
+                if self.peek().typ == TT::ParenthesisOpen {
+                  self.consume(); // `(`
+                  let arguments = self.call_args(ctx)?;
+                  let end = self.require(TT::ParenthesisClose)?;
+                  left = Node::new(
+                    left.loc + end.loc,
+                    CallExpr {
+                      optional_chaining: true,
+                      arguments,
+                      callee: left,
+                    },
+                  )
+                  .into_wrapped();
+                  continue;
+                }
+                if self.peek().typ == TT::BracketOpen {
+                  self.consume(); // `[`
+                  let member = self.expr(ctx, [TT::BracketClose])?;
+                  let end = self.require(TT::BracketClose)?;
+                  left = Node::new(
+                    left.loc + end.loc,
+                    ComputedMemberExpr {
+                      optional_chaining: true,
+                      object: left,
+                      member,
+                    },
+                  )
+                  .into_wrapped();
+                  continue;
+                }
+              }
               let checkpoint = self.checkpoint();
               let right_tok = self.consume();
               let mut prop = String::new();
               let mut right = right_tok.loc;
               match right_tok.typ {
                 TT::Identifier | TT::PrivateMember => {
-                  prop = self.string(right);
+                  // IdentifierName StringValue: decode `\uXXXX` / `\u{…}` escapes.
+                  self.report_bare_private_hash_if_needed(&right_tok);
+                  prop = self.identifier_string_value(right);
                 }
                 t if KEYWORDS_MAPPING.contains_key(&t) => {
-                  prop = self.string(right);
+                  prop = self.identifier_string_value(right);
+                }
+                TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
+                  if operator.name == OperatorName::OptionalChainingMemberAccess =>
+                {
+                  // `a?.\`tpl\`` — OptionalChain: ?. TemplateLiteral.
+                  return Err(right_tok.error(SyntaxErrorType::OptionalChainTaggedTemplate));
                 }
                 _ => {
                   if !self.should_recover() {
@@ -1752,6 +2127,14 @@ impl<'a> Parser<'a> {
                 }
               }
               if operator.name.is_assignment() {
+                // tsc `parseAssignmentExpressionOrHigher`: assignment is only
+                // formed when the left operand is a LeftHandSideExpression.
+                // Relational/`in`/etc. must stop before `=` so the statement
+                // parser can report TS1005 ('; expected) and recover.
+                if self.should_recover() && !Self::is_left_hand_side_expression(&left) {
+                  self.restore_checkpoint(cp);
+                  break;
+                }
                 left = lhs_expr_to_assign_target_with_recover(
                   left,
                   operator.name,
@@ -1760,6 +2143,13 @@ impl<'a> Parser<'a> {
                 self.validate_strict_assignment_target_expr(&left)?;
               };
               let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
+              // `??` RHS is BitwiseORExpression; Pratt may still fold a higher-prec
+              // `&&` into the right operand — reject that mix without parentheses.
+              if operator.name == OperatorName::NullishCoalescing
+                && is_unparen_logical_and_or(&right)
+              {
+                return Err(t.error(SyntaxErrorType::MixedNullishLogicalOperators));
+              }
               Node::new(
                 left.loc + right.loc,
                 BinaryExpr {

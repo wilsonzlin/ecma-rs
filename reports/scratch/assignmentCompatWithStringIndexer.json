@@ -1,0 +1,291 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithStringIndexer.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithStringIndexer.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2439,
+      "rust_ms": 1801,
+      "tsc_ms": 638,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 285,
+            "end": 286,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 354,
+            "end": 356,
+            "severity": "error",
+            "message": "b2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2558",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 492,
+            "end": 499,
+            "severity": "error",
+            "message": "Expected 0 type arguments, but got 1."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 620,
+            "end": 622,
+            "severity": "error",
+            "message": "b1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2558",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 677,
+            "end": 684,
+            "severity": "error",
+            "message": "Expected 0 type arguments, but got 1."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 785,
+            "end": 787,
+            "severity": "error",
+            "message": "b2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 939,
+            "end": 941,
+            "severity": "error",
+            "message": "b3 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 1040,
+            "end": 1042,
+            "severity": "error",
+            "message": "b4 is used before being assigned"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 285,
+            "end": 286,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 295,
+            "end": 296,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 354,
+            "end": 356,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 365,
+            "end": 367,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 620,
+            "end": 622,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 635,
+            "end": 637,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 785,
+            "end": 787,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 800,
+            "end": 802,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 934,
+            "end": 936,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 939,
+            "end": 941,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 961,
+            "end": 963,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 1035,
+            "end": 1037,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 1040,
+            "end": 1042,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithStringIndexer.ts",
+            "start": 1062,
+            "end": 1064,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 8 diagnostic(s); first missing: /assignmentCompatWithStringIndexer.ts:295-296 [2322]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/assignmentCompatWithStringIndexer.ts",
+          "start": 295,
+          "end": 296,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 51/64) rust=[TS2454,TS2454,LOWER0003,TS2454,LOWER0003,TS2454,TS2454,TS2454] tsc=[2454,2322,2454,2322,2454,2322,2454,2322,2322,2454,2322,2322,2454,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

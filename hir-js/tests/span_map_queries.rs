@@ -2,7 +2,9 @@ use hir_js::{lower_from_source_with_kind, BodyKind, DefKind, FileKind, StmtKind}
 
 #[test]
 fn span_map_body_at_offset_prefers_initializer_body() {
-  let source = "function f(){ if(true){ const x = 1; } return 2; }";
+  // Module-level vars still allocate VarDeclarator + Initializer bodies.
+  // Body-local vars are LocalId-only (init exprs live in the enclosing body).
+  let source = "const x = 1; function f(){ return 2; }";
   let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower source");
 
   let declarator = lowered

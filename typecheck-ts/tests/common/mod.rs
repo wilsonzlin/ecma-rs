@@ -12,6 +12,9 @@ interface Number {}
 interface Object {}
 interface RegExp {}
 interface String {}
+interface TemplateStringsArray extends Array<string> {
+  readonly raw: readonly string[];
+}
 
 declare var Array: any;
 declare var Boolean: any;

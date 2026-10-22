@@ -1,0 +1,23 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling parse-js v0.24.1 (/root/r/ecma-rs/parse-js)
+   Compiling hir-js v0.1.0 (/root/r/ecma-rs/hir-js)
+   Compiling semantic-js v0.1.0 (/root/r/ecma-rs/semantic-js)
+   Compiling types-ts-interned v0.1.0 (/root/r/ecma-rs/types-ts-interned)
+   Compiling typecheck-ts v0.1.0 (/root/r/ecma-rs/typecheck-ts)
+error[E0594]: cannot assign to `self.eval_budget_exceeded`, which is behind a `&` reference
+   --> typecheck-ts/src/program/../check/hir_body/mod.rs:672:7
+    |
+672 |       self.eval_budget_exceeded = true;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be written
+    |
+help: consider changing this to be a mutable reference
+    |
+635 |   fn expand_for_props(&mut self, ty: TypeId) -> TypeId {
+    |                        +++
+
+For more information about this error, try `rustc --explain E0594`.
+error: could not compile `typecheck-ts` (lib) due to 1 previous error

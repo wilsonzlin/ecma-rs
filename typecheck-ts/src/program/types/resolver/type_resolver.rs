@@ -52,4 +52,8 @@ impl TypeResolver for ProgramTypeResolver {
     }
     self.resolve_export_path(path, &mut module, sem_ts::Namespace::VALUE)
   }
+
+  fn def_file(&self, def: DefId) -> Option<FileId> {
+    self.def_files.get(&def).copied()
+  }
 }

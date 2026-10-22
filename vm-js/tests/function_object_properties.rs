@@ -60,7 +60,10 @@ fn native_function_can_define_and_get_own_property_via_object_get_own_data_prope
       scope.heap().is_valid_object(child),
       "child should survive via function property"
     );
-    assert!(!scope.heap().is_valid_object(dead), "dead should be collected");
+    assert!(
+      !scope.heap().is_valid_object(dead),
+      "dead should be collected"
+    );
 
     assert_eq!(scope.heap().get_string(key_string)?.to_utf8_lossy(), "x");
     assert_eq!(

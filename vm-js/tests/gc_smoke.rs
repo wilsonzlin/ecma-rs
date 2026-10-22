@@ -166,7 +166,9 @@ fn promise_reaction_lists_are_cleared_on_settlement() -> Result<(), VmError> {
     assert!(scope.heap().is_valid_object(handler));
 
     // Settlement clears the reaction lists so they do not keep handlers alive unnecessarily.
-    scope.heap_mut().promise_fulfill(promise, Value::Undefined)?;
+    scope
+      .heap_mut()
+      .promise_fulfill(promise, Value::Undefined)?;
     scope.heap_mut().collect_garbage();
     assert!(!scope.heap().is_valid_object(handler));
   }

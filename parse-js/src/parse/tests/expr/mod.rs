@@ -44,7 +44,7 @@ fn parse_expr(input: &str) -> Node<Expr> {
 }
 
 #[cfg(feature = "serde")]
-fn parse_expr_and_serialize(input: String) -> Value {
+fn parse_expr_and_serialize(_name: &str, input: String) -> Value {
   let node = parse_expr(&input);
   serde_json::to_value(&node).unwrap()
 }

@@ -47,7 +47,7 @@ impl Program {
   pub fn exprs_in_body(&self, body: BodyId) -> Vec<ExprId> {
     match self.with_analyzed_state(|state| {
       if state.snapshot_loaded {
-        if let Some(result) = state.body_results.get(&body) {
+        if let Some(result) = state.local_body_results.get(&body) {
           return Ok((0..result.expr_types.len() as u32).map(ExprId).collect());
         }
       }
@@ -74,7 +74,7 @@ impl Program {
   pub fn pats_in_body(&self, body: BodyId) -> Vec<PatId> {
     match self.with_analyzed_state(|state| {
       if state.snapshot_loaded {
-        if let Some(result) = state.body_results.get(&body) {
+        if let Some(result) = state.local_body_results.get(&body) {
           return Ok((0..result.pat_types.len() as u32).map(PatId).collect());
         }
       }
@@ -135,7 +135,7 @@ impl Program {
         let Some(meta) = state.body_map.get(&body) else {
           return Ok(None);
         };
-        if let Some(result) = state.body_results.get(&body) {
+        if let Some(result) = state.local_body_results.get(&body) {
           if let Some(range) = result.expr_span(expr) {
             return Ok(Some(Span {
               file: meta.file,
@@ -175,7 +175,7 @@ impl Program {
         let Some(meta) = state.body_map.get(&body) else {
           return Ok(None);
         };
-        if let Some(result) = state.body_results.get(&body) {
+        if let Some(result) = state.local_body_results.get(&body) {
           if let Some(range) = result.pat_span(pat) {
             return Ok(Some(Span {
               file: meta.file,

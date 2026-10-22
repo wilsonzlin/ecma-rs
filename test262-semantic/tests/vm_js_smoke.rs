@@ -44,7 +44,7 @@ fn vm_js_executor_smoke_pass_and_timeout() {
 
   let results = test262_semantic::runner::run_cases(
     temp.path(),
-    HarnessMode::Inline,
+    HarnessMode::None,
     &cases,
     &expectations,
     executor.as_ref(),
@@ -52,8 +52,10 @@ fn vm_js_executor_smoke_pass_and_timeout() {
     &timeout_manager,
   );
 
-  let mut by_id: HashMap<(&str, test262_semantic::report::Variant), &test262_semantic::report::TestResult> =
-    HashMap::new();
+  let mut by_id: HashMap<
+    (&str, test262_semantic::report::Variant),
+    &test262_semantic::report::TestResult,
+  > = HashMap::new();
   for result in &results {
     by_id.insert((result.id.as_str(), result.variant), result);
   }

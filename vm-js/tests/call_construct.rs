@@ -1,6 +1,6 @@
 use vm_js::{
-  Budget, GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions,
-  VmHost, VmHostHooks,
+  Budget, GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmHost,
+  VmHostHooks, VmOptions,
 };
 
 fn return_123(

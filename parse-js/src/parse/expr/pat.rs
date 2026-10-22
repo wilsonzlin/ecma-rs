@@ -41,6 +41,22 @@ impl ParsePatternRules {
       ..*self
     }
   }
+
+  /// Rules for `FormalParameters` / `ArrowParameters`.
+  ///
+  /// ECMA-262 early errors (§15.1.1, §15.5.1, §15.8): a parameter list must not
+  /// *contain* a `YieldExpression` or `AwaitExpression`, even when the enclosing
+  /// function/generator/async body (or an arrow nested inside one) allows those
+  /// expressions. Binding-identifier restrictions (`yield_allowed` /
+  /// `await_allowed`) are left unchanged so sloppy-script `function f(yield){}`
+  /// and `(yield) => {}` remain legal outside generators.
+  pub fn for_formal_parameters(&self) -> ParsePatternRules {
+    Self {
+      yield_expr_allowed: false,
+      await_expr_allowed: false,
+      ..*self
+    }
+  }
 }
 
 pub fn is_valid_pattern_identifier(typ: TT, _rules: ParsePatternRules) -> bool {
@@ -97,10 +113,19 @@ impl<'a> Parser<'a> {
         return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
       }
       let name = p.string(t.loc);
+      // BindingIdentifier [Await]/[Yield]: StringValue checks catch escaped forms
+      // (`\u0061wait` / `yi\u0065ld`) that lex as Identifier, not KeywordAwait/Yield.
+      // Strict reserved / restricted names similarly key off StringValue.
+      let string_value = p.identifier_string_value(t.loc);
+      if (!ctx.rules.await_allowed && string_value == "await")
+        || (!ctx.rules.yield_allowed && string_value == "yield")
+      {
+        return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      }
       if p.is_strict_ecmascript()
         && p.is_strict_mode()
-        && (Parser::is_strict_mode_reserved_word(&name)
-          || Parser::is_strict_mode_restricted_binding_identifier(&name))
+        && (Parser::is_strict_mode_reserved_word(&string_value)
+          || Parser::is_strict_mode_restricted_binding_identifier(&string_value))
       {
         return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
       }

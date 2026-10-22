@@ -18,6 +18,7 @@ use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::LiteralStringCodeUnits;
 use crate::ast::node::Node;
+use crate::ast::node::StringLiteralContainsEscapes;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
@@ -100,7 +101,12 @@ impl<'a> Parser<'a> {
     let mut seen_constructor = false;
     let mut private_names: std::collections::HashMap<
       String,
-      (bool /*static*/, bool /*field_or_method*/, bool /*getter*/, bool /*setter*/),
+      (
+        bool, /*static*/
+        bool, /*field_or_method*/
+        bool, /*getter*/
+        bool, /*setter*/
+      ),
     > = std::collections::HashMap::new();
     loop {
       // Skip empty semicolons
@@ -188,7 +194,14 @@ impl<'a> Parser<'a> {
         };
 
         // Parse TypeScript modifiers in order:
-        // [accessibility] [abstract] [override] [static] [readonly]
+        // [declare] [accessibility] [abstract] [override] [static] [readonly]
+
+        // TypeScript: `declare` field / ambient member modifier.
+        // Error recovery: allow duplicate declare modifiers.
+        let mut declare_ = false;
+        while !p.is_strict_ecmascript() && p.consume_if(TT::KeywordDeclare).is_match() {
+          declare_ = true;
+        }
 
         // TypeScript: accessibility modifiers (public, private, protected)
         // Error recovery: allow duplicate modifiers
@@ -206,18 +219,36 @@ impl<'a> Parser<'a> {
           }
         }
 
-        // TypeScript: abstract modifier
-        // Error recovery: allow duplicate abstract modifiers
-        let mut abstract_ = ambient;
+        // TypeScript: abstract modifier (keyword only).
+        // Do NOT seed from `ambient`: abstract/`declare` class bodies pass
+        // `ambient=true` so members may omit method bodies, but concrete
+        // fields/methods in an `abstract class` are not themselves abstract.
+        // Error recovery: allow duplicate abstract modifiers.
+        let mut abstract_ = false;
         while p.consume_if(TT::KeywordAbstract).is_match() {
           abstract_ = true;
         }
+        // Body-less methods/accessors: explicit `abstract` OR ambient/abstract-class
+        // body OR `declare` member (no implementation).
+        let allow_no_body = abstract_ || ambient || declare_;
 
         // TypeScript: override modifier
         // Error recovery: allow duplicate override modifiers
         let mut override_ = false;
         while p.consume_if(TT::KeywordOverride).is_match() {
           override_ = true;
+        }
+
+        // Recovery: `async static …` (wrong order; tsc TS1029). Accept `async`
+        // before `static` so the checker can report the order error with both
+        // flags set, instead of treating `async` as a separate member name.
+        let mut async_before_static = false;
+        if p.peek().typ == TT::KeywordAsync {
+          let [_, next] = p.peek_n::<2>();
+          if next.typ == TT::KeywordStatic && !next.preceded_by_line_terminator {
+            p.consume(); // async
+            async_before_static = true;
+          }
         }
 
         // `static` must always come after other modifiers
@@ -241,7 +272,16 @@ impl<'a> Parser<'a> {
               p.new_target_allowed += 1;
               p.super_prop_allowed += 1;
               p.super_call_allowed = 0;
-              let body = p.stmts(ctx.non_top_level(), TT::BraceClose);
+              // ClassStaticBlock early errors: Identifier / LabelIdentifier "await"
+              // (and AwaitExpression) are forbidden; do not cross this boundary for
+              // outer async/module await permissions (test262 static-init-invalid-await).
+              let static_ctx = ctx.non_top_level().with_rules(ParsePatternRules {
+                await_allowed: false,
+                await_expr_allowed: false,
+                yield_allowed: false,
+                yield_expr_allowed: false,
+              });
+              let body = p.stmts(static_ctx, TT::BraceClose);
               p.in_iteration = prev_in_iteration;
               p.in_switch = prev_in_switch;
               p.new_target_allowed = prev_new_target_allowed;
@@ -264,6 +304,8 @@ impl<'a> Parser<'a> {
               optional: false,
               override_: false,
               definite_assignment: false,
+              declare_: false,
+              async_before_static: false,
               accessibility: None,
               type_annotation: None,
               val: ClassOrObjVal::StaticBlock(block),
@@ -348,7 +390,7 @@ impl<'a> Parser<'a> {
                 };
 
               // Now check for method/getter/setter or property initializer
-              let value = p.class_member_value(ctx, &key, static_, abstract_)?;
+              let value = p.class_member_value(ctx, &key, static_, allow_no_body)?;
 
               (key, value, definite_assignment, optional, type_annotation)
             }
@@ -394,10 +436,14 @@ impl<'a> Parser<'a> {
               };
 
             // Detect async methods, generators, and accessors.
+            // `async get` / `async set` are illegal (TS1042) but must parse so
+            // the checker can report the modifier error (privateNamesIncompatibleModifiers).
             let needs_special_handling = matches!(
               (t0.typ, t1.typ, t2.typ),
               (TT::KeywordAsync, TT::Asterisk, _)
                 | (TT::KeywordAsync, TT::BracketOpen, _)
+                | (TT::KeywordAsync, TT::KeywordGet, _)
+                | (TT::KeywordAsync, TT::KeywordSet, _)
                 | (TT::KeywordAsync, _, TT::ParenthesisOpen)
                 | (TT::KeywordAsync, _, TT::ChevronLeft)
                 | (TT::Asterisk, _, TT::ParenthesisOpen)
@@ -409,8 +455,13 @@ impl<'a> Parser<'a> {
 
             if needs_special_handling {
               // Use the original class_or_obj_member for these special cases
-              let (key, value) =
-                p.class_or_obj_member(ctx, TT::Equals, TT::Semicolon, &mut Asi::can(), abstract_)?;
+              let (key, value) = p.class_or_obj_member(
+                ctx,
+                TT::Equals,
+                TT::Semicolon,
+                &mut Asi::can(),
+                allow_no_body,
+              )?;
               (key, value, false, false, None)
             } else {
               // Parse class member with TypeScript syntax: key [!] [?] [: type] [= init]
@@ -432,7 +483,7 @@ impl<'a> Parser<'a> {
                 };
 
               // Now check for method/getter/setter or property initializer
-              let value = p.class_member_value(ctx, &key, static_, abstract_)?;
+              let value = p.class_member_value(ctx, &key, static_, allow_no_body)?;
 
               (key, value, definite_assignment, optional, type_annotation)
             }
@@ -449,6 +500,27 @@ impl<'a> Parser<'a> {
           }
         }
         let _ = p.consume_if(TT::Semicolon);
+        // Apply early `async` from `async static` recovery onto the method /
+        // generator / accessor function (consumed before `static` above).
+        let val = if async_before_static {
+          match value {
+            ClassOrObjVal::Method(mut method) => {
+              method.stx.func.stx.async_ = true;
+              ClassOrObjVal::Method(method)
+            }
+            ClassOrObjVal::Getter(mut getter) => {
+              getter.stx.func.stx.async_ = true;
+              ClassOrObjVal::Getter(getter)
+            }
+            ClassOrObjVal::Setter(mut setter) => {
+              setter.stx.func.stx.async_ = true;
+              ClassOrObjVal::Setter(setter)
+            }
+            other => other,
+          }
+        } else {
+          value
+        };
         Ok(ClassMember {
           decorators,
           key,
@@ -459,9 +531,11 @@ impl<'a> Parser<'a> {
           optional,
           override_,
           definite_assignment,
+          declare_,
+          async_before_static,
           accessibility,
           type_annotation,
-          val: value,
+          val,
         })
       })?;
 
@@ -540,7 +614,8 @@ impl<'a> Parser<'a> {
             unreachable!();
           };
 
-          let is_private_constructor = key.stx.tt == TT::PrivateMember && key.stx.key == "#constructor";
+          let is_private_constructor =
+            key.stx.tt == TT::PrivateMember && key.stx.key == "#constructor";
 
           match &member.stx.val {
             ClassOrObjVal::Prop(_) => {
@@ -600,7 +675,10 @@ impl<'a> Parser<'a> {
     Ok(if self.peek().typ == TT::BracketOpen {
       ClassOrObjKey::Computed({
         self.require(TT::BracketOpen).unwrap();
-        let key = self.expr(ctx, [TT::BracketClose])?;
+        // ComputedPropertyName: AssignmentExpression (no comma) — ECMA-262 §13.2.5.
+        // Precedence 2 is above Comma (1).
+        let key =
+          self.expr_with_min_prec(ctx, 2, [TT::BracketClose], &mut super::expr::Asi::no())?;
         self.require(TT::BracketClose)?;
         key
       })
@@ -626,7 +704,11 @@ impl<'a> Parser<'a> {
         TT::LiteralNumber => self.lit_num_val()?.to_string(),
         // There's no trailing `n`.
         TT::LiteralBigInt => self.lit_bigint_val()?.to_string(),
-        TT::PrivateMember => self.consume_as_string(),
+        TT::PrivateMember => {
+          let tok = self.peek();
+          self.report_bare_private_hash_if_needed(&tok);
+          self.consume_as_string()
+        }
         TT::Identifier => self.consume_as_string(),
         // Any keyword is allowed as a key.
         t if KEYWORDS_MAPPING.contains_key(&t) => self.consume_as_string(),
@@ -643,6 +725,11 @@ impl<'a> Parser<'a> {
       }
       if let Some(escape_loc) = legacy_escape {
         direct.assoc.set(LegacyOctalEscapeSequence(escape_loc));
+      }
+      if tt == TT::LiteralString
+        && crate::parse::expr::lit::raw_string_literal_contains_escapes(self.str(loc))
+      {
+        direct.assoc.set(StringLiteralContainsEscapes);
       }
       if tt == TT::LiteralNumber {
         let raw = self.str(loc);
@@ -697,7 +784,10 @@ impl<'a> Parser<'a> {
               await_expr_allowed: false,
               yield_expr_allowed: false,
             });
-            let parameters = p.func_params(fn_ctx)?;
+            let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
+            let allow_super_call = is_constructor && is_derived_class;
+            // Parameter defaults evaluate in the method/constructor binding environment.
+            let parameters = p.with_method_bindings(allow_super_call, |p| p.func_params(fn_ctx))?;
             // TypeScript: return type annotation
             let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
@@ -734,11 +824,7 @@ impl<'a> Parser<'a> {
                 let _ = p.consume_if(TT::Semicolon);
                 None
               } else {
-                let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
-                Some(
-                  p.parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
-                    .into(),
-                )
+                Some(p.parse_method_block_body(fn_ctx, allow_super_call)?.into())
               };
               Ok(body)
             })();
@@ -836,7 +922,9 @@ impl<'a> Parser<'a> {
         await_expr_allowed: is_async,
         yield_expr_allowed: is_generator,
       });
-      let parameters = p.func_params(fn_ctx)?;
+      let param_ctx = fn_ctx.with_rules(fn_ctx.rules.for_formal_parameters());
+      // Parameter defaults evaluate in the method binding environment.
+      let parameters = p.with_method_bindings(false, |p| p.func_params(param_ctx))?;
       // TypeScript: return type annotation - may be type predicate
       let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
         Some(p.type_expr_or_predicate(ctx)?)
@@ -1200,9 +1288,10 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        let default_value = p
-          .consume_if(TT::Equals)
-          .and_then(|| p.expr(setter_ctx, [TT::ParenthesisClose]))?;
+        // Setter parameter defaults evaluate in the method binding environment.
+        let default_value = p.consume_if(TT::Equals).and_then(|| {
+          p.with_method_bindings(false, |p| p.expr(setter_ctx, [TT::ParenthesisClose]))
+        })?;
         (pattern, type_annotation, default_value)
       };
       let param_loc = pattern.loc;
@@ -1440,7 +1529,9 @@ impl<'a> Parser<'a> {
               await_expr_allowed: is_async,
               yield_expr_allowed: is_generator,
             });
-            let parameters = p.func_params(fn_ctx)?;
+            let param_ctx = fn_ctx.with_rules(fn_ctx.rules.for_formal_parameters());
+            // Parameter defaults evaluate in the method binding environment.
+            let parameters = p.with_method_bindings(false, |p| p.func_params(param_ctx))?;
             // TypeScript: return type annotation
             let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
@@ -1543,19 +1634,17 @@ impl<'a> Parser<'a> {
     };
 
     // Async/generator methods can also have type parameters: async foo<T>(), *foo<T>(), async *foo<T>().
-    let async_method_has_type_params = if a.typ == TT::KeywordAsync
-      && c.typ == TT::ChevronLeft
-      && !b.preceded_by_line_terminator
-    {
-      let checkpoint = self.checkpoint();
-      self.consume(); // async
-      self.consume(); // key
-      let result = self.is_start_of_type_arguments();
-      self.restore_checkpoint(checkpoint);
-      result
-    } else {
-      false
-    };
+    let async_method_has_type_params =
+      if a.typ == TT::KeywordAsync && c.typ == TT::ChevronLeft && !b.preceded_by_line_terminator {
+        let checkpoint = self.checkpoint();
+        self.consume(); // async
+        self.consume(); // key
+        let result = self.is_start_of_type_arguments();
+        self.restore_checkpoint(checkpoint);
+        result
+      } else {
+        false
+      };
 
     let generator_method_has_type_params = if a.typ == TT::Asterisk && c.typ == TT::ChevronLeft {
       let checkpoint = self.checkpoint();
@@ -1606,6 +1695,20 @@ impl<'a> Parser<'a> {
       (TT::KeywordAsync, _, TT::ParenthesisOpen, _) if !b.preceded_by_line_terminator => {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
+      }
+      // Illegal `async get` / `async set` (TS1042): parse as accessor with async_
+      // stamped so the checker can report the modifier error.
+      (TT::KeywordAsync, TT::KeywordGet, _, _) if !b.preceded_by_line_terminator => {
+        self.consume(); // async
+        let (k, mut getter) = self.class_or_obj_getter_impl(ctx, abstract_)?;
+        getter.stx.func.stx.async_ = true;
+        (k, getter.into())
+      }
+      (TT::KeywordAsync, TT::KeywordSet, _, _) if !b.preceded_by_line_terminator => {
+        self.consume(); // async
+        let (k, mut setter) = self.class_or_obj_setter_impl(ctx, abstract_)?;
+        setter.stx.func.stx.async_ = true;
+        (k, setter.into())
       }
       // Async method with type parameters: `async foo<T>()`
       (TT::KeywordAsync, _, TT::ChevronLeft, _) if async_method_has_type_params => {

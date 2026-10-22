@@ -225,8 +225,9 @@ fn job_run_removes_roots_even_on_error() -> Result<(), VmError> {
     let mut scope = ctx.heap.scope();
     obj = scope.alloc_object()?;
   }
-  let mut job =
-    Job::new(JobKind::Promise, move |_ctx, _host| Err(VmError::Unimplemented("job failed")));
+  let mut job = Job::new(JobKind::Promise, move |_ctx, _host| {
+    Err(VmError::Unimplemented("job failed"))
+  });
   job.add_root(&mut ctx, Value::Object(obj))?;
   host.host_enqueue_promise_job(job, None);
 

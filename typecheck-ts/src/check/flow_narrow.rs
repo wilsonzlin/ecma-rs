@@ -459,9 +459,25 @@ pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
 }
 
 /// Narrow a variable by a typeof comparison (e.g. `typeof x === "string"`).
-pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId, TypeId) {
+///
+/// `expander` is used only to *classify* `TypeKind::Ref` arms (numeric enums
+/// expand to `number` and must match `typeof … === "number"`). The original
+/// member type is kept in the yes/no sets so `var y: Color` still unifies with
+/// the narrowed enum ref (`TypeGuardWithEnumUnion.ts`).
+pub fn narrow_by_typeof(
+  ty: TypeId,
+  target: &str,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
-  fn matches_typeof(kind: &TypeKind, target: &str, store: &TypeStore) -> bool {
+  fn matches_typeof(
+    ty: TypeId,
+    target: &str,
+    store: &TypeStore,
+    expander: Option<&dyn RelateTypeExpander>,
+  ) -> bool {
+    let kind = store.type_kind(ty);
     match kind {
       TypeKind::String | TypeKind::StringLiteral(_) => target == "string",
       TypeKind::Number | TypeKind::NumberLiteral(_) => target == "number",
@@ -471,9 +487,26 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
       TypeKind::Callable { .. } => target == "function",
       TypeKind::Undefined => target == "undefined",
       TypeKind::Null => target == "object",
-      TypeKind::Object(_) | TypeKind::Array { .. } | TypeKind::Ref { .. } => target == "object",
+      TypeKind::Object(_) | TypeKind::Array { .. } => target == "object",
+      // Expanded enum / alias refs often produce unions (numeric enums lower
+      // to their member literal union): match when any constituent matches.
+      TypeKind::Union(members) => members
+        .iter()
+        .any(|m| matches_typeof(*m, target, store, expander)),
+      TypeKind::Ref { .. } => {
+        // Expand enum / alias refs for classification only. Numeric enums are
+        // stored as `Ref(Color)` but lower to `number`; without expansion they
+        // were misclassified as `typeof === "object"`.
+        let mut seen = HashSet::new();
+        let mut budget = 16usize;
+        let expanded = expand_ref_no_progress_guard(ty, store, expander, &mut seen, &mut budget);
+        if expanded != ty {
+          return matches_typeof(expanded, target, store, expander);
+        }
+        target == "object"
+      }
       TypeKind::Intrinsic { kind, ty } => match kind {
-        IntrinsicKind::NoInfer => matches_typeof(&store.type_kind(*ty), target, store),
+        IntrinsicKind::NoInfer => matches_typeof(ty, target, store, expander),
         IntrinsicKind::BuiltinIteratorReturn => false,
         _ => target == "string",
       },
@@ -487,7 +520,7 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        if matches_typeof(&store.type_kind(member), target, store) {
+        if matches_typeof(member, target, store, expander) {
           yes.push(member);
         } else {
           no.push(member);
@@ -499,7 +532,7 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
     TypeKind::Intrinsic {
       kind: IntrinsicKind::NoInfer,
       ty: operand,
-    } => narrow_by_typeof(operand, target, store),
+    } => narrow_by_typeof(operand, target, store, expander),
     TypeKind::Intrinsic {
       kind: IntrinsicKind::BuiltinIteratorReturn,
       ..
@@ -513,12 +546,15 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
         "bigint" => prim.bigint,
         "symbol" => prim.symbol,
         "undefined" => prim.undefined,
+        // tsc: `typeof u === "object"` on `unknown` → `object | null`.
+        // Approximate `object` with `EmptyObject` (non-primitive stand-in).
+        "object" => store.union(vec![store.intern_type(TypeKind::EmptyObject), prim.null]),
         _ => return (ty, ty),
       };
       (yes, ty)
     }
     _ => {
-      if matches_typeof(&store.type_kind(ty), target, store) {
+      if matches_typeof(ty, target, store, expander) {
         (ty, primitives.never)
       } else {
         (primitives.never, ty)
@@ -701,6 +737,65 @@ pub fn narrow_by_in_check(
   let mut seen = HashSet::new();
   let mut budget = 64usize;
   narrow_by_in_check_inner(ty, prop, store, expander, &mut seen, &mut budget)
+}
+
+/// Narrow by `#priv in x` (tsc `narrowTypeByPrivateIdentifierInInExpression` /
+/// `getNarrowedType(..., checkDerived=true)`).
+///
+/// - `any` / `unknown` → true: `class_ty`, false: preserve
+/// - subtype of `class_ty` → true: keep, false: `never`
+/// - supertype of `class_ty` → true: `class_ty`, false: keep
+/// - unrelated singleton → true: `ty & class_ty`, false: keep (`Bar` → `Bar & Foo`)
+/// - unrelated union member → true: `never`, false: keep (`Foo | Bar` → `Foo` / `Bar`)
+pub fn narrow_by_private_in(
+  ty: TypeId,
+  class_ty: TypeId,
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (y, n) = narrow_by_private_in_member(member, class_ty, store, relate, true);
+        if y != primitives.never {
+          yes.push(y);
+        }
+        if n != primitives.never {
+          no.push(n);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    _ => narrow_by_private_in_member(ty, class_ty, store, relate, false),
+  }
+}
+
+fn narrow_by_private_in_member(
+  ty: TypeId,
+  class_ty: TypeId,
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  in_union: bool,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Any | TypeKind::Unknown => (class_ty, ty),
+    TypeKind::Never => (primitives.never, primitives.never),
+    _ => {
+      if relate.is_assignable(ty, class_ty) {
+        (ty, primitives.never)
+      } else if relate.is_assignable(class_ty, ty) {
+        (class_ty, ty)
+      } else if in_union {
+        (primitives.never, ty)
+      } else {
+        (store.intersection(vec![ty, class_ty]), ty)
+      }
+    }
+  }
 }
 
 fn narrow_by_in_check_inner(

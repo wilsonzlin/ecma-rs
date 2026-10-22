@@ -135,6 +135,7 @@ pub fn var_decl_stmt(
   };
   let decl = VarDecl {
     export,
+    declare: false,
     mode,
     declarators: vec![declarator],
   };

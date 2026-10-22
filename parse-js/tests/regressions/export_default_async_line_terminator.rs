@@ -11,7 +11,11 @@ fn strict_module_opts() -> ParseOptions {
 
 #[test]
 fn export_default_async_line_terminator_treats_async_as_expression() {
-  let ast = parse_with_options("export default async\nfunction f() {}", strict_module_opts()).unwrap();
+  let ast = parse_with_options(
+    "export default async\nfunction f() {}",
+    strict_module_opts(),
+  )
+  .unwrap();
   assert_eq!(ast.stx.body.len(), 2);
 
   match ast.stx.body[0].stx.as_ref() {
@@ -33,11 +37,8 @@ fn export_default_async_line_terminator_treats_async_as_expression() {
 
 #[test]
 fn export_default_async_without_line_terminator_is_async_function_decl() {
-  let ast = parse_with_options(
-    "export default async function f() {}",
-    strict_module_opts(),
-  )
-  .unwrap();
+  let ast =
+    parse_with_options("export default async function f() {}", strict_module_opts()).unwrap();
   assert_eq!(ast.stx.body.len(), 1);
 
   match ast.stx.body[0].stx.as_ref() {
@@ -104,11 +105,7 @@ fn export_default_async_comment_without_newline_is_async_function_decl() {
 
 #[test]
 fn export_async_comment_without_newline_is_async_function_decl() {
-  let ast = parse_with_options(
-    "export async/*ok*/function f() {}",
-    strict_module_opts(),
-  )
-  .unwrap();
+  let ast = parse_with_options("export async/*ok*/function f() {}", strict_module_opts()).unwrap();
   assert_eq!(ast.stx.body.len(), 1);
 
   match ast.stx.body[0].stx.as_ref() {
@@ -124,9 +121,5 @@ fn export_async_comment_without_newline_is_async_function_decl() {
 
 #[test]
 fn export_async_comment_with_newline_is_rejected() {
-  assert!(parse_with_options(
-    "export async/*\n*/function f() {}",
-    strict_module_opts()
-  )
-  .is_err());
+  assert!(parse_with_options("export async/*\n*/function f() {}", strict_module_opts()).is_err());
 }

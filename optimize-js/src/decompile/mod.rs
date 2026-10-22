@@ -299,6 +299,7 @@ impl<'a> FunctionDecompiler<'a> {
 
     Some(node(Stmt::VarDecl(node(VarDecl {
       export: false,
+      declare: false,
       mode: self.decl_mode,
       declarators,
     }))))
@@ -356,6 +357,7 @@ impl<'a> FunctionDecompiler<'a> {
       }))),
       VarInit::Declare(mode) => node(Stmt::VarDecl(node(VarDecl {
         export: false,
+        declare: false,
         mode,
         declarators: vec![VarDeclarator {
           pattern: node(PatDecl {
@@ -430,6 +432,7 @@ impl<'a> FunctionDecompiler<'a> {
 
     let state_decl = node(Stmt::VarDecl(node(VarDecl {
       export: false,
+      declare: false,
       mode: self.decl_mode,
       declarators: vec![VarDeclarator {
         pattern: node(PatDecl {

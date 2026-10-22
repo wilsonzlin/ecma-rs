@@ -61,10 +61,13 @@ impl ProgramState {
         .get(&iface_def)
         .copied()
         .or_else(|| {
-          self.def_data.get(&iface_def).and_then(|data| match &data.kind {
-            DefKind::Interface(interface) => Some(interface.typ),
-            _ => None,
-          })
+          self
+            .def_data
+            .get(&iface_def)
+            .and_then(|data| match &data.kind {
+              DefKind::Interface(interface) => Some(interface.typ),
+              _ => None,
+            })
         })
         .unwrap_or(prim.unknown);
       let Some(ty) = store.contains_type_id(ty).then_some(store.canon(ty)) else {

@@ -1,3 +1,4 @@
+use hir_js::LocalKind;
 use std::collections::HashMap;
 use std::sync::Arc;
 use typecheck_ts::{codes, FileKey, Host, HostError, Program, TextRange};
@@ -790,33 +791,50 @@ fn shadowed_bindings_map_to_distinct_initializers() {
   );
 
   let file_id = program.file_id(&key).expect("file id");
+  // Module-level `value` keeps a DefId + initializer body; the shadowed
+  // body-local `value` is LocalId-only.
   let mut inits: Vec<_> = program
     .definitions_in_file(file_id)
     .into_iter()
     .filter(|def| program.def_name(*def).as_deref() == Some("value"))
     .filter_map(|def| program.var_initializer(def))
     .collect();
-  // `definitions_in_file` includes both the binding (`Var`) and its enclosing
-  // `VarDeclarator` definition. Both map to the same initializer body/expression,
-  // so normalize to distinct initializers before asserting.
   inits.sort_by_key(|init| (init.body.0, init.expr.0));
   inits.dedup_by_key(|init| (init.body, init.expr));
-  assert_eq!(inits.len(), 2, "expected two distinct value initializers");
-  inits.sort_by_key(|init| init.span.map(|span| span.start).unwrap_or(u32::MAX));
+  assert_eq!(
+    inits.len(),
+    1,
+    "expected one module-level value initializer"
+  );
+  let module_init = inits[0];
+  let module_span = program
+    .expr_span(module_init.body, module_init.expr)
+    .expect("module expr span");
+  let module_text = &source[module_span.range.start as usize..module_span.range.end as usize];
+  assert_eq!(module_text, "1");
 
-  let inner_init = inits[0];
-  let outer_init = inits[1];
-  assert_ne!(inner_init.body, outer_init.body);
-  let inner_span = program
-    .expr_span(inner_init.body, inner_init.expr)
-    .expect("inner expr span");
-  let outer_span = program
-    .expr_span(outer_init.body, outer_init.expr)
-    .expect("outer expr span");
-  let inner_text = &source[inner_span.range.start as usize..inner_span.range.end as usize];
-  let outer_text = &source[outer_span.range.start as usize..outer_span.range.end as usize];
-  assert_eq!(inner_text, "2");
-  assert_eq!(outer_text, "1");
+  let lowered = program.hir_lowered(file_id).expect("hir");
+  let outer_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("outer"))
+    .expect("outer");
+  let outer_body = program.body_of_def(outer_def).expect("outer body");
+  let body = lowered.body(outer_body).expect("hir body");
+  let (local_id, _) = body
+    .locals_with_kind(LocalKind::Var)
+    .find(|(_, local)| lowered.names.resolve(local.name) == Some("value"))
+    .expect("body-local value");
+  let local_ty = program.type_of_local(outer_body, local_id);
+  assert_eq!(program.display_type(local_ty).to_string(), "2");
+  let module_ty = program.type_of_def(
+    program
+      .definitions_in_file(file_id)
+      .into_iter()
+      .find(|def| program.def_name(*def).as_deref() == Some("value"))
+      .expect("module value"),
+  );
+  assert_eq!(program.display_type(module_ty).to_string(), "1");
 }
 
 #[test]

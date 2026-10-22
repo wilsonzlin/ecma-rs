@@ -36,8 +36,11 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
   match raw.trim() {
     // Cannot find name 'x'.
     "TC0005" => Some(&[2304]),
+    "TS2304" => Some(&[2304]),
     // Object literal may only specify known properties...
+    // Historical TC0006; checker now emits TS2353 directly.
     "TC0006" => Some(&[2353]),
+    "TS2353" => Some(&[2353]),
     // Type is not assignable to type...
     //
     // Used for general assignability checks; `tsc` uses different codes for
@@ -56,12 +59,15 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
     // Module '"..."' has no exported member '...'.
     "TC1002" => Some(&[2305]),
     // Expected N arguments, but got M.
+    // Historical TC1006; checker now emits TS2554 directly.
     "TC1006" => Some(&[2554]),
+    "TS2554" => Some(&[2554]),
     // Call errors:
-    // - No overload matches this call.
-    // - This expression is not callable.
+    // - This expression is not callable / not constructable.
     // - Some call-site constraint failures are reported by `tsc` as TS2345.
+    // Multi-overload misses now emit TS2769 directly (see NO_OVERLOAD_MATCHES).
     "TC2000" => Some(&[2345, 2349, 2769]),
+    "TS2769" => Some(&[2769]),
     // Multiple applicable overloads / ambiguity.
     "TC2001" => Some(&[2769]),
     // Cannot find name 'Foo' (type reference).
@@ -82,6 +88,12 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
     "TC3004" => Some(&[2636]),
     // `export =` combined with other exports.
     "BIND1005" => Some(&[2309]),
+    // parse-js `RequiredTokenNotFound` ↔ tsc TS1005 `'{0}' expected.`
+    "PS0013" => Some(&[1005]),
+    // parse-js bare `#` PrivateIdentifier ↔ tsc TS1127 `Invalid character.`
+    "PS0030" => Some(&[1127]),
+    // parse-js `VariableDeclarationExpected` ↔ tsc TS1134.
+    "PS0031" => Some(&[1134]),
     _ => None,
   }
 }
@@ -118,6 +130,7 @@ mod tests {
     assert!(rust_code_matches_tsc("TC1001", 2688));
     assert!(rust_code_matches_tsc("TC1002", 2305));
     assert!(rust_code_matches_tsc("TC1006", 2554));
+    assert!(rust_code_matches_tsc("TS2554", 2554));
     assert!(rust_code_matches_tsc("TC2010", 2307));
     assert!(rust_code_matches_tsc("TC2011", 2304));
     assert!(rust_code_matches_tsc("TC2012", 2850));
@@ -128,5 +141,8 @@ mod tests {
     assert!(rust_code_matches_tsc("TC3003", 2503));
     assert!(rust_code_matches_tsc("TC3004", 2636));
     assert!(rust_code_matches_tsc("BIND1005", 2309));
+    assert!(rust_code_matches_tsc("PS0013", 1005));
+    assert!(rust_code_matches_tsc("PS0030", 1127));
+    assert!(rust_code_matches_tsc("PS0031", 1134));
   }
 }

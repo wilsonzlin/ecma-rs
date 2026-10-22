@@ -1,6 +1,4 @@
-use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
-};
+use vm_js::{Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError};
 
 fn data_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {

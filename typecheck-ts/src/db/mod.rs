@@ -5,14 +5,14 @@
 //! end-to-end, but consumers should treat them as unstable internals.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::files::FileOrigin;
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
-use crate::{BodyCheckResult, BodyId, DefId};
+use crate::{BodyId, DefId};
 use diagnostics::{Diagnostic, FileId};
 use salsa::Setter;
 use types_ts_interned as tti;
@@ -28,7 +28,7 @@ pub mod types;
 
 pub use inputs::CancellationToken;
 pub use queries::body_check::{
-  set_parallel_tracker, BodyCheckContext, BodyCheckDb, BodyInfo, ParallelTracker,
+  check_body, set_parallel_tracker, BodyCheckContext, BodyContextHandle, BodyInfo, ParallelTracker,
 };
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
@@ -85,7 +85,10 @@ pub trait Db: salsa::Database + Send + 'static {
   ) -> Option<inputs::ModuleResolutionInput>;
   fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput>;
   fn profiler(&self) -> Option<QueryStatsCollector>;
-  fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>>;
+  fn body_context_input(&self) -> inputs::BodyContextInput;
+  /// Instrumentation hook: called once per actual (non-memoized) execution of
+  /// the tracked body-check query.
+  fn record_body_check(&self);
 }
 
 #[salsa::db]
@@ -104,7 +107,9 @@ pub struct Database {
   module_resolutions: BTreeMap<FileId, BTreeMap<Arc<str>, inputs::ModuleResolutionInput>>,
   extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
-  body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
+  body_context_input: Option<inputs::BodyContextInput>,
+  /// Count of actual body-check query executions (shared across clones).
+  body_check_count: Arc<AtomicUsize>,
 }
 
 impl Default for Database {
@@ -123,7 +128,8 @@ impl Default for Database {
       module_resolutions: BTreeMap::new(),
       extra_diagnostics: None,
       profiler: None,
-      body_results: BTreeMap::new(),
+      body_context_input: None,
+      body_check_count: Arc::new(AtomicUsize::new(0)),
     };
     db.initialize_defaults();
     db
@@ -230,11 +236,14 @@ impl Db for Database {
     self.profiler.clone()
   }
 
-  fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
+  fn body_context_input(&self) -> inputs::BodyContextInput {
     self
-      .body_results
-      .get(&body)
-      .map(|input| input.result(self).clone())
+      .body_context_input
+      .expect("body context input must be initialized")
+  }
+
+  fn record_body_check(&self) {
+    self.body_check_count.fetch_add(1, Ordering::Relaxed);
   }
 }
 
@@ -264,6 +273,10 @@ impl Database {
       self,
       inputs::CancellationToken::new(Arc::default()),
     ));
+    // Create the body-context input eagerly so tracked queries always register
+    // a dependency on it (an input created after a query first runs would not
+    // retroactively appear in that query's dependency set).
+    self.body_context_input = Some(inputs::BodyContextInput::new(self, None));
   }
 
   /// Clone the database handle for use on another thread.
@@ -547,26 +560,25 @@ impl Database {
     }
   }
 
-  /// Cache a checked body result for reuse by span and type queries.
-  pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
-    if let Some(existing) = self.body_results.get(&body).copied() {
-      existing.set_body(self).to(body);
-      existing.set_result(self).to(result);
-    } else {
-      let input = inputs::BodyResultInput::new(self, body, result);
-      self.body_results.insert(body, input);
-    }
+  /// Publish (or clear, with `None`) the program-wide body-check context.
+  ///
+  /// This is the single write channel between the imperative declaration
+  /// layer (`ProgramState`) and the tracked body-check query. Publishing an
+  /// environment that compares semantically equal to the previous one lets
+  /// salsa backdate the context and keep memoized body results alive.
+  pub fn set_body_context(&mut self, context: Option<BodyContextHandle>) {
+    let handle = self
+      .body_context_input
+      .expect("body context input must be initialized");
+    handle.set_context(self).to(context);
   }
 
-  /// Drop all cached body results.
+  /// Number of actual body-check query executions since construction.
   ///
-  /// `BodyCheckResult`s are seeded into the salsa database by the `Program`
-  /// facade so offset-based queries (e.g. `type_at`) can reuse the results
-  /// without invoking the checker from within salsa. When the program inputs
-  /// change, these cached results can become stale, so callers should clear
-  /// them as part of their reset/invalidation flow.
-  pub fn clear_body_results(&mut self) {
-    self.body_results.clear();
+  /// Memoized reads do not increment this counter, so tests can assert
+  /// incremental behavior ("an unrelated edit re-checks nothing").
+  pub fn body_check_count(&self) -> usize {
+    self.body_check_count.load(Ordering::Relaxed)
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {

@@ -104,7 +104,10 @@ fn object_property_tracing_keeps_referenced_objects_alive() -> Result<(), VmErro
       scope.heap().is_valid_object(child),
       "child should survive via property"
     );
-    assert!(!scope.heap().is_valid_object(dead), "dead should be collected");
+    assert!(
+      !scope.heap().is_valid_object(dead),
+      "dead should be collected"
+    );
   }
 
   Ok(())

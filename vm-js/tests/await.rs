@@ -139,11 +139,7 @@ fn await_non_promise_value_queues_microtask() {
 
   assert_eq!(
     host.calls,
-    vec![(
-      on_fulfilled,
-      Value::Undefined,
-      vec![Value::Number(123.0)]
-    )]
+    vec![(on_fulfilled, Value::Undefined, vec![Value::Number(123.0)])]
   );
 }
 

@@ -7,7 +7,7 @@ use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData, ParenthesizedExpr};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{ForBody, ForInOfLhs, ForTripleStmtInit, SwitchBranch};
-use parse_js::ast::stmt::{Stmt, TryStmt};
+use parse_js::ast::stmt::{ReturnStmt, Stmt, TryStmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
@@ -179,6 +179,42 @@ fn rewrite_stmt(
           out.push(live_stmt);
         }
         return out;
+      }
+
+      // `if (t) return A; else return B;` -> `return t ? A : B;`. Recursion has
+      // already run on both branches, so nested `else if (...) return ...` chains
+      // collapse bottom-up into return-ternaries and fold into a single `return`
+      // here. Only value-bearing returns qualify: a bare `return;` (which yields
+      // `undefined`) is left alone so we never synthesize a `void 0` operand,
+      // keeping this rewrite unconditionally size-reducing.
+      if if_stmt.stx.alternate.as_ref().is_some_and(is_value_return)
+        && is_value_return(&if_stmt.stx.consequent)
+      {
+        *changed = true;
+        let stx = *if_stmt.stx;
+        let cons_value = take_return_value(stx.consequent);
+        let alt_value = take_return_value(stx.alternate.expect("guarded above"));
+        let ternary = Node::new(
+          loc,
+          Expr::Cond(Node::new(
+            loc,
+            CondExpr {
+              test: stx.test,
+              consequent: cons_value,
+              alternate: alt_value,
+            },
+          )),
+        );
+        return vec![new_node(
+          loc,
+          assoc,
+          Stmt::Return(Node::new(
+            loc,
+            ReturnStmt {
+              value: Some(ternary),
+            },
+          )),
+        )];
       }
 
       // `if (cond) a(); else b();` -> `cond ? a() : b();`
@@ -607,6 +643,32 @@ fn push_unique(out: &mut Vec<String>, name: &str) {
   }
 }
 
+/// Whether `stmt` (possibly a single-statement block wrapping it) is a
+/// `return <value>;`. Single-statement blocks are transparent here: they hold no
+/// other, possibly block-scoped, declarations, so the wrapped return is
+/// equivalent to the bare return for the purpose of the ternary rewrite.
+fn is_value_return(stmt: &Node<Stmt>) -> bool {
+  match stmt.stx.as_ref() {
+    Stmt::Return(ret) => ret.stx.value.is_some(),
+    Stmt::Block(block) if block.stx.body.len() == 1 => is_value_return(&block.stx.body[0]),
+    _ => false,
+  }
+}
+
+fn take_return_value(stmt: Node<Stmt>) -> Node<Expr> {
+  match *stmt.stx {
+    Stmt::Return(ret) => ret.stx.value.expect("is_value_return guarantees a value"),
+    Stmt::Block(mut block) => take_return_value(
+      block
+        .stx
+        .body
+        .pop()
+        .expect("is_value_return guarantees a single statement"),
+    ),
+    _ => unreachable!("take_return_value called on a non-value-return statement"),
+  }
+}
+
 fn build_hoisted_var_decl(loc: Loc, names: Vec<String>) -> Node<Stmt> {
   let declarators = names
     .into_iter()
@@ -632,6 +694,7 @@ fn build_hoisted_var_decl(loc: Loc, names: Vec<String>) -> Node<Stmt> {
       loc,
       VarDecl {
         export: false,
+        declare: false,
         mode: VarDeclMode::Var,
         declarators,
       },

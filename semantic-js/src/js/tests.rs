@@ -1065,6 +1065,120 @@ fn switch_case_body_use_before_declaration_is_in_tdz() {
   assert_eq!(slice_range(source, &diagnostics[0]), "a");
 }
 
+/// ECMA-262 §14.12.1 SwitchStatement early errors: LexicallyDeclaredNames of
+/// CaseBlock must be unique and must not intersect VarDeclaredNames. All case
+/// / default clauses share one lexical environment.
+fn assert_switch_caseblock_early_error(source: &str, file: u32, code: &str) {
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap_or_else(|e| panic!("parse failed for `{source}`: {e:?}"));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(file));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == code),
+    "expected {code} for `{source}`, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_duplicate_let() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: let f; default: let f }",
+    200,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_let_var_conflict() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: var f; default: let f }",
+    201,
+    "BIND0002",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_duplicate_class() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: class f {} default: class f {} }",
+    202,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_duplicate_async_function_in_sloppy() {
+  // AsyncFunctionDeclaration is always lexical (Annex B.3.2 does not apply).
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: async function f() {} default: async function f() {} }",
+    203,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_duplicate_generator_in_sloppy() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: function* f() {} default: function* f() {} }",
+    204,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_async_function_vs_let() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: async function f() {} default: let f }",
+    205,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_ordinary_function_vs_let_in_sloppy() {
+  assert_switch_caseblock_early_error(
+    "switch (0) { case 1: function f() {} default: let f }",
+    206,
+    "BIND0002",
+  );
+}
+
+#[test]
+fn switch_caseblock_rejects_duplicate_ordinary_function_in_strict() {
+  assert_switch_caseblock_early_error(
+    "'use strict'; switch (0) { case 1: function f() {} default: function f() {} }",
+    207,
+    "BIND0001",
+  );
+}
+
+#[test]
+fn switch_caseblock_allows_duplicate_ordinary_function_in_sloppy() {
+  // Annex B.3.2: two ordinary FunctionDeclarations in a CaseBlock are not an
+  // early error in non-strict code (test262 marks the strict-only variants).
+  let source = "switch (0) { case 1: function f() {} default: function f() {} }";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(208));
+  assert!(
+    diagnostics
+      .iter()
+      .all(|d| d.code.as_str() != "BIND0001" && d.code.as_str() != "BIND0002"),
+    "unexpected early errors for Annex B switch functions: {diagnostics:?}"
+  );
+}
+
 #[test]
 fn for_of_lexicals_are_not_visible_outside_loop() {
   let mut ast = parse("for (let a of [1]) {} a;").unwrap();
@@ -1649,6 +1763,315 @@ fn strict_for_in_assignment_to_eval_is_reported() {
 }
 
 #[test]
+fn const_without_initializer_is_reported() {
+  let source = "const a;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(400));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0015"),
+    "expected BIND0015, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn const_in_for_triple_head_without_initializer_is_reported() {
+  let source = "for (const a;;) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(401));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0015"),
+    "expected BIND0015, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn const_with_initializer_is_accepted() {
+  let source = "const a = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(402));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0015"),
+    "unexpected BIND0015, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn const_without_initializer_allowed_in_for_of_head() {
+  // A `for-of`/`for-in` head binds per iteration and needs no initializer.
+  let source = "for (const a of [1]) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(403));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0015"),
+    "unexpected BIND0015, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn let_as_lexical_binding_name_is_reported() {
+  let source = "let let;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(404));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0016"),
+    "expected BIND0016, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn let_as_const_binding_name_is_reported() {
+  let source = "const let = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(405));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0016"),
+    "expected BIND0016, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn let_binding_name_in_for_of_head_is_reported() {
+  let source = "for (let let of a);";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(406));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0016"),
+    "expected BIND0016, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn var_named_let_is_accepted_in_sloppy_mode() {
+  // `let` is only a reserved BindingIdentifier for lexical declarations; a
+  // sloppy-mode `var let` is legal.
+  let source = "var let;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(407));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0016"),
+    "unexpected BIND0016, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn duplicate_proto_data_property_is_reported() {
+  let source = "({ __proto__: 1, __proto__: 2 })";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(408));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0017"),
+    "expected BIND0017, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn duplicate_proto_mixed_string_and_identifier_is_reported() {
+  let source = "({ \"__proto__\": null, __proto__: null })";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(409));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0017"),
+    "expected BIND0017, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn single_proto_data_property_is_accepted() {
+  let source = "({ __proto__: null, x: 1 })";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(410));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0017"),
+    "unexpected BIND0017, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn proto_shorthand_and_method_do_not_count() {
+  // Shorthand `__proto__` and a computed `["__proto__"]` are not colon-form
+  // data properties, so they do not trigger the duplicate-`__proto__` error.
+  let source = "var __proto__ = 1; ({ __proto__, [\"__proto__\"]: 2 })";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(411));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0017"),
+    "unexpected BIND0017, got {diagnostics:?}"
+  );
+}
+
+// --- Module ExportedNames / ExportedBindings (ECMA-262 §16.2.1.1) ---
+//
+// V8/`node --check` evidence (2026-07-23): `export const a = 1; export {a}` is a
+// Syntax Error — declaration exports and export lists both contribute to
+// ExportedNames, so the second `a` is a duplicate even though there is only one
+// local binding. Same for `export {a}; export function a(){}` / `export var a`
+// twice. Legal: `export {a as b, a as c}` (same local, distinct exported names);
+// `export {x} from "m"` / `export * from "m"` (no local ExportedBindings).
+
+#[test]
+fn duplicate_export_list_name_is_reported() {
+  let source = "let a; export {a, a};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(420));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+  let diag = diagnostics
+    .iter()
+    .find(|d| d.code.as_str() == "BIND0018")
+    .unwrap();
+  assert_eq!(slice_range(source, diag), "a");
+  assert!(
+    diag.labels.iter().any(|l| l.message.contains("previous")),
+    "expected secondary label on first export, got {diag:?}"
+  );
+}
+
+#[test]
+fn duplicate_export_via_as_alias_is_reported() {
+  let source = "let a, b; export {a, b as a};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(421));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn duplicate_default_export_is_reported() {
+  let source = "export default 1; export default 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(422));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn declaration_and_export_list_duplicate_exported_name() {
+  // Spec + V8: ExportedNames contains `a` twice → Syntax Error (not merely a
+  // second reference to the same binding).
+  let source = "export const a = 1; export {a};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(423));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0019"),
+    "local `a` is declared; must not emit BIND0019, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn export_list_then_declaration_duplicate_exported_name() {
+  let source = "export {a}; export function a() {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(424));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn export_var_twice_is_duplicate_exported_name() {
+  let source = "export var a; export var a;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(425));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn same_local_distinct_exported_names_is_legal() {
+  let source = "const a = 1; export {a as b, a as c};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(426));
+  assert!(
+    diagnostics
+      .iter()
+      .all(|d| d.code.as_str() != "BIND0018" && d.code.as_str() != "BIND0019"),
+    "unexpected module-export diagnostic, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn reexport_does_not_require_local_binding() {
+  let source = r#"export {x} from "m"; export * from "n"; export * as ns from "o";"#;
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(427));
+  assert!(
+    diagnostics
+      .iter()
+      .all(|d| d.code.as_str() != "BIND0018" && d.code.as_str() != "BIND0019"),
+    "unexpected module-export diagnostic, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn undeclared_export_binding_is_reported() {
+  let source = "export {a};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(428));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0019"),
+    "expected BIND0019, got {diagnostics:?}"
+  );
+  let diag = diagnostics
+    .iter()
+    .find(|d| d.code.as_str() == "BIND0019")
+    .unwrap();
+  assert_eq!(slice_range(source, diag), "a");
+}
+
+#[test]
+fn undeclared_export_local_with_declared_alias_target() {
+  // `b` is local ExportedBindings; exported name `a` colliding with a local
+  // `var a` does not satisfy the local-binding requirement for `b`.
+  let source = "var a; export {b as a};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(429));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0019"),
+    "expected BIND0019, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn module_export_early_errors_survive_runtime_bind() {
+  // True early errors — unlike BIND0003, `bind_js_for_runtime` must keep them.
+  let source = "export {a}; export default 1; export default 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Module, FileId(430));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0019"),
+    "expected BIND0019 from runtime bind, got {diagnostics:?}"
+  );
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0018"),
+    "expected BIND0018 from runtime bind, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn duplicate_import_binding_is_already_covered_by_bind0001() {
+  let source = r#"import {a, a} from "m";"#;
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(431));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0001"),
+    "expected BIND0001 for duplicate import binding, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn strict_with_statement_is_reported() {
   let source = "'use strict'; with({}){}";
   let mut ast = parse(source).unwrap();
@@ -1907,10 +2330,93 @@ fn object_literal_generator_method_duplicate_parameters_are_reported_in_sloppy_s
 }
 
 #[test]
-fn object_literal_methods_are_strict_mode_for_reserved_words() {
+fn sloppy_object_literal_method_allows_yield_parameter() {
+  // Object methods are not automatically strict (unlike class bodies).
+  // ECMA-262 §13.1.1 / §15.4 — `yield` as a BindingIdentifier is only banned
+  // in strict code (or generator formal parameters, which the parser rejects).
   let source = "({ a(yield){} });";
   let mut ast = parse_js_script(source);
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(202));
+  assert!(
+    diagnostics
+      .iter()
+      .all(|d| d.code.as_str() != "BIND0013" && d.code.as_str() != "BIND0005"),
+    "unexpected strict-mode param diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn sloppy_object_literal_method_allows_eval_parameter() {
+  let source = "({ a(eval){} });";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(203));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0005"),
+    "unexpected BIND0005, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn escaped_use_strict_is_not_a_directive() {
+  // ECMA-262 §11.2.1 — `'use\x20strict'` is not a Use Strict Directive.
+  let source = "'use\\x20strict'; with(x){}";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(210));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0007"),
+    "escaped directive must not enable strict/with rejection: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn real_use_strict_still_rejects_with() {
+  let source = "'use strict'; with(x){}";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(211));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0007"),
+    "expected BIND0007, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn sloppy_setter_allows_yield_and_eval_parameters() {
+  for (source, file) in [("({set a(yield){}})", 212u32), ("({set a(eval){}})", 213)] {
+    let mut ast = parse_js_script(source);
+    let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(file));
+    assert!(
+      diagnostics
+        .iter()
+        .all(|d| { d.code.as_str() != "BIND0013" && d.code.as_str() != "BIND0005" }),
+      "sloppy setter params must be accepted ({source}): {diagnostics:?}"
+    );
+  }
+}
+
+#[test]
+fn yield_as_identifier_in_non_generator_accessor_inside_generator() {
+  // Accessors (and non-generator methods) reset yield context: `yield` is an
+  // IdentifierReference in the accessor body, legal in sloppy code (§15.5.1).
+  for (source, file) in [
+    ("function *a(){({get b(){yield}})}", 214u32),
+    ("function *a(){({set b(c){yield}})}", 215),
+    ("function *a(){({b(){yield}})}", 216),
+    ("function *a(){({set b(yield){}})}", 217),
+  ] {
+    let mut ast = parse_js_script(source);
+    let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(file));
+    assert!(
+      diagnostics.iter().all(|d| d.code.as_str() != "BIND0013"),
+      "yield must not be treated as strict-reserved in nested non-generator ({source}): {diagnostics:?}"
+    );
+  }
+}
+
+#[test]
+fn strict_setter_still_rejects_yield_parameter() {
+  let source = "'use strict'; ({set a(yield){}});";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(218));
   assert!(
     diagnostics.iter().any(|d| d.code.as_str() == "BIND0013"),
     "expected BIND0013, got {diagnostics:?}"
@@ -1918,13 +2424,23 @@ fn object_literal_methods_are_strict_mode_for_reserved_words() {
 }
 
 #[test]
-fn object_literal_methods_are_strict_mode_for_eval_and_arguments() {
-  let source = "({ a(eval){} });";
+fn annex_b_if_body_function_may_reuse_catch_param_name() {
+  // Web reality / V8: `catch (a) { function a(){} }` is an early error, but
+  // `catch (a) { if (1) function a(){} }` is allowed (Annex B statement position).
+  let source = "try {} catch (a) { if(1) function a(){} }";
   let mut ast = parse_js_script(source);
-  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(203));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(219));
   assert!(
-    diagnostics.iter().any(|d| d.code.as_str() == "BIND0005"),
-    "expected BIND0005, got {diagnostics:?}"
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0001"),
+    "unexpected BIND0001, got {diagnostics:?}"
+  );
+
+  let reject = "try {} catch (a) { function a(){} }";
+  let mut ast = parse_js_script(reject);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Script, FileId(220));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0001"),
+    "expected BIND0001 for StatementList function in catch, got {diagnostics:?}"
   );
 }
 
@@ -2217,5 +2733,98 @@ fn class_method_body_does_not_trigger_outer_tdz_diagnostics() {
   assert!(
     diagnostics.is_empty(),
     "expected method bodies to be deferred and not report outer TDZ, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn undeclared_private_in_expression_is_reported() {
+  // AllPrivateIdentifiersValid — `#name in {}` at script top level.
+  let source = "#name in {};";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(500));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0020"),
+    "expected BIND0020, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn undeclared_private_in_inside_class_is_reported() {
+  let source = "class C { #a; constructor() { #b in {}; } }";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(501));
+  let diag = diagnostics
+    .iter()
+    .find(|d| d.code.as_str() == "BIND0020")
+    .unwrap_or_else(|| panic!("expected BIND0020, got {diagnostics:?}"));
+  assert_eq!(slice_range(source, diag), "#b");
+}
+
+#[test]
+fn undeclared_private_member_access_is_reported() {
+  let source = "{ this.#x }";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(502));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0020"),
+    "expected BIND0020, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn declared_private_in_and_member_are_accepted() {
+  let source = "class C { #f; m(o) { o.#f; return #f in o; } }";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(503));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0020"),
+    "unexpected BIND0020, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn outer_class_private_name_visible_in_nested_class() {
+  // AllPrivateIdentifiersValid concatenates outer names into nested ClassBody.
+  let source = "class Outer { #x; m() { class Inner { n(o) { return #x in o; } } } }";
+  let mut ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(504));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0020"),
+    "unexpected BIND0020, got {diagnostics:?}"
   );
 }

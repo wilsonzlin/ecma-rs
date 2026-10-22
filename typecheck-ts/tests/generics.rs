@@ -50,7 +50,11 @@ fn infers_identity_function() {
 }
 
 #[test]
-fn infers_union_from_multiple_arguments() {
+fn first_argument_wins_when_candidates_are_incompatible() {
+  // tsc infers `T` from the first inference site and then checks the rest
+  // against it: `f<T>(a: T, b: T)` called `f("", 0)` infers `T = string`
+  // (and rejects `0` at the call) — it does *not* union unrelated primitive
+  // candidates (verified against tsc 5.9.3).
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
@@ -70,13 +74,16 @@ fn infers_union_from_multiple_arguments() {
   ];
   let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, None);
   assert!(result.diagnostics.is_empty());
-  let expected_union = store.union(vec![primitives.string, primitives.number]);
-  assert_eq!(result.substitutions.get(&t_param), Some(&expected_union));
+  assert_eq!(
+    result.substitutions.get(&t_param),
+    Some(&primitives.string),
+    "incompatible primitive candidates keep the first site (tsc)"
+  );
 
   let mut substituter = Substituter::new(Arc::clone(&store), result.substitutions);
   let instantiated_sig = substituter.substitute_signature(&sig);
   let resolved = store.signature(instantiated_sig);
-  assert_eq!(resolved.ret, expected_union);
+  assert_eq!(resolved.ret, primitives.string);
 }
 
 #[test]

@@ -1,0 +1,864 @@
+{
+  "summary": {
+    "total": 4,
+    "outcomes": {
+      "match": 2,
+      "rust_extra_diagnostics": 2,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 2,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 2
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance3.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance3.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2135,
+      "rust_ms": 1530,
+      "tsc_ms": 605,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2034,
+            "end": 2036,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2418,
+            "end": 2420,
+            "severity": "error",
+            "message": "Interface 'I4' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2610,
+            "end": 2613,
+            "severity": "error",
+            "message": "Interface 'I4B' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2796,
+            "end": 2799,
+            "severity": "error",
+            "message": "Interface 'I4C' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 3008,
+            "end": 3011,
+            "severity": "error",
+            "message": "Interface 'I4E' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 3199,
+            "end": 3201,
+            "severity": "error",
+            "message": "Interface 'I6' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 3349,
+            "end": 3351,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 4177,
+            "end": 4179,
+            "severity": "error",
+            "message": "Interface 'I6' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 4398,
+            "end": 4400,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2034,
+            "end": 2036,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2418,
+            "end": 2420,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2610,
+            "end": 2613,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 2796,
+            "end": 2799,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 3199,
+            "end": 3201,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 3349,
+            "end": 3351,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 4177,
+            "end": 4179,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance3.ts",
+            "start": 4398,
+            "end": 4400,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 1 extra diagnostic(s); first extra: /callSignatureAssignabilityInInheritance3.ts:3008-3011 [TS2430]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2430",
+          "file": "/callSignatureAssignabilityInInheritance3.ts",
+          "start": 3008,
+          "end": 3011,
+          "severity": "error",
+          "message": "Interface 'I4E' incorrectly extends interface."
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 1/64) rust=[TS2304,TS2304,TS2304] tsc=[2430,2430,2430,2430,2430,2430,2430,2430]"
+      },
+      "mismatched": true
+    },
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance6.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance6.ts",
+      "outcome": "match",
+      "duration_ms": 2220,
+      "rust_ms": 1607,
+      "tsc_ms": 612,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 832,
+            "end": 833,
+            "severity": "error",
+            "message": "Interface 'I' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 889,
+            "end": 891,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 953,
+            "end": 955,
+            "severity": "error",
+            "message": "Interface 'I3' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1009,
+            "end": 1011,
+            "severity": "error",
+            "message": "Interface 'I4' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1080,
+            "end": 1082,
+            "severity": "error",
+            "message": "Interface 'I5' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1152,
+            "end": 1154,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1248,
+            "end": 1250,
+            "severity": "error",
+            "message": "Interface 'I9' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 832,
+            "end": 833,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 889,
+            "end": 891,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 953,
+            "end": 955,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1009,
+            "end": 1011,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1080,
+            "end": 1082,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1152,
+            "end": 1154,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/callSignatureAssignabilityInInheritance6.ts",
+            "start": 1248,
+            "end": 1250,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": false,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 24/64) rust=[-] tsc=[2430,2430,2430,2430,2430,2430,2430]"
+      },
+      "mismatched": false
+    },
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance3.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance3.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2144,
+      "rust_ms": 1568,
+      "tsc_ms": 576,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 1761,
+            "end": 1763,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2153,
+            "end": 2155,
+            "severity": "error",
+            "message": "Interface 'I4' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2349,
+            "end": 2352,
+            "severity": "error",
+            "message": "Interface 'I4B' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2539,
+            "end": 2542,
+            "severity": "error",
+            "message": "Interface 'I4C' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2755,
+            "end": 2758,
+            "severity": "error",
+            "message": "Interface 'I4E' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2950,
+            "end": 2952,
+            "severity": "error",
+            "message": "Interface 'I6' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3104,
+            "end": 3106,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3737,
+            "end": 3739,
+            "severity": "error",
+            "message": "Interface 'I6' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3966,
+            "end": 3968,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 1761,
+            "end": 1763,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2153,
+            "end": 2155,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2349,
+            "end": 2352,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2539,
+            "end": 2542,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 2950,
+            "end": 2952,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3104,
+            "end": 3106,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3737,
+            "end": 3739,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance3.ts",
+            "start": 3966,
+            "end": 3968,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 1 extra diagnostic(s); first extra: /constructSignatureAssignabilityInInheritance3.ts:2755-2758 [TS2430]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2430",
+          "file": "/constructSignatureAssignabilityInInheritance3.ts",
+          "start": 2755,
+          "end": 2758,
+          "severity": "error",
+          "message": "Interface 'I4E' incorrectly extends interface."
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 12/64) rust=[TS2304,TS2304,TS2304] tsc=[2430,2430,2430,2430,2430,2430,2430,2430]"
+      },
+      "mismatched": true
+    },
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance6.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/constructSignatureAssignabilityInInheritance6.ts",
+      "outcome": "match",
+      "duration_ms": 2106,
+      "rust_ms": 1546,
+      "tsc_ms": 559,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 875,
+            "end": 876,
+            "severity": "error",
+            "message": "Interface 'I' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 936,
+            "end": 938,
+            "severity": "error",
+            "message": "Interface 'I2' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1004,
+            "end": 1006,
+            "severity": "error",
+            "message": "Interface 'I3' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1064,
+            "end": 1066,
+            "severity": "error",
+            "message": "Interface 'I4' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1139,
+            "end": 1141,
+            "severity": "error",
+            "message": "Interface 'I5' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1215,
+            "end": 1217,
+            "severity": "error",
+            "message": "Interface 'I7' incorrectly extends interface."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2430",
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1315,
+            "end": 1317,
+            "severity": "error",
+            "message": "Interface 'I9' incorrectly extends interface."
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 875,
+            "end": 876,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 936,
+            "end": 938,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1004,
+            "end": 1006,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1064,
+            "end": 1066,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1139,
+            "end": 1141,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1215,
+            "end": 1217,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2430,
+            "file": "/constructSignatureAssignabilityInInheritance6.ts",
+            "start": 1315,
+            "end": 1317,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": false,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 29/64) rust=[-] tsc=[2430,2430,2430,2430,2430,2430,2430]"
+      },
+      "mismatched": false
+    }
+  ]
+}

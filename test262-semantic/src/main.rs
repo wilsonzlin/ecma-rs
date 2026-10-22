@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use conformance_harness::{
-  write_json_report, write_json_report_to_stdout, FailOn, Expectations, Shard, TimeoutManager,
+  write_json_report, write_json_report_to_stdout, Expectations, FailOn, Shard, TimeoutManager,
 };
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -28,7 +28,10 @@ fn default_jobs() -> usize {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Run a curated subset of tc39/test262 language semantics tests")]
+#[command(
+  version,
+  about = "Run a curated subset of tc39/test262 language semantics tests"
+)]
 struct Cli {
   #[command(subcommand)]
   command: Option<Command>,

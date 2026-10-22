@@ -84,6 +84,7 @@ fn gc_traces_closure_env_from_ecma_function() -> Result<(), VmError> {
       ThisMode::Global,
       false,
       Some(env),
+      None,
     )?;
 
     // Only root the function; if it doesn't trace `closure_env`, `env` would be collected.

@@ -5,10 +5,10 @@
 //! `DefId`/`BodyId` are designed to be stable-ish across unrelated edits for
 //! definition-grade items (modules, classes, functions, etc.).
 //!
-//! For now, `hir-js` also lowers parameters and many local bindings as
-//! `DefId`s. These ids are deterministic but *not* intended to be stable across
-//! edits. Lowering scopes them under the owning definition so they do not
-//! perturb module-level disambiguators.
+//! Body-local bindings use [`LocalId`] in each [`Body`]'s `locals` table.
+//! Parameters, body `var`/`let`/`const` bindings, and `catch` bindings are
+//! written into [`Body::locals`] and do not allocate `DefId`s. Module-level
+//! and namespace/module member bindings still use `DefKind::Var` DefIds.
 
 use crate::ids::BodyId;
 use crate::ids::DefId;
@@ -18,6 +18,7 @@ use crate::ids::ExportSpecifierId;
 use crate::ids::ExprId;
 use crate::ids::ImportId;
 use crate::ids::ImportSpecifierId;
+use crate::ids::LocalId;
 use crate::ids::NameId;
 use crate::ids::PatId;
 use crate::ids::StmtId;
@@ -223,6 +224,22 @@ pub struct DefData {
   pub is_default_export: bool,
   pub body: Option<BodyId>,
   pub type_info: Option<DefTypeInfo>,
+  /// Declared value-type annotation for this definition, when present.
+  ///
+  /// Populated for:
+  /// - class fields (`x: string` / `#x: string`) — also mirrored on the owning
+  ///   class's [`DefTypeInfo::Class`] member list
+  /// - module/namespace `var`/`let`/`const` declarators and simple Id bindings
+  ///   (`let x: string`)
+  /// - ambient `declare const/let/var name: T` bindings
+  ///
+  /// The type expression lives in this def's [`TypeArenas`] (see
+  /// [`LowerResult::types`]) and is registered in the file [`SpanMap`].
+  ///
+  /// This is intentionally *not* a [`DefTypeInfo`] variant: `type_info` describes
+  /// type-side shapes (aliases/interfaces/classes/…), while these annotations are
+  /// value-side facts needed by `type_of_def`-style consumers.
+  pub declared_type: Option<TypeExprId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -466,6 +483,23 @@ pub struct ClassMemberSig {
   pub kind: ClassMemberSigKind,
 }
 
+impl ClassMemberSig {
+  /// Value-side type annotation for field-like members.
+  ///
+  /// Covers ordinary fields, private fields, ambient/interface properties
+  /// lowered as fields, and constructor parameter properties
+  /// (`constructor(public x: T)`), which are modeled as extra field
+  /// signatures so checkers need not re-walk the AST.
+  pub fn field_type_annotation(&self) -> Option<TypeExprId> {
+    match &self.kind {
+      ClassMemberSigKind::Field {
+        type_annotation, ..
+      } => *type_annotation,
+      _ => None,
+    }
+  }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassMemberSigKind {
   Field {
@@ -489,10 +523,15 @@ pub enum ClassMemberSigKind {
   IndexSignature(TypeIndexSignature),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Initializer kind + resolved constant value for an enum member.
+///
+/// Numeric autos (`enum E { A, B = 2, C }`) carry the computed numeric value so
+/// the type of `E` can be a union of number literals (`0 | 2 | 3`) for mapped
+/// types like `Record<E, T>`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum EnumMemberValue {
-  Number,
-  String,
+  Number(f64),
+  String(String),
   Computed,
 }
 
@@ -658,6 +697,9 @@ pub struct Body {
   pub exprs: Vec<Expr>,
   pub stmts: Vec<Stmt>,
   pub pats: Vec<Pat>,
+  /// Body-local bindings (`LocalId` arena): params, body vars, and catch
+  /// bindings in deterministic lowering order.
+  pub locals: Vec<LocalData>,
   /// Statements that form the body in source order. Nested statements are
   /// referenced by [`StmtKind`] variants.
   pub root_stmts: Vec<StmtId>,
@@ -668,6 +710,62 @@ pub struct Body {
   pub class: Option<ClassBody>,
   /// Reserved for the checker; filled in by later phases.
   pub expr_types: Option<Vec<()>>,
+}
+
+impl Body {
+  #[inline]
+  pub fn local(&self, id: LocalId) -> Option<&LocalData> {
+    self.locals.get(id.0 as usize)
+  }
+
+  /// Find a local by its binding span.
+  pub fn local_for_span(&self, span: TextRange) -> Option<LocalId> {
+    self
+      .locals
+      .iter()
+      .enumerate()
+      .find_map(|(idx, local)| (local.span == span).then_some(LocalId(idx as u32)))
+  }
+
+  /// Iterate locals of `kind` in arena order.
+  pub fn locals_with_kind(
+    &self,
+    kind: LocalKind,
+  ) -> impl Iterator<Item = (LocalId, &LocalData)> + '_ {
+    self
+      .locals
+      .iter()
+      .enumerate()
+      .filter(move |(_, local)| local.kind == kind)
+      .map(|(idx, local)| (LocalId(idx as u32), local))
+  }
+}
+
+/// Kind of binding stored in a body's locals table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LocalKind {
+  /// Function/method/constructor/arrow parameter binding.
+  Param,
+  /// `var`/`let`/`const`/`using` binding declared inside the body (incl. for-heads).
+  Var,
+  /// `catch (e)` binding.
+  Catch,
+}
+
+/// One body-local binding.
+///
+/// `LocalId` is the index of this entry in [`Body::locals`]. Entries are
+/// appended in deterministic lowering order (params left-to-right, then body
+/// bindings in encounter order; names within a pattern in collect order).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalData {
+  pub name: NameId,
+  pub kind: LocalKind,
+  pub span: TextRange,
+  /// Pattern node that introduces this binding, when available.
+  pub pat: Option<PatId>,
+  /// Parameter index when [`LocalKind::Param`]; unused otherwise.
+  pub param_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -720,6 +818,12 @@ pub struct FunctionData {
   pub async_: bool,
   pub generator: bool,
   pub is_arrow: bool,
+  /// Whether the source function had an implementation body.
+  ///
+  /// Distinguishes overload signatures / `declare function` (`false`, AST
+  /// `body: None`) from `function f() {}` (`true`, possibly empty block).
+  /// Required for overload merging without re-walking the parse-js AST.
+  pub has_body: bool,
   pub body: FunctionBody,
 }
 
@@ -727,6 +831,12 @@ pub struct FunctionData {
 pub struct Expr {
   pub span: TextRange,
   pub kind: ExprKind,
+  /// AST carried a `ParenthesizedExpr` assoc marker on this node.
+  ///
+  /// tsc's flow binder only treats bare `TrueKeyword` / `FalseKeyword` as
+  /// constant conditions (`(true)` is a ParenthesizedExpression and does not
+  /// make the opposite branch unreachable for TS2454).
+  pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -792,12 +902,27 @@ pub enum ExprKind {
     const_assertion: bool,
     type_annotation: Option<TypeExprId>,
   },
+  /// TypeScript non-null assertion (`expr!`).
+  ///
+  /// `operand_parenthesized` is true for `(x)!` (AST `ParenthesizedExpr` on the
+  /// operand). tsc only assumes definite assignment when the use's parent is
+  /// `NonNullExpression`; a ParenthesizedExpression breaks that, so `(x)!`
+  /// still reports TS2454 while `x!` / `(x!)` do not.
   NonNull {
     expr: ExprId,
+    operand_parenthesized: bool,
   },
   Satisfies {
     expr: ExprId,
     type_annotation: TypeExprId,
+  },
+  /// TypeScript instantiation expression: `expr<T, U>` (erased at runtime).
+  ///
+  /// Type arguments live in the owning def's type arenas (`TypeExprId`), same
+  /// pattern as assertion / `satisfies` / var annotations.
+  Instantiation {
+    expr: ExprId,
+    type_args: Vec<TypeExprId>,
   },
   ImportCall {
     argument: ExprId,
@@ -1085,6 +1210,8 @@ pub enum StmtKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarDecl {
   pub kind: VarDeclKind,
+  /// Ambient `declare let/const/var` (and `.d.ts` vars). Assumed initialized for DA.
+  pub declare: bool,
   pub declarators: Vec<VarDeclarator>,
 }
 

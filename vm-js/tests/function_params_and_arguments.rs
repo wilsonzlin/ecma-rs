@@ -70,4 +70,3 @@ fn default_parameter_initializer_cannot_reference_itself() {
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
-

@@ -20,13 +20,16 @@ use crate::ast::expr::lit::LitTemplateExpr;
 use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
+use crate::ast::node::CoverInitializedName;
 use crate::ast::node::InvalidTemplateEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
 use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::LiteralStringCodeUnits;
 use crate::ast::node::Node;
+use crate::ast::node::StringLiteralContainsEscapes;
 use crate::ast::node::TemplateStringParts;
+use crate::ast::node::TrailingCommaAfterRest;
 use crate::char::is_line_terminator;
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
@@ -494,6 +497,16 @@ fn decode_literal_utf16(raw: &str, allow_line_terminators: bool) -> Result<Vec<u
           len: ch.len_utf8(),
         });
       }
+      // ECMA-262 §12.9.6: template literals normalize line terminators —
+      // CR and CRLF both cook to a single LF code unit.
+      if ch == '\r' {
+        norm.push('\n' as u16);
+        offset += ch.len_utf8();
+        if raw[offset..].starts_with('\n') {
+          offset += 1;
+        }
+        continue;
+      }
       let mut buf = [0u16; 2];
       let encoded = ch.encode_utf16(&mut buf);
       norm.extend_from_slice(encoded);
@@ -501,6 +514,17 @@ fn decode_literal_utf16(raw: &str, allow_line_terminators: bool) -> Result<Vec<u
     }
   }
   Ok(norm)
+}
+
+/// True when the raw string-literal token (including quotes) contains any
+/// EscapeSequence or LineContinuation — i.e. a `\` in the literal body.
+pub(crate) fn raw_string_literal_contains_escapes(raw_with_quotes: &str) -> bool {
+  let bytes = raw_with_quotes.as_bytes();
+  if bytes.len() < 2 {
+    return false;
+  }
+  // Surrounding quotes are always ASCII `'` or `"`.
+  bytes[1..bytes.len() - 1].contains(&b'\\')
 }
 
 fn find_legacy_escape_sequence(raw: &str) -> Option<(usize, usize)> {
@@ -722,7 +746,8 @@ pub fn normalise_literal_string(raw: &str) -> Option<String> {
 
 impl<'a> Parser<'a> {
   pub fn lit_arr(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitArrExpr>> {
-    self.with_loc(|p| {
+    let mut trailing_comma_after_rest = false;
+    let mut node = self.with_loc(|p| {
       p.require(TT::BracketOpen)?;
       let mut elements = Vec::<LitArrElem>::new();
       loop {
@@ -744,10 +769,20 @@ impl<'a> Parser<'a> {
           break;
         };
         p.require(TT::Comma)?;
+        // `[...a,]` — trailing comma after rest is fine for ArrayLiteral, but
+        // does not cover ArrayAssignmentPattern.
+        if rest && p.peek().typ == TT::BracketClose {
+          trailing_comma_after_rest = true;
+          break;
+        }
       }
       p.require(TT::BracketClose)?;
       Ok(LitArrExpr { elements })
-    })
+    })?;
+    if trailing_comma_after_rest {
+      node.assoc.set(TrailingCommaAfterRest);
+    }
+    Ok(node)
   }
 
   pub fn lit_bigint(&mut self) -> SyntaxResult<Node<LitBigIntExpr>> {
@@ -812,7 +847,8 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_obj(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitObjExpr>> {
-    self.with_loc(|p| {
+    let mut trailing_comma_after_rest = false;
+    let mut node = self.with_loc(|p| {
       p.require(TT::BraceOpen)?.loc;
       let mut members = Vec::new();
       while p.peek().typ != TT::BraceClose && p.peek().typ != TT::EOF {
@@ -906,7 +942,6 @@ impl<'a> Parser<'a> {
         }
 
         let rest = p.consume_if(TT::DotDotDot).is_match();
-        let mut allow_semicolon_separator = false;
         if rest {
           let value = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
           members.push(Node::new(
@@ -915,6 +950,18 @@ impl<'a> Parser<'a> {
               typ: ObjMemberType::Rest { val: value },
             },
           ));
+          // `{...a,}` — legal ObjectLiteral, not a cover for ObjectAssignmentPattern.
+          if p.consume_if(TT::Comma).is_match() {
+            if p.peek().typ == TT::BraceClose {
+              trailing_comma_after_rest = true;
+              break;
+            }
+            continue;
+          }
+          if p.peek().typ == TT::BraceClose {
+            break;
+          }
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("`,`")));
         } else {
           let (key, value) = p.class_or_obj_member(
             ctx,
@@ -923,7 +970,7 @@ impl<'a> Parser<'a> {
             &mut Asi::no(),
             false, // Object literals don't have abstract methods
           )?;
-          allow_semicolon_separator = matches!(value, ClassOrObjVal::IndexSignature(_));
+          let allow_semicolon_separator = matches!(value, ClassOrObjVal::IndexSignature(_));
           let typ = match value {
             ClassOrObjVal::Prop(None) => {
               // This property had no value, so it's a shorthand property. Therefore, check
@@ -963,49 +1010,63 @@ impl<'a> Parser<'a> {
                     };
                     // TypeScript-style recovery: definite assignment assertion (e.g., `{ a! }`).
                     let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
-                    // TypeScript-style recovery: default value (e.g., `{ c = 1 }`).
-                    if p.consume_if(TT::Equals).is_match() {
-                      let key_name = direct_key.stx.key.clone();
-                      let key_loc = direct_key.loc;
-                      let default_val = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
-                      let id_expr = Node::new(
-                        key_loc,
-                        IdExpr {
-                          name: key_name.clone(),
+                  } else if !is_valid_pattern_identifier(direct_key.stx.tt, ctx.rules) {
+                    return Err(direct_key.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+                  }
+                  // CoverInitializedName (ECMA-262 ObjectLiteral cover grammar):
+                  // `IdentifierReference Initializer`. Accepted during parse; early-errored
+                  // later if the LitObj is not reinterpreted as an assignment/binding pattern.
+                  if p.consume_if(TT::Equals).is_match() {
+                    let key_name = direct_key.stx.key.clone();
+                    let key_loc = direct_key.loc;
+                    let default_val = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
+                    let id_expr = Node::new(
+                      key_loc,
+                      IdExpr {
+                        name: key_name.clone(),
+                      },
+                    )
+                    .into_wrapped();
+                    let bin_expr = Node::new(
+                      key_loc + default_val.loc,
+                      BinaryExpr {
+                        operator: OperatorName::Assignment,
+                        left: id_expr,
+                        right: default_val,
+                      },
+                    )
+                    .into_wrapped();
+                    let mut member = Node::new(
+                      member_start,
+                      ObjMember {
+                        typ: ObjMemberType::Valued {
+                          key: ClassOrObjKey::Direct(Node::new(
+                            key_loc,
+                            ClassOrObjMemberDirectKey {
+                              key: key_name,
+                              tt: TT::Identifier,
+                            },
+                          )),
+                          val: ClassOrObjVal::Prop(Some(bin_expr)),
                         },
-                      )
-                      .into_wrapped();
-                      let bin_expr = Node::new(
-                        key_loc + default_val.loc,
-                        BinaryExpr {
-                          operator: OperatorName::Assignment,
-                          left: id_expr,
-                          right: default_val,
-                        },
-                      )
-                      .into_wrapped();
-                      ObjMemberType::Valued {
-                        key: ClassOrObjKey::Direct(Node::new(
-                          key_loc,
-                          ClassOrObjMemberDirectKey {
-                            key: key_name,
-                            tt: TT::Identifier,
-                          },
-                        )),
-                        val: ClassOrObjVal::Prop(Some(bin_expr)),
-                      }
-                    } else {
-                      ObjMemberType::Shorthand {
-                        id: direct_key.map_stx(|n| IdExpr { name: n.key }),
-                      }
+                      },
+                    );
+                    member.assoc.set(CoverInitializedName);
+                    members.push(member);
+                    if p.consume_if(TT::Comma).is_match() {
+                      continue;
                     }
-                  } else {
-                    if !is_valid_pattern_identifier(direct_key.stx.tt, ctx.rules) {
-                      return Err(direct_key.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+                    if p.peek().typ == TT::Semicolon {
+                      let semi = p.consume();
+                      return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
                     }
-                    ObjMemberType::Shorthand {
-                      id: direct_key.map_stx(|n| IdExpr { name: n.key }),
+                    if p.peek().typ == TT::BraceClose {
+                      break;
                     }
+                    return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("`,`")));
+                  }
+                  ObjMemberType::Shorthand {
+                    id: direct_key.map_stx(|n| IdExpr { name: n.key }),
                   }
                 }
               }
@@ -1013,25 +1074,29 @@ impl<'a> Parser<'a> {
             _ => ObjMemberType::Valued { key, val: value },
           };
           members.push(Node::new(member_start, ObjMember { typ }));
-        }
-        if p.consume_if(TT::Comma).is_match() {
-          continue;
-        }
-        if p.peek().typ == TT::Semicolon {
-          let semi = p.consume();
-          if allow_semicolon_separator {
+          if p.consume_if(TT::Comma).is_match() {
             continue;
           }
-          return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
+          if p.peek().typ == TT::Semicolon {
+            let semi = p.consume();
+            if allow_semicolon_separator {
+              continue;
+            }
+            return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
+          }
+          if p.peek().typ == TT::BraceClose {
+            break;
+          }
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("`,`")));
         }
-        if p.peek().typ == TT::BraceClose {
-          break;
-        }
-        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("`,`")));
       }
       p.require(TT::BraceClose)?;
       Ok(LitObjExpr { members })
-    })
+    })?;
+    if trailing_comma_after_rest {
+      node.assoc.set(TrailingCommaAfterRest);
+    }
+    Ok(node)
   }
 
   pub fn lit_regex(&mut self) -> SyntaxResult<Node<LitRegexExpr>> {
@@ -1063,6 +1128,9 @@ impl<'a> Parser<'a> {
       .set(LiteralStringCodeUnits(code_units.into_boxed_slice()));
     if let Some(escape_loc) = escape_loc {
       node.assoc.set(LegacyOctalEscapeSequence(escape_loc));
+    }
+    if raw_string_literal_contains_escapes(self.str(loc)) {
+      node.assoc.set(StringLiteralContainsEscapes);
     }
     Ok(node)
   }
@@ -1139,6 +1207,16 @@ impl<'a> Parser<'a> {
     let start = self.checkpoint();
     let (parts, template_parts, invalid_escape) =
       self.lit_template_parts_with_invalid_escape(ctx, false)?;
+    // Untagged templates reject legacy octal / non-octal decimal escapes in all modes
+    // (ECMA-262 §12.9.6). Tagged templates legalize them with undefined cooked values.
+    if self.is_strict_ecmascript() {
+      if let Some(escape_loc) = invalid_escape {
+        return Err(escape_loc.error(
+          SyntaxErrorType::LegacyOctalEscapeInTemplate,
+          Some(TT::LiteralTemplatePartString),
+        ));
+      }
+    }
     let loc = self.since_checkpoint(&start);
     let mut node = Node::new(loc, LitTemplateExpr { parts });
     node.assoc.set(template_parts);
@@ -1193,7 +1271,10 @@ impl<'a> Parser<'a> {
     let raw = self.bytes(t.loc);
     let (content_offset, first_content) =
       template_content(raw, is_end).ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?;
-    let first_raw = first_content.encode_utf16().collect::<Vec<_>>().into_boxed_slice();
+    let first_raw = first_content
+      .encode_utf16()
+      .collect::<Vec<_>>()
+      .into_boxed_slice();
     raw_parts.push(first_raw);
     let first_legacy_escape = find_legacy_escape_sequence(first_content);
     if !tagged && invalid_escape.is_none() {
@@ -1249,7 +1330,10 @@ impl<'a> Parser<'a> {
         let raw = self.bytes(string.loc);
         let (offset, content) = template_content(raw, string_is_end)
           .ok_or_else(|| string.error(SyntaxErrorType::UnexpectedEnd))?;
-        let raw_part = content.encode_utf16().collect::<Vec<_>>().into_boxed_slice();
+        let raw_part = content
+          .encode_utf16()
+          .collect::<Vec<_>>()
+          .into_boxed_slice();
         raw_parts.push(raw_part);
         let legacy_escape = find_legacy_escape_sequence(content);
         if !tagged && invalid_escape.is_none() {

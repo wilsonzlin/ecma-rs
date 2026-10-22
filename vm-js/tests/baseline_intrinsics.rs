@@ -10,9 +10,7 @@ fn get_own_data_property(
 ) -> Result<Option<Value>, VmError> {
   let mut scope = heap.scope();
   let key = PropertyKey::from_string(scope.alloc_string(name)?);
-  scope
-    .heap()
-    .object_get_own_data_property_value(obj, &key)
+  scope.heap().object_get_own_data_property_value(obj, &key)
 }
 
 fn define_enumerable_data_property(
@@ -140,7 +138,10 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
       panic!("Object() should return an object");
     };
     scope.push_root(Value::Object(obj))?;
-    assert_eq!(scope.heap().object_prototype(obj)?, Some(intr.object_prototype()));
+    assert_eq!(
+      scope.heap().object_prototype(obj)?,
+      Some(intr.object_prototype())
+    );
 
     // `%Object%` construct
     let obj_value = vm.construct_without_host(
@@ -153,7 +154,10 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
       panic!("new Object() should return an object");
     };
     scope.push_root(Value::Object(obj2))?;
-    assert_eq!(scope.heap().object_prototype(obj2)?, Some(intr.object_prototype()));
+    assert_eq!(
+      scope.heap().object_prototype(obj2)?,
+      Some(intr.object_prototype())
+    );
 
     // `%Object%` called with an object returns the same object.
     let arg_obj = scope.alloc_object()?;
@@ -193,7 +197,10 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
       panic!("Array() should return an object");
     };
     scope.push_root(Value::Object(arr))?;
-    assert_eq!(scope.heap().object_prototype(arr)?, Some(intr.array_prototype()));
+    assert_eq!(
+      scope.heap().object_prototype(arr)?,
+      Some(intr.array_prototype())
+    );
 
     // `%Array%` construct
     let arr_value = vm.construct_without_host(
@@ -206,7 +213,10 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
       panic!("new Array() should return an object");
     };
     scope.push_root(Value::Object(arr2))?;
-    assert_eq!(scope.heap().object_prototype(arr2)?, Some(intr.array_prototype()));
+    assert_eq!(
+      scope.heap().object_prototype(arr2)?,
+      Some(intr.array_prototype())
+    );
   }
 
   realm.teardown(&mut heap);

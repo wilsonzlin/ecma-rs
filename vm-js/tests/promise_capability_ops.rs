@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use vm_js::{
   new_promise_capability, perform_promise_then, promise_resolve, GcObject, Heap, HeapLimits, Realm,
-  Scope, Value, Vm, VmError, VmHostHooks, VmJobContext, VmOptions,
+  Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmJobContext, VmOptions,
 };
 
 thread_local! {
@@ -12,7 +12,8 @@ thread_local! {
 fn then_handler(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -109,8 +110,12 @@ fn promise_capability_resolve_runs_then_only_at_microtask_checkpoint() -> Result
     "then handler should not run synchronously"
   );
 
-  let mut ctx = TestCtx { vm: &mut vm, heap: &mut heap };
-  host.perform_microtask_checkpoint(&mut ctx)?;
+  let mut ctx = TestCtx {
+    vm: &mut vm,
+    heap: &mut heap,
+  };
+  let errors = host.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty(), "microtask checkpoint errors: {errors:?}");
 
   assert!(THEN_CALLED.with(|c| c.get()));
 
@@ -156,12 +161,15 @@ fn promise_resolve_helper_returns_promise_and_then_is_async() -> Result<(), VmEr
     "then handler should not run synchronously"
   );
 
-  let mut ctx = TestCtx { vm: &mut vm, heap: &mut heap };
-  host.perform_microtask_checkpoint(&mut ctx)?;
+  let mut ctx = TestCtx {
+    vm: &mut vm,
+    heap: &mut heap,
+  };
+  let errors = host.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty(), "microtask checkpoint errors: {errors:?}");
 
   assert!(THEN_CALLED.with(|c| c.get()));
 
   realm.teardown(&mut heap);
   Ok(())
 }
-

@@ -22,7 +22,10 @@ fn object_prototype_tracing_keeps_prototype_alive() -> Result<(), VmError> {
       scope.heap().is_valid_object(proto),
       "proto should survive via [[Prototype]]"
     );
-    assert!(!scope.heap().is_valid_object(dead), "dead should be collected");
+    assert!(
+      !scope.heap().is_valid_object(dead),
+      "dead should be collected"
+    );
   }
 
   Ok(())

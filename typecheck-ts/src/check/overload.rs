@@ -24,15 +24,33 @@ type SignatureShapeKey = (
 pub struct CallArgType {
   pub ty: TypeId,
   pub spread: bool,
+  /// Source span of the argument expression, when available.
+  ///
+  /// Used to anchor TS2769 / no-match diagnostics on the mismatched argument the
+  /// way `tsc` does.
+  pub span: Option<Span>,
 }
 
 impl CallArgType {
   pub fn new(ty: TypeId) -> Self {
-    Self { ty, spread: false }
+    Self {
+      ty,
+      spread: false,
+      span: None,
+    }
   }
 
   pub fn spread(ty: TypeId) -> Self {
-    Self { ty, spread: true }
+    Self {
+      ty,
+      spread: true,
+      span: None,
+    }
+  }
+
+  pub fn with_span(mut self, span: Span) -> Self {
+    self.span = Some(span);
+    self
   }
 }
 
@@ -76,46 +94,30 @@ pub fn callable_signatures_with_expander(
     _ => {
       let mut collected = Vec::new();
       collect_signatures(store, ty, &mut collected, &mut HashSet::new(), expander);
-      let mut by_shape: HashMap<SignatureShapeKey, Vec<SignatureId>> = HashMap::new();
-      for sig_id in collected.into_iter() {
+      // Preserve declaration order: overload resolution is first-match, so sorting by
+      // SignatureId (or HashMap iteration) reorders Object-before-E into E-before-Object
+      // and changes return types / subsequent-var TS2403 diagnostics.
+      let mut by_key: HashMap<(SignatureShapeKey, TypeId), (SignatureId, bool, usize)> =
+        HashMap::new();
+      for (order, sig_id) in collected.into_iter().enumerate() {
         let sig = store.signature(sig_id);
-        by_shape
-          .entry(signature_shape_key(&sig))
-          .or_default()
-          .push(sig_id);
-      }
-
-      let mut out = Vec::new();
-      for sig_ids in by_shape.values() {
-        let has_non_unknown = sig_ids.iter().any(|sig_id| {
-          let sig = store.signature(*sig_id);
-          !matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any)
-        });
-
-        let mut by_ret: HashMap<TypeId, SignatureId> = HashMap::new();
-        for sig_id in sig_ids.iter().copied() {
-          let sig = store.signature(sig_id);
-          if has_non_unknown
-            && matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any)
-          {
-            continue;
+        let key = (signature_shape_key(&sig), store.canon(sig.ret));
+        let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
+        match by_key.entry(key) {
+          Entry::Vacant(entry) => {
+            entry.insert((sig_id, is_unknown, order));
           }
-          match by_ret.entry(sig.ret) {
-            Entry::Vacant(entry) => {
-              entry.insert(sig_id);
-            }
-            Entry::Occupied(mut entry) => {
-              if sig_id < *entry.get() {
-                entry.insert(sig_id);
-              }
+          Entry::Occupied(mut entry) => {
+            let (_existing, existing_unknown, existing_order) = *entry.get();
+            if existing_unknown && !is_unknown {
+              entry.insert((sig_id, is_unknown, existing_order));
             }
           }
         }
-        out.extend(by_ret.values().copied());
       }
-
-      out.sort();
-      out
+      let mut out: Vec<_> = by_key.values().copied().collect();
+      out.sort_by_key(|(_, _, order)| *order);
+      out.into_iter().map(|(id, _, _)| id).collect()
     }
   }
 }
@@ -140,28 +142,31 @@ pub fn construct_signatures_with_expander(
     _ => {
       let mut collected = Vec::new();
       collect_construct_signatures(store, ty, &mut collected, &mut HashSet::new(), expander);
-      let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
-      for sig_id in collected.into_iter() {
+      // Dedup by param shape *and* return type. Class+interface declaration
+      // merging yields `new (): C` alongside `new (): D` with identical params;
+      // collapsing those (and sorting by SignatureId) picks the wrong overload
+      // for uncontextualized `new C()` (tsc keeps both; class ctor wins by order).
+      let mut by_shape: HashMap<(SignatureShapeKey, TypeId), (SignatureId, bool, usize)> =
+        HashMap::new();
+      for (order, sig_id) in collected.into_iter().enumerate() {
         let sig = store.signature(sig_id);
-        let key = signature_shape_key(&sig);
+        let key = (signature_shape_key(&sig), store.canon(sig.ret));
         let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
         match by_shape.entry(key) {
           Entry::Vacant(entry) => {
-            entry.insert((sig_id, is_unknown));
+            entry.insert((sig_id, is_unknown, order));
           }
           Entry::Occupied(mut entry) => {
-            let (existing, existing_unknown) = *entry.get();
+            let (_existing, existing_unknown, existing_order) = *entry.get();
             if existing_unknown && !is_unknown {
-              entry.insert((sig_id, is_unknown));
-            } else if existing_unknown == is_unknown && sig_id < existing {
-              entry.insert((sig_id, is_unknown));
+              entry.insert((sig_id, is_unknown, existing_order));
             }
           }
         }
       }
-      let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
-      out.sort();
-      out
+      let mut out: Vec<_> = by_shape.values().copied().collect();
+      out.sort_by_key(|(_, _, order)| *order);
+      out.into_iter().map(|(id, _, _)| id).collect()
     }
   }
 }
@@ -215,7 +220,9 @@ impl ArityInfo {
     if args < self.min {
       return false;
     }
-    if let Some(max) = self.max {
+    // TypeScript allows excess arguments on ordinary signatures (JS callback
+    // convention). Only fixed-length rest tuples impose a hard upper bound.
+    if let (Some(_), Some(max)) = (&self.rest, self.max) {
       if args > max {
         return false;
       }
@@ -227,11 +234,12 @@ impl ArityInfo {
     if call.min < self.min {
       return false;
     }
-    match (self.max, call.max) {
-      (Some(sig_max), Some(call_max)) => call_max <= sig_max,
-      (Some(_), None) => false,
-      (None, Some(_)) => true,
-      (None, None) => true,
+    match (&self.rest, self.max, call.max) {
+      // Fixed rest tuples: call must not exceed the bound.
+      (Some(_), Some(sig_max), Some(call_max)) => call_max <= sig_max,
+      (Some(_), Some(_), None) => false,
+      // No rest (or unbounded rest): excess args are fine.
+      _ => true,
     }
   }
 }
@@ -495,9 +503,58 @@ fn resolve_overload_set(
       candidates.retain(|sig| seen_sig.insert(*sig));
     }
   }
-  reorder_candidates_by_literal_types(store.as_ref(), &mut candidates);
+  // Keep declaration order. TypeScript selects the *first* matching overload in
+  // source order; reordering by literal specialization (or ranking by specificity
+  // among applicable candidates) diverges — e.g. `(x: Object) | (x: E)` must pick
+  // `Object` for an `E` argument, not the more specific `E` overload.
 
   if candidates.is_empty() {
+    // tsc: `new f()` on a call-only function is allowed when every call
+    // signature returns void (JS constructors historically return undefined);
+    // non-void callables get TS2350 instead of "not constructable".
+    if matches!(kind, OverloadKind::Construct) {
+      let mut call_sigs = Vec::new();
+      collect_signatures(
+        store.as_ref(),
+        callee,
+        &mut call_sigs,
+        &mut HashSet::new(),
+        expander,
+      );
+      let mut seen_call = HashSet::new();
+      call_sigs.retain(|sig| seen_call.insert(*sig));
+      if !call_sigs.is_empty() {
+        let all_void = call_sigs.iter().all(|sig_id| {
+          let ret = store.canon(store.signature(*sig_id).ret);
+          // `any`/`unknown` count as void-compatible: they arise from
+          // error-recovery and inference gaps (e.g. a getter returning an
+          // unannotated function expression), where tsc stays silent on `new`
+          // (`privateNameAccessorsCallExpression`).
+          matches!(
+            store.type_kind(ret),
+            TypeKind::Void | TypeKind::Undefined | TypeKind::Any | TypeKind::Unknown
+          )
+        });
+        if all_void {
+          return CallResolution {
+            return_type: primitives.any,
+            signature: None,
+            contextual_signature: None,
+            diagnostics: Vec::new(),
+          };
+        }
+        let diag = codes::ONLY_VOID_NEW.error(
+          "Only a void function can be called with the 'new' keyword.",
+          span,
+        );
+        return CallResolution {
+          return_type: primitives.unknown,
+          signature: None,
+          contextual_signature: None,
+          diagnostics: vec![diag],
+        };
+      }
+    }
     let message = match kind {
       OverloadKind::Call => "expression is not callable",
       OverloadKind::Construct => "expression is not constructable",
@@ -632,7 +689,8 @@ fn resolve_overload_set(
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
 
   if applicable.is_empty() {
-    let diag = build_no_match_diagnostic(store.as_ref(), relate, span, &outcomes);
+    let diag =
+      build_no_match_diagnostic(store.as_ref(), relate, span, &base_expanded_args, &outcomes);
     let mut fallback = outcomes.clone();
     fallback.sort_by_key(|candidate| fallback_rank_key(candidate, false));
     let (ret, contextual_signature) = fallback
@@ -652,8 +710,9 @@ fn resolve_overload_set(
     };
   }
 
-  // TypeScript's overload resolution does not use the *contextual return type* to
-  // filter/choose overloads. In particular, a context like:
+  // TypeScript picks the first matching overload in declaration order. It does
+  // not re-rank applicable candidates by specificity / widen count, and it does
+  // not use the *contextual return type* to filter/choose overloads. Example:
   //
   //   declare function pick(x: any): number;
   //   declare function pick(x: any): string;
@@ -662,7 +721,37 @@ fn resolve_overload_set(
   // still resolves to the first overload (`number`) and reports TS2322 at the
   // assignment site. (The contextual type can still participate in generic
   // inference via `infer_type_arguments_for_call` above.)
-  applicable.sort_by_key(|candidate| fallback_rank_key(candidate, false));
+  //
+  // Specificity ranking (`fallback_rank_key`) is reserved for no-match recovery
+  // above, where we need a best-effort return type for cascading diagnostics.
+  applicable.sort_by_key(|candidate| candidate.order);
+
+  // tsc: an `any` argument prefers an overload whose parameter at that
+  // position is `any` (`anyAssignabilityInInheritance.ts` — `f(x: number)` is
+  // skipped for an `any` argument when `f(x: any)` exists, "any is not a
+  // subtype of number"; when no candidate has an `any` parameter, first-match
+  // still wins — "if truly ambiguous it would pick first overload").
+  if applicable.len() > 1 {
+    let any_matches = |sig: &Signature| -> usize {
+      base_expanded_args
+        .iter()
+        .enumerate()
+        .filter(|(i, arg)| {
+          store.canon(arg.ty) == primitives.any
+            && expected_arg_type_at(store.as_ref(), sig, *i)
+              .is_some_and(|ty| store.canon(ty) == primitives.any)
+        })
+        .count()
+    };
+    let max_matches = applicable
+      .iter()
+      .map(|c| any_matches(&c.instantiated_sig))
+      .max()
+      .unwrap_or(0);
+    if max_matches > 0 {
+      applicable.retain(|c| any_matches(&c.instantiated_sig) == max_matches);
+    }
+  }
 
   let best = applicable[0];
   CallResolution {
@@ -715,21 +804,6 @@ fn signature_shape_key(sig: &Signature) -> SignatureShapeKey {
     sig.type_params.clone(),
     sig.this_param,
   )
-}
-
-fn reorder_candidates_by_literal_types(store: &TypeStore, candidates: &mut Vec<SignatureId>) {
-  let mut specialized = Vec::new();
-  let mut other = Vec::new();
-  for sig_id in candidates.drain(..) {
-    let sig = store.signature(sig_id);
-    if signature_contains_literal_types(store, &sig) {
-      specialized.push(sig_id);
-    } else {
-      other.push(sig_id);
-    }
-  }
-  specialized.extend(other);
-  *candidates = specialized;
 }
 
 pub fn signature_contains_literal_types(store: &TypeStore, sig: &Signature) -> bool {
@@ -1208,7 +1282,7 @@ fn analyze_arity(store: &TypeStore, sig: &Signature) -> ArityInfo {
       let style = rest_style(store, param);
       let (rest_min, rest_max) = rest_arity(&style);
       min += rest_min;
-      max = combine_max(max, rest_max);
+      max = combine_max(Some(idx), rest_max);
       rest = Some(RestInfo { start: idx, style });
       break;
     }
@@ -1230,6 +1304,13 @@ fn analyze_arity(store: &TypeStore, sig: &Signature) -> ArityInfo {
     max,
     rest,
     fixed_len,
+  }
+}
+
+fn combine_max(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+  match (a, b) {
+    (Some(lhs), Some(rhs)) => lhs.checked_add(rhs),
+    _ => None,
   }
 }
 
@@ -1260,13 +1341,6 @@ fn rest_arity(style: &RestStyle) -> (usize, Option<usize>) {
       };
       (required, max)
     }
-  }
-}
-
-fn combine_max(a: Option<usize>, b: Option<usize>) -> Option<usize> {
-  match (a, b) {
-    (Some(lhs), Some(rhs)) => lhs.checked_add(rhs),
-    _ => None,
   }
 }
 
@@ -1397,6 +1471,11 @@ fn check_arguments(
     let expected = match expected_arg_type(store, sig, arity, idx) {
       Some(param) => param,
       None => {
+        // Excess args beyond a non-rest signature (or beyond an unbounded rest)
+        // are allowed — tsc/JS callback convention. Fixed rest tuples still error.
+        if arity.rest.is_none() || arity.max.is_none() {
+          continue;
+        }
         return (
           MatchScore::worst(),
           false,
@@ -1406,7 +1485,7 @@ fn check_arguments(
             actual_min: call_arity.min,
             actual_max: call_arity.max,
           }),
-        )
+        );
       }
     };
     if expected.from_rest {
@@ -1518,11 +1597,13 @@ fn expand_call_args(
           out.push(CallArgType {
             ty: elem.ty,
             spread: true,
+            span: arg.span,
           });
         } else {
           out.push(CallArgType {
             ty: optional_type(store, elem.ty, elem.optional),
             spread: false,
+            span: arg.span,
           });
         }
       }
@@ -1551,16 +1632,36 @@ fn count_unknown(
 fn build_no_match_diagnostic(
   store: &TypeStore,
   relate: &RelateCtx<'_>,
-  span: Span,
+  call_span: Span,
+  args: &[CallArgType],
   outcomes: &[CandidateOutcome],
 ) -> Diagnostic {
-  let mut diag = codes::NO_OVERLOAD.error("no overload matches this call", span);
-
   let mut rejected: Vec<&CandidateOutcome> = outcomes
     .iter()
     .filter(|outcome| outcome.rejection.is_some())
     .collect();
   rejected.sort_by_key(|candidate| fallback_rank_key(candidate, false));
+
+  // Prefer the first argument-type mismatch among ranked rejections — that is
+  // where `tsc` anchors TS2769 for common overload misses.
+  let arg_span = rejected
+    .iter()
+    .find_map(|outcome| match &outcome.rejection {
+      Some(CandidateRejection::ArgumentType { index, .. }) => {
+        args.get(*index).and_then(|arg| arg.span)
+      }
+      _ => None,
+    });
+  let primary = arg_span.unwrap_or(call_span);
+
+  // Multi-signature call sites get the tsc-shaped TS2769. Single-signature
+  // failures stay on TC2000 so call/new checkers can rewrite them to TS2345.
+  let code = if outcomes.len() > 1 {
+    codes::NO_OVERLOAD_MATCHES
+  } else {
+    codes::NO_OVERLOAD
+  };
+  let mut diag = code.error("No overload matches this call.", primary);
 
   let width = rejected.len().max(1).to_string().len();
   let shown = rejected.len().min(MAX_NOTES);
@@ -1570,11 +1671,12 @@ fn build_no_match_diagnostic(
     };
     let sig = store.signature(outcome.sig_id);
     diag.push_note(format!(
-      "overload {index:0width$}: {sig}: {reason}",
+      "Overload {index:0width$} of {total}, '{sig}', gave the following error.\n  {reason}",
       index = idx + 1,
       width = width,
+      total = outcomes.len(),
       sig = format_signature(store, &sig),
-      reason = describe_rejection(store, relate, reason),
+      reason = describe_rejection_tsc_shaped(store, relate, reason),
     ));
   }
 
@@ -1583,6 +1685,30 @@ fn build_no_match_diagnostic(
     diag.push_note(format!("~ {hidden} overload(s) not shown"));
   }
   diag
+}
+
+fn describe_rejection_tsc_shaped(
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  reason: &CandidateRejection,
+) -> String {
+  match reason {
+    CandidateRejection::ArgumentType { arg, param, .. } => {
+      let mut msg = format!(
+        "Argument of type '{}' is not assignable to parameter of type '{}'.",
+        TypeDisplay::new(store, *arg),
+        TypeDisplay::new(store, *param)
+      );
+      let explanation = relate.explain_assignable(*arg, *param);
+      if let Some(reason) = explanation.reason.as_ref() {
+        if let Some(note) = first_reason_note(reason) {
+          msg.push_str(&format!(" ({note})"));
+        }
+      }
+      msg
+    }
+    other => describe_rejection(store, relate, other),
+  }
 }
 
 fn first_reason_note(node: &ReasonNode) -> Option<String> {

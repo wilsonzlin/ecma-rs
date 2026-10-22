@@ -96,6 +96,14 @@ pub struct CompilerOptions {
   pub types: Vec<String>,
   pub strict_null_checks: bool,
   pub no_implicit_any: bool,
+  /// Whether `.js` / `.jsx` files are semantically checked (tsc `checkJs`).
+  ///
+  /// tsc semantics: a JS file included via `allowJs` is parsed and can
+  /// participate in the module graph, but produces **no semantic
+  /// diagnostics** unless `checkJs` is enabled (or the file opts in via
+  /// `// @ts-check`, which we do not model yet). `None` and `Some(false)`
+  /// both mean "parse-only" for JS files.
+  pub check_js: Option<bool>,
   pub strict_function_types: bool,
   pub exact_optional_property_types: bool,
   pub no_unchecked_indexed_access: bool,
@@ -111,6 +119,10 @@ pub struct CompilerOptions {
   ///   `TS2729` is suppressed if the property exists on a base class, matching
   ///   `tsc`'s behavior.
   pub use_define_for_class_fields: bool,
+  /// Whether class instance properties with non-undefined types must be
+  /// definitely assigned (initializer or all constructor paths). Requires
+  /// [`Self::strict_null_checks`]. Enabled by the `@strict` / `strict` preset.
+  pub strict_property_initialization: bool,
   pub jsx: Option<JsxMode>,
   /// Cache sizing and sharing strategy for the checker.
   pub cache: CacheOptions,
@@ -131,10 +143,14 @@ impl Default for CompilerOptions {
       types: Vec::new(),
       strict_null_checks: true,
       no_implicit_any: false,
+      check_js: None,
       strict_function_types: true,
       exact_optional_property_types: false,
       no_unchecked_indexed_access: false,
       use_define_for_class_fields: true,
+      // Off by default (tsc: only via `strict` / explicit flag). Unit tests and
+      // harness `@strict` enable it explicitly.
+      strict_property_initialization: false,
       jsx: None,
       cache: CacheOptions::default(),
     }

@@ -143,7 +143,10 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("1 = 2;");
   assert_reject("obj?.a = 1;");
   assert_reject("for (foo() of bar) {}");
-  assert_reject("for ((a) of b) {}");
+  // Parenthesized IdentifierReference is a valid SimpleAssignmentTarget
+  // (IsValidSimpleAssignmentTarget looks through ParenthesizedExpression).
+  assert_accept("for ((a) of b) {}");
+  assert_reject("for ((a + b) of c) {}");
   assert_reject("for (var x = 1 of y) {}");
   assert_reject("for (let x = 1 of y) {}");
   assert_reject("for (const x = 1 of y) {}");
@@ -164,6 +167,7 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("new.target;");
   assert_reject_module("new.target;");
   assert_reject("(() => new.target);");
+  assert_reject("((a = new.target) => a);");
   assert_reject("class A { [new.target] = 1 }");
 
   // `super` is only valid within methods/class element initialisers; `super()` is only
@@ -174,6 +178,11 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject_module("super();");
   assert_reject("function f() { super.foo; }");
   assert_reject("class A { constructor() { super(); } }");
+  assert_reject("class A { constructor(c = super()){} }");
+  // Nested non-arrow functions do not inherit `super` for their parameter defaults.
+  assert_reject("class B {} class A extends B { constructor() { function c(d = super()){} } }");
+  assert_reject("class B {} class A extends B { constructor() { !function(c = super()){} } }");
+  assert_reject("class B {} class A extends B { c() { !function* (d = super.e()){} } }");
   assert_reject("class B {} class A extends B { m() { super(); } }");
   assert_reject("class B {} class A extends B { m() { (() => super())(); } }");
   assert_reject("class B {} class A extends B { x = super(); }");
@@ -258,6 +267,11 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("function f() { new.target; }");
   assert_accept("function f() { (() => new.target)(); }");
   assert_accept("function f() { class A { [new.target] = 1 } }");
+  // Default-parameter initialisers evaluate in the function/method binding environment.
+  assert_accept("function a(b = new.target){}");
+  assert_accept("(function a(b = new.target){})");
+  assert_accept("({ a(b = new.target){} })");
+  assert_accept("({ set a(b = new.target){} })");
   assert_accept("class A { x = new.target; }");
   assert_accept("class A { x = (() => new.target)(); }");
   assert_accept("class A { static { new.target; } }");
@@ -265,6 +279,7 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("({ m() { super.foo; } });");
   assert_accept("class B {} class A extends B { constructor() { super(); } }");
   assert_accept("class B {} class A extends B { constructor() { (() => super())(); } }");
+  assert_accept("class B {} class A extends B { constructor(c = super()){} }");
   assert_accept("class C { constructor(){} ['constructor'](){} }");
   assert_accept("class C { constructor(){} static get constructor(){ return 1 } }");
   assert_accept("class C { static ['prototype'](){} }");

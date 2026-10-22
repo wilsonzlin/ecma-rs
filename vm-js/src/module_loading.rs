@@ -20,11 +20,11 @@
 
 use crate::module_graph::ModuleGraph;
 use crate::module_record::ModuleStatus;
-use crate::property::PropertyKey;
 use crate::promise::PromiseCapability;
+use crate::property::PropertyKey;
 use crate::{
-  GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId, RootId, Scope,
-  ScriptId, Value, Vm, VmError, MicrotaskQueue,
+  GcString, ImportAttribute, LoadedModuleRequest, MicrotaskQueue, ModuleId, ModuleRequest, RealmId,
+  RootId, Scope, ScriptId, Value, Vm, VmError,
 };
 use std::any::Any;
 use std::cell::RefCell;
@@ -100,7 +100,10 @@ impl fmt::Debug for HostDefined {
         .debug_struct("HostDefined")
         .field("type_id", &v.type_id())
         .finish(),
-      None => f.debug_struct("HostDefined").field("value", &"undefined").finish(),
+      None => f
+        .debug_struct("HostDefined")
+        .field("value", &"undefined")
+        .finish(),
     }
   }
 }
@@ -217,25 +220,32 @@ impl GraphLoadingState {
 
   fn push_visited(&self, module: ModuleId) -> Result<(), VmError> {
     let mut state = self.0.borrow_mut();
-    state.visited.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+    state
+      .visited
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
     state.visited.push(module);
     Ok(())
   }
 
   fn inc_pending(&self, delta: usize) -> Result<(), VmError> {
     let mut state = self.0.borrow_mut();
-    state.pending_modules_count = state
-      .pending_modules_count
-      .checked_add(delta)
-      .ok_or(VmError::LimitExceeded(
-        "module graph loader pending module count overflow",
-      ))?;
+    state.pending_modules_count =
+      state
+        .pending_modules_count
+        .checked_add(delta)
+        .ok_or(VmError::LimitExceeded(
+          "module graph loader pending module count overflow",
+        ))?;
     Ok(())
   }
 
   fn dec_pending(&self) -> usize {
     let mut state = self.0.borrow_mut();
-    debug_assert!(state.pending_modules_count > 0, "pendingModulesCount underflow");
+    debug_assert!(
+      state.pending_modules_count > 0,
+      "pendingModulesCount underflow"
+    );
     state.pending_modules_count = state.pending_modules_count.saturating_sub(1);
     state.pending_modules_count
   }
@@ -260,7 +270,12 @@ impl GraphLoadingState {
     Ok(())
   }
 
-  fn reject_promise(&self, vm: &mut Vm, scope: &mut Scope<'_>, err: VmError) -> Result<(), VmError> {
+  fn reject_promise(
+    &self,
+    vm: &mut Vm,
+    scope: &mut Scope<'_>,
+    err: VmError,
+  ) -> Result<(), VmError> {
     let (cap, roots) = {
       let mut state = self.0.borrow_mut();
       (state.promise_capability, state.promise_roots.take())
@@ -644,7 +659,9 @@ pub fn import_attributes_from_options(
   }
 
   let Value::Object(options_obj) = options else {
-    return Err(ImportCallError::TypeError(ImportCallTypeError::OptionsNotObject));
+    return Err(ImportCallError::TypeError(
+      ImportCallTypeError::OptionsNotObject,
+    ));
   };
 
   let with_key =
@@ -726,7 +743,10 @@ pub fn import_attributes_from_options(
 }
 
 /// Spec helper: `AllImportAttributesSupported(attributes)`.
-pub fn all_import_attributes_supported(supported_keys: &[&str], attributes: &[ImportAttribute]) -> bool {
+pub fn all_import_attributes_supported(
+  supported_keys: &[&str],
+  attributes: &[ImportAttribute],
+) -> bool {
   attributes
     .iter()
     .all(|attr| supported_keys.iter().any(|k| *k == attr.key.as_str()))
@@ -863,8 +883,8 @@ mod tests {
     let mut vm = Vm::new(VmOptions::default());
 
     let supported = ["type"];
-    let err =
-      import_attributes_from_options(&mut vm, &mut scope, Value::Number(1.0), &supported).unwrap_err();
+    let err = import_attributes_from_options(&mut vm, &mut scope, Value::Number(1.0), &supported)
+      .unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::OptionsNotObject)
@@ -881,7 +901,8 @@ mod tests {
       .unwrap();
 
     let err =
-      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported).unwrap_err();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported)
+        .unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::AttributesNotObject)
@@ -907,7 +928,8 @@ mod tests {
       .unwrap();
 
     let err =
-      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options2), &supported).unwrap_err();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options2), &supported)
+        .unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::AttributeValueNotString)
@@ -922,6 +944,9 @@ mod tests {
       reject: Value::Undefined,
     };
     let err = continue_dynamic_import(cap, Ok(ModuleId::from_raw(1))).unwrap_err();
-    assert!(matches!(err, VmError::Unimplemented("ContinueDynamicImport")));
+    assert!(matches!(
+      err,
+      VmError::Unimplemented("ContinueDynamicImport")
+    ));
   }
 }

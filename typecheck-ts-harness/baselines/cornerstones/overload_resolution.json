@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "strictPropertyInitialization": false,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2769,
+      "file": "overload_resolution.ts",
+      "start": 264,
+      "end": 268,
+      "category": "error",
+      "message": "No overload matches this call.\n  Overload 1 of 2, '(x: string): string', gave the following error.\n    Argument of type 'boolean' is not assignable to parameter of type 'string'.\n  Overload 2 of 2, '(x: number): number', gave the following error.\n    Argument of type 'boolean' is not assignable to parameter of type 'number'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "overload_resolution.ts",
+        "name": "n",
+        "type": "number"
+      },
+      {
+        "file": "overload_resolution.ts",
+        "name": "pick",
+        "type": "{ (number) => number; (string) => string }"
+      },
+      {
+        "file": "overload_resolution.ts",
+        "name": "s",
+        "type": "string"
+      }
+    ]
+  }
+}

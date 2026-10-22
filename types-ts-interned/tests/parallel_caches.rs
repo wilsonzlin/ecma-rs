@@ -166,6 +166,7 @@ fn build_evaluator_inputs(store: &Arc<TypeStore>, expander: &TestExpander) -> Ve
     distributive: true,
   });
   let mapped_plain = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: mapped_param,
     source: keyof_obj,
     value: cond,
@@ -179,6 +180,7 @@ fn build_evaluator_inputs(store: &Arc<TypeStore>, expander: &TestExpander) -> Ve
     ty: mapped_param_ty,
   });
   let mapped_remap = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: mapped_param,
     source: keyof_obj,
     value: cond,
@@ -436,6 +438,7 @@ fn build_relation_pairs(store: &Arc<TypeStore>) -> Vec<(TypeId, TypeId)> {
     distributive: true,
   });
   let mapped_obj = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: mapped_param,
     source: keyof_obj_a,
     value: mapped_value,

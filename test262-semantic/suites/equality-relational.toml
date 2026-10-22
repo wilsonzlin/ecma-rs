@@ -1,0 +1,29 @@
+# Equality, relational, and short-circuit operator semantics.
+#
+# Exercises Abstract Equality Comparison / Strict Equality Comparison and
+# Abstract Relational Comparison (ECMA-262 §7.2.14-7.2.16), plus typeof,
+# instanceof, in, the conditional operator, and short-circuit logical ops.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/expressions/equals/**/*.js",
+  "language/expressions/does-not-equals/**/*.js",
+  "language/expressions/strict-equals/**/*.js",
+  "language/expressions/strict-does-not-equals/**/*.js",
+  "language/expressions/less-than/**/*.js",
+  "language/expressions/greater-than/**/*.js",
+  "language/expressions/less-than-or-equal/**/*.js",
+  "language/expressions/greater-than-or-equal/**/*.js",
+  "language/expressions/typeof/**/*.js",
+  "language/expressions/instanceof/**/*.js",
+  "language/expressions/in/**/*.js",
+  "language/expressions/conditional/**/*.js",
+  "language/expressions/logical-and/**/*.js",
+  "language/expressions/logical-or/**/*.js",
+  "language/expressions/coalesce/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

@@ -86,4 +86,3 @@ pub struct ExecutionContext {
   pub realm: RealmId,
   pub script_or_module: Option<ScriptOrModule>,
 }
-

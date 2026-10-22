@@ -144,7 +144,13 @@ fn executor_resolve_one(
   args: &[Value],
 ) -> Result<Value, VmError> {
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(
+    scope,
+    hooks,
+    resolve,
+    Value::Undefined,
+    &[Value::Number(1.0)],
+  )?;
   Ok(Value::Undefined)
 }
 
@@ -158,7 +164,13 @@ fn executor_reject_one(
   args: &[Value],
 ) -> Result<Value, VmError> {
   let reject = args.get(1).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, hooks, reject, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(
+    scope,
+    hooks,
+    reject,
+    Value::Undefined,
+    &[Value::Number(1.0)],
+  )?;
   Ok(Value::Undefined)
 }
 
@@ -256,7 +268,13 @@ fn thenable_then_resolve_42(
   args: &[Value],
 ) -> Result<Value, VmError> {
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(42.0)])?;
+  let _ = vm.call_with_host(
+    scope,
+    hooks,
+    resolve,
+    Value::Undefined,
+    &[Value::Number(42.0)],
+  )?;
   Ok(Value::Undefined)
 }
 
@@ -319,7 +337,13 @@ fn executor_resolve_thenable_then_resolve_again(
     Value::Undefined,
     &[Value::Object(thenable)],
   )?;
-  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(
+    scope,
+    hooks,
+    resolve,
+    Value::Undefined,
+    &[Value::Number(1.0)],
+  )?;
 
   Ok(Value::Undefined)
 }
@@ -408,7 +432,9 @@ fn basic_fulfillment_then_schedules_microtask_and_fulfills_derived() -> Result<(
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
 
     let add_one_id = ctx.vm.register_native_call(add_one)?;
@@ -423,7 +449,9 @@ fn basic_fulfillment_then_schedules_microtask_and_fulfills_derived() -> Result<(
       &[Value::Object(add_one_fn)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.then returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.then returned non-object",
+      ));
     };
 
     // Attach another handler to the derived promise before running jobs (pending-then path).
@@ -441,15 +469,28 @@ fn basic_fulfillment_then_schedules_microtask_and_fulfills_derived() -> Result<(
     (promise_obj, derived_obj)
   };
 
-  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Fulfilled);
+  assert_eq!(
+    ctx.heap.promise_state(promise_obj)?,
+    PromiseState::Fulfilled
+  );
   assert_eq!(ctx.heap.promise_state(derived_obj)?, PromiseState::Pending);
   assert_eq!(host.queue.len(), 1, "then() should enqueue exactly one job");
-  assert_eq!(ctx.vm.microtask_queue().len(), 0, "custom host should be used");
+  assert_eq!(
+    ctx.vm.microtask_queue().len(),
+    0,
+    "custom host should be used"
+  );
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(derived_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(derived_obj)?, Some(Value::Number(2.0)));
+  assert_eq!(
+    ctx.heap.promise_state(derived_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(derived_obj)?,
+    Some(Value::Number(2.0))
+  );
   assert_eq!(THEN2_ARG.with(|c| c.get()), Some(2.0));
 
   realm.teardown(&mut ctx.heap);
@@ -481,12 +522,17 @@ fn rejection_tracker_reports_reject_then_handle() -> Result<(), VmError> {
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
 
     assert_eq!(
       host.rejection_tracker,
-      vec![(PromiseHandle(promise_obj), PromiseRejectionOperation::Reject)]
+      vec![(
+        PromiseHandle(promise_obj),
+        PromiseRejectionOperation::Reject
+      )]
     );
 
     let on_rejected_id = ctx.vm.register_native_call(return_99)?;
@@ -501,7 +547,9 @@ fn rejection_tracker_reports_reject_then_handle() -> Result<(), VmError> {
       &[Value::Undefined, Value::Object(on_rejected)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.then returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.then returned non-object",
+      ));
     };
 
     (promise_obj, derived_obj)
@@ -510,16 +558,28 @@ fn rejection_tracker_reports_reject_then_handle() -> Result<(), VmError> {
   assert_eq!(
     host.rejection_tracker,
     vec![
-      (PromiseHandle(promise_obj), PromiseRejectionOperation::Reject),
-      (PromiseHandle(promise_obj), PromiseRejectionOperation::Handle),
+      (
+        PromiseHandle(promise_obj),
+        PromiseRejectionOperation::Reject
+      ),
+      (
+        PromiseHandle(promise_obj),
+        PromiseRejectionOperation::Handle
+      ),
     ]
   );
   assert_eq!(host.queue.len(), 1);
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(derived_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(derived_obj)?, Some(Value::Number(99.0)));
+  assert_eq!(
+    ctx.heap.promise_state(derived_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(derived_obj)?,
+    Some(Value::Number(99.0))
+  );
 
   realm.teardown(&mut ctx.heap);
   Ok(())
@@ -552,7 +612,9 @@ fn pending_then_resolve_later_triggers_reaction_job() -> Result<(), VmError> {
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
 
     let add_one_id = ctx.vm.register_native_call(add_one)?;
@@ -567,7 +629,9 @@ fn pending_then_resolve_later_triggers_reaction_job() -> Result<(), VmError> {
       &[Value::Object(add_one_fn)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.then returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.then returned non-object",
+      ));
     };
 
     (promise_obj, derived_obj)
@@ -577,24 +641,36 @@ fn pending_then_resolve_later_triggers_reaction_job() -> Result<(), VmError> {
   assert_eq!(host.queue.len(), 0);
 
   // Resolve later.
-  let resolve_root = STORED_RESOLVE_ROOT.with(|c| c.take()).expect("resolve root should be set");
+  let resolve_root = STORED_RESOLVE_ROOT
+    .with(|c| c.take())
+    .expect("resolve root should be set");
   let resolve = ctx
     .heap
     .get_root(resolve_root)
     .expect("resolve root should be valid");
   {
     let mut scope = ctx.heap.scope();
-    let _ = ctx
-      .vm
-      .call_with_host(&mut scope, &mut host, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+    let _ = ctx.vm.call_with_host(
+      &mut scope,
+      &mut host,
+      resolve,
+      Value::Undefined,
+      &[Value::Number(1.0)],
+    )?;
   }
   ctx.heap.remove_root(resolve_root);
 
   assert_eq!(host.queue.len(), 1);
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(derived_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(derived_obj)?, Some(Value::Number(2.0)));
+  assert_eq!(
+    ctx.heap.promise_state(derived_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(derived_obj)?,
+    Some(Value::Number(2.0))
+  );
 
   realm.teardown(&mut ctx.heap);
   Ok(())
@@ -628,7 +704,9 @@ fn fulfill_reactions_run_in_registration_order() -> Result<(), VmError> {
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
 
     let log1_id = ctx.vm.register_native_call(log_1)?;
@@ -661,16 +739,22 @@ fn fulfill_reactions_run_in_registration_order() -> Result<(), VmError> {
   assert_eq!(host.queue.len(), 0);
 
   // Resolve later, then run jobs.
-  let resolve_root = STORED_RESOLVE_ROOT.with(|c| c.take()).expect("resolve root should be set");
+  let resolve_root = STORED_RESOLVE_ROOT
+    .with(|c| c.take())
+    .expect("resolve root should be set");
   let resolve = ctx
     .heap
     .get_root(resolve_root)
     .expect("resolve root should be valid");
   {
     let mut scope = ctx.heap.scope();
-    let _ =
-      ctx.vm
-        .call_with_host(&mut scope, &mut host, resolve, Value::Undefined, &[Value::Undefined])?;
+    let _ = ctx.vm.call_with_host(
+      &mut scope,
+      &mut host,
+      resolve,
+      Value::Undefined,
+      &[Value::Undefined],
+    )?;
   }
   ctx.heap.remove_root(resolve_root);
 
@@ -680,7 +764,10 @@ fn fulfill_reactions_run_in_registration_order() -> Result<(), VmError> {
   assert_eq!(CALL_LOG.with(|l| l.borrow().clone()), vec![1, 2]);
 
   // Keep `promise_obj` used so the test exercises the promise API.
-  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Fulfilled);
+  assert_eq!(
+    ctx.heap.promise_state(promise_obj)?,
+    PromiseState::Fulfilled
+  );
 
   realm.teardown(&mut ctx.heap);
   Ok(())
@@ -711,7 +798,9 @@ fn thenable_assimilation_and_already_resolved_record() -> Result<(), VmError> {
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
     promise_obj
   };
@@ -722,8 +811,14 @@ fn thenable_assimilation_and_already_resolved_record() -> Result<(), VmError> {
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(promise_obj)?, Some(Value::Number(42.0)));
+  assert_eq!(
+    ctx.heap.promise_state(promise_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(promise_obj)?,
+    Some(Value::Number(42.0))
+  );
 
   realm.teardown(&mut ctx.heap);
   Ok(())
@@ -756,7 +851,9 @@ fn thenable_assimilation_supports_accessor_then_property() -> Result<(), VmError
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
     promise_obj
   };
@@ -767,8 +864,14 @@ fn thenable_assimilation_supports_accessor_then_property() -> Result<(), VmError
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(promise_obj)?, Some(Value::Number(42.0)));
+  assert_eq!(
+    ctx.heap.promise_state(promise_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(promise_obj)?,
+    Some(Value::Number(42.0))
+  );
 
   realm.teardown(&mut ctx.heap);
   Ok(())
@@ -800,7 +903,9 @@ fn jobs_root_captures_across_gc() -> Result<(), VmError> {
       Value::Object(promise_ctor),
     )?
     else {
-      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise constructor returned non-object",
+      ));
     };
 
     let add_one_id = ctx.vm.register_native_call(add_one)?;
@@ -814,7 +919,9 @@ fn jobs_root_captures_across_gc() -> Result<(), VmError> {
       &[Value::Object(add_one_fn)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.then returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.then returned non-object",
+      ));
     };
 
     // --- Thenable job rooting (Promise.resolve(thenable)) ---
@@ -838,10 +945,16 @@ fn jobs_root_captures_across_gc() -> Result<(), VmError> {
       &[Value::Object(thenable)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.resolve returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.resolve returned non-object",
+      ));
     };
 
-    assert_eq!(host.queue.len(), 2, "expected one reaction job and one thenable job");
+    assert_eq!(
+      host.queue.len(),
+      2,
+      "expected one reaction job and one thenable job"
+    );
     (derived_obj, thenable_promise_obj)
   };
 
@@ -854,8 +967,14 @@ fn jobs_root_captures_across_gc() -> Result<(), VmError> {
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(derived_obj)?, PromiseState::Fulfilled);
-  assert_eq!(ctx.heap.promise_result(derived_obj)?, Some(Value::Number(2.0)));
+  assert_eq!(
+    ctx.heap.promise_state(derived_obj)?,
+    PromiseState::Fulfilled
+  );
+  assert_eq!(
+    ctx.heap.promise_result(derived_obj)?,
+    Some(Value::Number(2.0))
+  );
 
   assert_eq!(
     ctx.heap.promise_state(thenable_promise_obj)?,

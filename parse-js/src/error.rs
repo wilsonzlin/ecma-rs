@@ -27,6 +27,21 @@ use std::fmt::Display;
 /// - `PS0014`: [`SyntaxErrorType::TryStatementHasNoCatchOrFinally`]
 /// - `PS0015`: [`SyntaxErrorType::UnexpectedEnd`]
 /// - `PS0016`: [`SyntaxErrorType::Cancelled`]
+/// - `PS0017`: [`SyntaxErrorType::InvalidOptionalChainFromNew`]
+/// - `PS0018`: [`SyntaxErrorType::DeclarationInSingleStatementPosition`]
+/// - `PS0019`: [`SyntaxErrorType::BindingPatternRequiresInitializer`]
+/// - `PS0020`: [`SyntaxErrorType::UnterminatedMultilineComment`]
+/// - `PS0021`: [`SyntaxErrorType::InvalidRestParameter`]
+/// - `PS0022`: [`SyntaxErrorType::NumericLiteralFollowedByIdentifier`]
+/// - `PS0023`: [`SyntaxErrorType::HtmlCommentInModule`]
+/// - `PS0024`: [`SyntaxErrorType::InvalidClassHeritage`]
+/// - `PS0025`: [`SyntaxErrorType::LegacyOctalEscapeInTemplate`]
+/// - `PS0026`: [`SyntaxErrorType::InvalidUpdateOperand`]
+/// - `PS0027`: [`SyntaxErrorType::MixedNullishLogicalOperators`]
+/// - `PS0028`: [`SyntaxErrorType::OptionalChainTaggedTemplate`]
+/// - `PS0029`: [`SyntaxErrorType::InvalidPrivateIdentifier`]
+/// - `PS0030`: [`SyntaxErrorType::InvalidCharacter`] (tsc TS1127)
+/// - `PS0031`: [`SyntaxErrorType::VariableDeclarationExpected`] (tsc TS1134)
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SyntaxErrorType {
   ExpectedNotFound,
@@ -45,6 +60,37 @@ pub enum SyntaxErrorType {
   TryStatementHasNoCatchOrFinally,
   UnexpectedEnd,
   Cancelled,
+  /// Optional chain in/after a bare `new` expression (ECMA-262; mirrors TS1209).
+  InvalidOptionalChainFromNew,
+  /// Declaration where only Statement is allowed (ECMA-262 §14 Statement vs StatementListItem).
+  DeclarationInSingleStatementPosition,
+  /// `var`/`let`/`const` BindingPattern without Initializer (ECMA-262 §14.3.1/§14.3.2).
+  BindingPatternRequiresInitializer,
+  /// Unterminated MultiLineComment (ECMA-262 §12.4).
+  UnterminatedMultilineComment,
+  /// Rest parameter not last / with initializer / with trailing comma (ECMA-262 §15.1).
+  InvalidRestParameter,
+  /// NumericLiteral immediately followed by IdentifierStart (ECMA-262 §12.9.3).
+  NumericLiteralFollowedByIdentifier,
+  /// HTML-like comment in module code (ECMA-262 §B.1.1; script-only).
+  HtmlCommentInModule,
+  /// ClassHeritage is not a LeftHandSideExpression (ECMA-262 §15.7).
+  InvalidClassHeritage,
+  /// Legacy octal / non-octal decimal escape in a template literal (ECMA-262 §12.9.6).
+  LegacyOctalEscapeInTemplate,
+  /// UpdateExpression operand is not a simple assignment target (ECMA-262 §13.4).
+  InvalidUpdateOperand,
+  /// `??` mixed with `&&`/`||` without parentheses (ECMA-262 ShortCircuitExpression).
+  MixedNullishLogicalOperators,
+  /// Tagged template after optional chain (`?.`…`` ` ``) (ECMA-262 OptionalChain early error).
+  OptionalChainTaggedTemplate,
+  /// Bare `PrivateIdentifier` outside `#id in ShiftExpression` / member access
+  /// (ECMA-262 RelationalExpression / PrimaryExpression).
+  InvalidPrivateIdentifier,
+  /// Bare `#` (PrivateIdentifier without IdentifierName). Mirrors tsc TS1127.
+  InvalidCharacter,
+  /// Junk token where a variable declarator was expected. Mirrors tsc TS1134.
+  VariableDeclarationExpected,
 }
 
 #[derive(Clone)]
@@ -138,6 +184,21 @@ impl SyntaxErrorType {
       SyntaxErrorType::TryStatementHasNoCatchOrFinally => "PS0014",
       SyntaxErrorType::UnexpectedEnd => "PS0015",
       SyntaxErrorType::Cancelled => "PS0016",
+      SyntaxErrorType::InvalidOptionalChainFromNew => "PS0017",
+      SyntaxErrorType::DeclarationInSingleStatementPosition => "PS0018",
+      SyntaxErrorType::BindingPatternRequiresInitializer => "PS0019",
+      SyntaxErrorType::UnterminatedMultilineComment => "PS0020",
+      SyntaxErrorType::InvalidRestParameter => "PS0021",
+      SyntaxErrorType::NumericLiteralFollowedByIdentifier => "PS0022",
+      SyntaxErrorType::HtmlCommentInModule => "PS0023",
+      SyntaxErrorType::InvalidClassHeritage => "PS0024",
+      SyntaxErrorType::LegacyOctalEscapeInTemplate => "PS0025",
+      SyntaxErrorType::InvalidUpdateOperand => "PS0026",
+      SyntaxErrorType::MixedNullishLogicalOperators => "PS0027",
+      SyntaxErrorType::OptionalChainTaggedTemplate => "PS0028",
+      SyntaxErrorType::InvalidPrivateIdentifier => "PS0029",
+      SyntaxErrorType::InvalidCharacter => "PS0030",
+      SyntaxErrorType::VariableDeclarationExpected => "PS0031",
     }
   }
 
@@ -174,6 +235,41 @@ impl SyntaxErrorType {
         .map(|tok| format!("unexpected end before {:?}", tok))
         .unwrap_or_else(|| "unexpected end of input".into()),
       SyntaxErrorType::Cancelled => "parsing cancelled".into(),
+      SyntaxErrorType::InvalidOptionalChainFromNew => {
+        "invalid optional chain from new expression".into()
+      }
+      SyntaxErrorType::DeclarationInSingleStatementPosition => {
+        "declaration not allowed in single-statement position".into()
+      }
+      SyntaxErrorType::BindingPatternRequiresInitializer => {
+        "binding pattern requires an initializer".into()
+      }
+      SyntaxErrorType::UnterminatedMultilineComment => "unterminated multiline comment".into(),
+      SyntaxErrorType::InvalidRestParameter => "invalid rest parameter".into(),
+      SyntaxErrorType::NumericLiteralFollowedByIdentifier => {
+        "numeric literal cannot be immediately followed by an identifier".into()
+      }
+      SyntaxErrorType::HtmlCommentInModule => {
+        "HTML-like comments are not allowed in module code".into()
+      }
+      SyntaxErrorType::InvalidClassHeritage => {
+        "class heritage must be a left-hand-side expression".into()
+      }
+      SyntaxErrorType::LegacyOctalEscapeInTemplate => {
+        "octal escape sequences are not allowed in template literals".into()
+      }
+      SyntaxErrorType::InvalidUpdateOperand => "invalid operand of update expression".into(),
+      SyntaxErrorType::MixedNullishLogicalOperators => {
+        "nullish coalescing cannot be mixed with logical and/or without parentheses".into()
+      }
+      SyntaxErrorType::OptionalChainTaggedTemplate => {
+        "tagged template cannot follow optional chain".into()
+      }
+      SyntaxErrorType::InvalidPrivateIdentifier => {
+        "private identifier is only valid in member access or `#name in` expressions".into()
+      }
+      SyntaxErrorType::InvalidCharacter => "Invalid character.".into(),
+      SyntaxErrorType::VariableDeclarationExpected => "Variable declaration expected.".into(),
     }
   }
 

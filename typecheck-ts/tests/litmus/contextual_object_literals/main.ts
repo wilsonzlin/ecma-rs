@@ -7,4 +7,4 @@ const bad: Tag = { tag: "c" };
 // expect-diagnostic: TS2322 "tag: \"c\""
 
 const extra: Tag = { tag: "a", extra: 1 };
-// expect-diagnostic: TC0006 "extra: 1"
+// expect-diagnostic: TS2353 "extra: 1"

@@ -250,7 +250,7 @@ impl<'a> Parser<'a> {
               },
             );
             base = Node::new(outer_loc, TypeExpr::ArrayType(array));
-          } else {
+          } else if self.is_start_of_type() {
             // Indexed access: T[K]
             let index = self.type_expr(ctx)?;
             let end_loc = self.peek().loc;
@@ -265,6 +265,31 @@ impl<'a> Parser<'a> {
               },
             );
             base = Node::new(outer_loc, TypeExpr::IndexedAccessType(indexed));
+          } else {
+            // tsc `parsePostfixTypeOrHigher`: when `[` is not followed by a type,
+            // treat as array `T[]` and soft-expect `]` (e.g. `C[#bar]` → `]` expected
+            // on `#bar`, leave `#bar]…` for declaration-list recovery).
+            let end_loc = if self.peek().typ == TT::BracketClose {
+              let loc = self.peek().loc;
+              self.consume();
+              loc
+            } else if self.should_recover() {
+              let tok = self.peek();
+              self.report_soft(tok.error(SyntaxErrorType::RequiredTokenNotFound(TT::BracketClose)));
+              tok.loc
+            } else {
+              self.require(TT::BracketClose)?.loc
+            };
+            use crate::loc::Loc;
+            let outer_loc = Loc(start_loc.0, end_loc.1);
+            let array = Node::new(
+              start_loc,
+              TypeArray {
+                readonly: false,
+                element_type: Box::new(base),
+              },
+            );
+            base = Node::new(outer_loc, TypeExpr::ArrayType(array));
           }
         }
         _ => break,
@@ -561,20 +586,90 @@ impl<'a> Parser<'a> {
       // Template literal type
       TT::LiteralTemplatePartString => self.template_literal_type(ctx),
 
-      // TypeScript: Error recovery - private names in type expressions
-      // Example: `const x: C[#bar] = 3;` (indexed access with private name)
-      // The type checker will catch this as a semantic error
-      TT::PrivateMember => {
-        let loc = self.peek().loc;
-        let name = self.consume_as_string();
-        let reference = Node::new(loc, TypeReference {
-          name: TypeEntityName::Identifier(name),
-          type_arguments: None,
-        });
-        Ok(Node::new(loc, TypeExpr::TypeReference(reference)))
-      }
-
+      // PrivateIdentifier is not a type (tsc `isStartOfType` is false). Leave the
+      // token for outer recovery (e.g. array-type `]` expected + declarator list).
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type expression"))),
+    }
+  }
+
+  /// Whether the current token can begin a TypeScript type (tsc `isStartOfType`).
+  ///
+  /// Notably **excludes** `PrivateMember` so `T[#foo]` recovers as array `T[]`
+  /// with `]` expected, matching tsc — not as indexed access.
+  pub fn is_start_of_type(&mut self) -> bool {
+    match self.peek().typ {
+      TT::KeywordAny
+      | TT::KeywordUnknown
+      | TT::KeywordNever
+      | TT::KeywordVoid
+      | TT::KeywordStringType
+      | TT::KeywordNumberType
+      | TT::KeywordBooleanType
+      | TT::KeywordBigIntType
+      | TT::KeywordSymbolType
+      | TT::KeywordObjectType
+      | TT::KeywordUndefinedType
+      | TT::KeywordIntrinsic
+      | TT::KeywordUnique
+      | TT::KeywordReadonly
+      | TT::KeywordThis
+      | TT::KeywordTypeof
+      | TT::KeywordKeyof
+      | TT::KeywordInfer
+      | TT::KeywordImport
+      | TT::KeywordNew
+      | TT::KeywordAbstract
+      | TT::KeywordAsserts
+      | TT::KeywordFunction
+      | TT::BraceOpen
+      | TT::BracketOpen
+      | TT::ParenthesisOpen
+      | TT::ChevronLeft
+      | TT::Bar
+      | TT::Ampersand
+      | TT::Asterisk
+      | TT::Question
+      | TT::Exclamation
+      | TT::DotDotDot
+      | TT::LiteralString
+      | TT::LiteralNumber
+      | TT::LiteralBigInt
+      | TT::LiteralTrue
+      | TT::LiteralFalse
+      | TT::LiteralNull
+      | TT::LiteralTemplatePartString
+      | TT::LiteralTemplatePartStringEnd
+      | TT::Identifier => true,
+      TT::Hyphen => {
+        let [_, next] = self.peek_n::<2>();
+        matches!(next.typ, TT::LiteralNumber | TT::LiteralBigInt)
+      }
+      // Contextual / recovery type-identifier keywords (same set as type_primary).
+      TT::KeywordAwait
+      | TT::KeywordYield
+      | TT::KeywordAsync
+      | TT::KeywordAs
+      | TT::KeywordFrom
+      | TT::KeywordOf
+      | TT::KeywordGet
+      | TT::KeywordSet
+      | TT::KeywordConstructor
+      | TT::KeywordDeclare
+      | TT::KeywordImplements
+      | TT::KeywordIs
+      | TT::KeywordModule
+      | TT::KeywordNamespace
+      | TT::KeywordOverride
+      | TT::KeywordPrivate
+      | TT::KeywordProtected
+      | TT::KeywordPublic
+      | TT::KeywordSatisfies
+      | TT::KeywordStatic
+      | TT::KeywordUsing
+      | TT::KeywordOut
+      | TT::KeywordLet
+      | TT::KeywordSuper => true,
+      _ => false,
     }
   }
 
@@ -931,12 +1026,20 @@ impl<'a> Parser<'a> {
     let mut members = Vec::new();
 
     while self.peek().typ != TT::BraceClose && self.peek().typ != TT::EOF {
-      members.push(self.type_member(ctx)?);
+      let mut member = self.type_member(ctx)?;
 
-      // Optional semicolon or comma separator
-      if !self.consume_if(TT::Semicolon).is_match() {
-        let _ = self.consume_if(TT::Comma);
+      // Optional semicolon or comma separator. Fold the separator into the
+      // member span so method/property nodes match tsc (which includes `;`).
+      let semi = self.consume_if(TT::Semicolon);
+      if semi.is_match() {
+        member.loc = crate::loc::Loc(member.loc.0, semi.loc.1);
+      } else {
+        let comma = self.consume_if(TT::Comma);
+        if comma.is_match() {
+          member.loc = crate::loc::Loc(member.loc.0, comma.loc.1);
+        }
       }
+      members.push(member);
     }
 
     Ok(members)
@@ -1006,23 +1109,26 @@ impl<'a> Parser<'a> {
       self.consume(); // `set`
     }
 
-    // Parse property key
+    // Capture the key's start *before* consuming it. Property/method/accessor
+    // helpers historically began their `Loc` after the key (at `:` / `(`), which
+    // omitted private names from member spans and broke TS18016 diagnostics.
+    let key_start = self.peek().loc;
     let key = self.type_property_key(ctx)?;
     let optional = self.consume_if(TT::Question).is_match();
 
     if is_get {
-      return self.get_accessor_signature(ctx, key);
+      return self.get_accessor_signature(ctx, key, key_start);
     } else if is_set {
-      return self.set_accessor_signature(ctx, key);
+      return self.set_accessor_signature(ctx, key, key_start);
     }
 
     // Check if it's a method signature (has parentheses)
     if self.peek().typ == TT::ParenthesisOpen || self.peek().typ == TT::ChevronLeft {
-      return self.method_signature(ctx, key, optional);
+      return self.method_signature(ctx, key, optional, key_start);
     }
 
     // It's a property signature
-    self.property_signature(ctx, key, readonly, optional)
+    self.property_signature(ctx, key, readonly, optional, key_start)
   }
 
   /// Parse type property key
@@ -1081,8 +1187,8 @@ impl<'a> Parser<'a> {
     key: TypePropertyKey,
     readonly: bool,
     optional: bool,
+    key_start: crate::loc::Loc,
   ) -> SyntaxResult<Node<TypeMember>> {
-    let start_loc = self.peek().loc;
     let type_annotation = if self.consume_if(TT::Colon).is_match() {
       Some(self.type_expr(ctx)?)
     } else {
@@ -1095,9 +1201,9 @@ impl<'a> Parser<'a> {
       self.peek().loc
     };
     use crate::loc::Loc;
-    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let outer_loc = Loc(key_start.0, end_loc.1);
     let prop = Node::new(
-      start_loc,
+      key_start,
       TypePropertySignature {
         readonly,
         optional,
@@ -1114,8 +1220,8 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
     key: TypePropertyKey,
     optional: bool,
+    key_start: crate::loc::Loc,
   ) -> SyntaxResult<Node<TypeMember>> {
-    let start_loc = self.peek().loc;
     let type_parameters = if self.peek().typ == TT::ChevronLeft && self.is_start_of_type_arguments()
     {
       Some(self.type_parameters(ctx)?)
@@ -1140,9 +1246,9 @@ impl<'a> Parser<'a> {
       self.peek().loc
     };
     use crate::loc::Loc;
-    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let outer_loc = Loc(key_start.0, end_loc.1);
     let method = Node::new(
-      start_loc,
+      key_start,
       TypeMethodSignature {
         optional,
         key,
@@ -1252,8 +1358,8 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
     key: TypePropertyKey,
+    key_start: crate::loc::Loc,
   ) -> SyntaxResult<Node<TypeMember>> {
-    let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
     // ES2017+: Allow trailing comma in empty parameter list
     let _ = self.consume_if(TT::Comma);
@@ -1272,8 +1378,8 @@ impl<'a> Parser<'a> {
       self.peek().loc
     };
     use crate::loc::Loc;
-    let outer_loc = Loc(start_loc.0, end_loc.1);
-    let accessor = Node::new(start_loc, TypeGetAccessor { key, return_type });
+    let outer_loc = Loc(key_start.0, end_loc.1);
+    let accessor = Node::new(key_start, TypeGetAccessor { key, return_type });
     Ok(Node::new(outer_loc, TypeMember::GetAccessor(accessor)))
   }
 
@@ -1282,8 +1388,8 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
     key: TypePropertyKey,
+    key_start: crate::loc::Loc,
   ) -> SyntaxResult<Node<TypeMember>> {
-    let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
     // TypeScript: Error recovery - allow setters with no parameter
     let parameter = if self.peek().typ == TT::ParenthesisClose {
@@ -1310,8 +1416,8 @@ impl<'a> Parser<'a> {
     self.require(TT::ParenthesisClose)?;
 
     use crate::loc::Loc;
-    let outer_loc = Loc(start_loc.0, end_loc.1);
-    let accessor = Node::new(start_loc, TypeSetAccessor { key, parameter });
+    let outer_loc = Loc(key_start.0, end_loc.1);
+    let accessor = Node::new(key_start, TypeSetAccessor { key, parameter });
     Ok(Node::new(outer_loc, TypeMember::SetAccessor(accessor)))
   }
 
@@ -1656,12 +1762,15 @@ impl<'a> Parser<'a> {
       let name = if p.peek().typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&p.peek().typ) {
         let checkpoint = p.checkpoint();
         let n = p.consume_as_string();
-        // Check if followed by colon, question, or equals (for error recovery)
-        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question || p.peek().typ == TT::Equals {
-          Some(n)
-        } else {
-          p.restore_checkpoint(checkpoint);
-          None
+        // Named param if followed by `:`, `?`, `=`, or end of this param (`,` / `)`).
+        // Bare `(x) => T` is a parameter named `x` with implicit `any` (tsc), not a
+        // type-reference parameter (`anyAssignableToEveryType2.ts` / I12).
+        match p.peek().typ {
+          TT::Colon | TT::Question | TT::Equals | TT::Comma | TT::ParenthesisClose => Some(n),
+          _ => {
+            p.restore_checkpoint(checkpoint);
+            None
+          }
         }
       } else {
         None
@@ -1694,11 +1803,19 @@ impl<'a> Parser<'a> {
         });
       }
 
-      if name.is_some() || optional {
-        p.require(TT::Colon)?;
-      }
-
-      let type_expr = p.type_expr(ctx)?;
+      let type_expr = if name.is_some() || optional {
+        if p.consume_if(TT::Colon).is_match() {
+          p.type_expr(ctx)?
+        } else {
+          // Implicit `any` for bare / optional-unannotated params: `(x)`, `(x?)`.
+          let loc = p.peek().loc;
+          Node::new(loc, TypeExpr::Any(Node::new(loc, TypeAny {})))
+        }
+      } else {
+        // Type-only parameter (no binder name): `(string) => void` style when the
+        // identifier was not taken as a name above.
+        p.type_expr(ctx)?
+      };
 
       Ok(TypeFunctionParameter {
         name,

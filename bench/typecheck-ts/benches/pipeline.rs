@@ -13,7 +13,7 @@ use typecheck_ts_bench::pipeline::{
   analyze_module_graph, assignability_micro, bind_module_graph, check_body_named,
   check_body_with_warmups, hir_kind, incremental_recheck, lower_to_hir, parse_and_lower,
   parse_only, summarize_hir, type_of_exported_defs, typecheck_fixture, typecheck_module_graph,
-  BodyCheckSummary, RelationStats, TypecheckSummary,
+  BodyCheckSummary, IncrementalTimings, RelationStats, TypecheckSummary,
 };
 use typecheck_ts_bench::IncrementalEdit;
 
@@ -141,6 +141,26 @@ fn detail_from_typecheck(summary: &TypecheckSummary) -> BenchDetail {
   let mut detail = detail_from_query_stats(&summary.stats);
   detail.add_counter("diagnostics", summary.diagnostics as u64);
   detail.add_counter("bodies", summary.bodies as u64);
+  detail
+}
+
+fn detail_from_incremental(timings: &IncrementalTimings, full: bool) -> BenchDetail {
+  let summary = if full {
+    &timings.full_summary
+  } else {
+    &timings.edit_summary
+  };
+  let mut detail = detail_from_typecheck(summary);
+  let executions = if full {
+    timings.full_body_checks
+  } else {
+    timings.edit_body_checks
+  };
+  // Prefer the salsa execution counter over QueryStats totals for incremental
+  // reuse visibility (memo hits do not increment body_check_count).
+  detail
+    .counters
+    .insert("body_check_executions".to_string(), executions as u64);
   detail
 }
 
@@ -405,10 +425,12 @@ fn main() {
   ));
 
   if let Some(project) = module_graphs.iter().find(|g| g.name == "small_project") {
+    // Same-length body-only edit: declaration types and def spans stay
+    // identical so BodyCheckContext backdates and salsa reuses other files.
     let edit = IncrementalEdit {
       file: "project_text.ts",
-      from: "const SEPARATOR = \":\";",
-      to: "const SEPARATOR = \"-\";",
+      from: "let i = 0",
+      to: "let i = 1",
     };
     let mut full_total = Duration::ZERO;
     let mut edit_total = Duration::ZERO;
@@ -418,11 +440,13 @@ fn main() {
       let timings = incremental_recheck(project, &edit);
       full_total += timings.full;
       edit_total += timings.edit;
-      full_detail.merge(detail_from_typecheck(&timings.full_summary));
-      edit_detail.merge(detail_from_typecheck(&timings.edit_summary));
+      full_detail.merge(detail_from_incremental(&timings, true));
+      edit_detail.merge(detail_from_incremental(&timings, false));
       black_box((
         timings.full_summary.diagnostics,
         timings.edit_summary.diagnostics,
+        timings.full_body_checks,
+        timings.edit_body_checks,
       ));
     }
 
@@ -457,11 +481,13 @@ fn main() {
       let timings = incremental_recheck(project, &edit);
       full_total += timings.full;
       edit_total += timings.edit;
-      full_detail.merge(detail_from_typecheck(&timings.full_summary));
-      edit_detail.merge(detail_from_typecheck(&timings.edit_summary));
+      full_detail.merge(detail_from_incremental(&timings, true));
+      edit_detail.merge(detail_from_incremental(&timings, false));
       black_box((
         timings.full_summary.diagnostics,
         timings.edit_summary.diagnostics,
+        timings.full_body_checks,
+        timings.edit_body_checks,
       ));
     }
 
@@ -608,7 +634,9 @@ fn format_detail(detail: &BenchDetail, iterations: u64) -> Option<String> {
   if let Some(exprs) = detail.counters.get("exprs") {
     parts.push(format!("exprs/iter={}", exprs / iter));
   }
-  if let Some(body_checks) = detail.counters.get("check_body_count") {
+  if let Some(executions) = detail.counters.get("body_check_executions") {
+    parts.push(format!("body_check_executions/iter={}", executions / iter));
+  } else if let Some(body_checks) = detail.counters.get("check_body_count") {
     parts.push(format!("checked_bodies/iter={}", body_checks / iter));
   }
   if let Some(checks) = detail.counters.get("relation_checks") {

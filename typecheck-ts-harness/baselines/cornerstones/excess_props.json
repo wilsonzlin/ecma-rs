@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "strictPropertyInitialization": false,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2353,
+      "file": "excess_props.ts",
+      "start": 93,
+      "end": 96,
+      "category": "error",
+      "message": "Object literal may only specify known properties, and 'bar' does not exist in type '{ foo: number; }'."
+    }
+  ]
+}

@@ -39,7 +39,7 @@ impl ProgramState {
             };
             let pat = if self.snapshot_loaded {
               self
-                .body_results
+                .local_body_results
                 .get(&var.body)
                 .and_then(|result| {
                   result
@@ -93,7 +93,7 @@ impl ProgramState {
     let def_name = lowered.names.resolve(hir_def.path.name);
     if !matches!(
       hir_def.path.kind,
-      HirDefKind::Var | HirDefKind::VarDeclarator
+      HirDefKind::Var | HirDefKind::VarDeclarator | HirDefKind::Field
     ) && def_name != Some("default")
     {
       return None;

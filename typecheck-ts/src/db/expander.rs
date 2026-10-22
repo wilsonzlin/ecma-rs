@@ -38,6 +38,11 @@ pub trait TypeExpanderDb: Send + Sync {
     None
   }
 
+  /// Whether `def` is a TypeScript `enum` type (nominal vs other enums).
+  fn is_enum_type(&self, _def: DefId) -> bool {
+    false
+  }
+
   /// Combined expansion helper that defaults to declared type information.
   fn ref_expansion(&self, def: DefId) -> Option<ExpandedType> {
     let ty = self.type_of_def(def).or_else(|| self.decl_type(def))?;
@@ -101,8 +106,25 @@ impl<'db> TypeExpander for DbTypeExpander<'db> {
 impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
+    // tsc fills missing type arguments with their declared defaults
+    // (`Iterator<Foo>` ≡ `Iterator<Foo, any, any>`) — see
+    // `expand::fill_default_type_args`.
+    let filled =
+      crate::expand::fill_default_type_args(self.db.type_param_decls(def).as_deref(), args);
+    let args: &[TypeId] = &filled;
     if let Some(cached) = self.caches.get_ref(def, args) {
-      return Some(cached);
+      // Deferred/cycle refs (same `def`) must not stick — re-expand once sibling
+      // instantiations or definition tables are complete.
+      let deferred_same_def = matches!(
+        store.type_kind(cached),
+        TypeKind::Ref {
+          def: cached_def,
+          ..
+        } if cached_def == def
+      );
+      if !deferred_same_def {
+        return Some(cached);
+      }
     }
 
     if let Some(kind) = self.db.intrinsic_kind(def) {
@@ -129,11 +151,24 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
     let instantiated =
       instantiate_expanded(&self.store, self, &self.caches, def, &expanded, &key.args);
     self.guard.end(&key);
-    self.caches.insert_ref(def, &key.args, instantiated);
+    let deferred_same_def = matches!(
+      store.type_kind(instantiated),
+      TypeKind::Ref {
+        def: cached_def,
+        ..
+      } if cached_def == def
+    );
+    if !deferred_same_def {
+      self.caches.insert_ref(def, &key.args, instantiated);
+    }
     Some(instantiated)
   }
 
   fn type_param_decls(&self, def: DefId) -> Option<Arc<[TypeParamDecl]>> {
     self.db.type_param_decls(def)
+  }
+
+  fn is_enum_type(&self, def: DefId) -> bool {
+    self.db.is_enum_type(def)
   }
 }

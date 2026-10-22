@@ -1,0 +1,32 @@
+# Core operator semantics: arithmetic, bitwise, shift, unary, comma, void.
+#
+# Exercises the interpreter's abstract-operation core: ToPrimitive, ToNumber,
+# ToNumeric, ToString, ToInt32/ToUint32, and the numeric operators themselves
+# (ECMA-262 §13.6-13.10, §13.5).
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/expressions/addition/**/*.js",
+  "language/expressions/subtraction/**/*.js",
+  "language/expressions/multiplication/**/*.js",
+  "language/expressions/division/**/*.js",
+  "language/expressions/modulus/**/*.js",
+  "language/expressions/exponentiation/**/*.js",
+  "language/expressions/bitwise-and/**/*.js",
+  "language/expressions/bitwise-or/**/*.js",
+  "language/expressions/bitwise-xor/**/*.js",
+  "language/expressions/bitwise-not/**/*.js",
+  "language/expressions/left-shift/**/*.js",
+  "language/expressions/right-shift/**/*.js",
+  "language/expressions/unsigned-right-shift/**/*.js",
+  "language/expressions/unary-plus/**/*.js",
+  "language/expressions/unary-minus/**/*.js",
+  "language/expressions/logical-not/**/*.js",
+  "language/expressions/void/**/*.js",
+  "language/expressions/comma/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

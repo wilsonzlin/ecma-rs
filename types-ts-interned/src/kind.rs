@@ -41,6 +41,16 @@ pub struct MappedType {
   pub name_type: Option<TypeId>,
   /// Explicit `as` clause used to remap keys.
   pub as_type: Option<TypeId>,
+  /// The homomorphic type variable when the mapped type has the tsc
+  /// homomorphic form `{[P in keyof T]: X}` (constraint is `keyof` of a bare
+  /// type parameter). Set at lowering time so instantiation (which eagerly
+  /// substitutes the source) cannot erase it. Drives tsc's
+  /// `instantiateConstituent` collapse: instantiating the variable with a
+  /// primitive source yields the source itself (`DeepReadonly<number>` is
+  /// `number`), and union sources distribute with primitives passing
+  /// through. `None` for non-homomorphic constraints (`keyof Foo`,
+  /// `keyof (T & {})`, unions, …).
+  pub homomorphic_var: Option<TypeParamId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -245,4 +255,18 @@ pub enum CompositeKind<'a> {
   Union(&'a [TypeId]),
   Intersection(&'a [TypeId]),
   Object(&'a Shape),
+}
+
+impl MappedType {
+  /// The homomorphic type variable for a mapped source (`keyof` of a bare
+  /// type parameter), per tsc `getHomomorphicTypeVariable`.
+  pub fn homomorphic_var_of(store: &crate::TypeStore, source: TypeId) -> Option<TypeParamId> {
+    let TypeKind::KeyOf(inner) = store.type_kind(source) else {
+      return None;
+    };
+    match store.type_kind(inner) {
+      TypeKind::TypeParam(id) => Some(id),
+      _ => None,
+    }
+  }
 }

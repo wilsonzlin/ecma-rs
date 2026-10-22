@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use vm_js::{
-  finish_loading_imported_module, load_requested_modules, Heap, HeapLimits, HostDefined, ModuleCompletion,
-  ImportAttribute, ModuleGraph, ModuleId, ModuleLoadPayload, ModuleLoaderHost, ModuleRequest, ModuleStatus,
-  PromiseState, PropertyKey, PropertyKind, Realm, Scope, SourceTextModuleRecord, Value, Vm, VmError,
-  VmOptions,
+  finish_loading_imported_module, load_requested_modules, Heap, HeapLimits, HostDefined,
+  ImportAttribute, ModuleCompletion, ModuleGraph, ModuleId, ModuleLoadPayload, ModuleLoaderHost,
+  ModuleRequest, ModuleStatus, PromiseState, PropertyKey, PropertyKind, Realm, Scope,
+  SourceTextModuleRecord, Value, Vm, VmError, VmOptions,
 };
 
 #[derive(Clone)]
@@ -79,16 +79,9 @@ impl ModuleLoaderHost for FakeHost {
       .clone();
 
     match action {
-      PlannedLoad::Sync(result) => finish_loading_imported_module(
-        vm,
-        scope,
-        modules,
-        self,
-        referrer,
-        request,
-        payload,
-        result,
-      ),
+      PlannedLoad::Sync(result) => {
+        finish_loading_imported_module(vm, scope, modules, self, referrer, request, payload, result)
+      }
       PlannedLoad::Async(result) => {
         self.pending.push(PendingLoad {
           referrer,
@@ -138,9 +131,15 @@ fn simple_graph_resolves() {
 
   {
     let mut scope = heap.scope();
-    let promise =
-      load_requested_modules(&mut vm, &mut scope, &mut modules, &mut host, a, HostDefined::default())
-        .unwrap();
+    let promise = load_requested_modules(
+      &mut vm,
+      &mut scope,
+      &mut modules,
+      &mut host,
+      a,
+      HostDefined::default(),
+    )
+    .unwrap();
     scope.push_root(promise).unwrap();
 
     let Value::Object(promise_obj) = promise else {
@@ -187,9 +186,15 @@ fn cycle_does_not_infinite_loop() {
 
   {
     let mut scope = heap.scope();
-    let promise =
-      load_requested_modules(&mut vm, &mut scope, &mut modules, &mut host, a, HostDefined::default())
-        .unwrap();
+    let promise = load_requested_modules(
+      &mut vm,
+      &mut scope,
+      &mut modules,
+      &mut host,
+      a,
+      HostDefined::default(),
+    )
+    .unwrap();
     scope.push_root(promise).unwrap();
 
     let Value::Object(promise_obj) = promise else {
@@ -223,9 +228,15 @@ fn load_failure_rejects_and_freezes_state() {
 
   {
     let mut scope = heap.scope();
-    let promise =
-      load_requested_modules(&mut vm, &mut scope, &mut modules, &mut host, a, HostDefined::default())
-        .unwrap();
+    let promise = load_requested_modules(
+      &mut vm,
+      &mut scope,
+      &mut modules,
+      &mut host,
+      a,
+      HostDefined::default(),
+    )
+    .unwrap();
     scope.push_root(promise).unwrap();
 
     let Value::Object(promise_obj) = promise else {
@@ -263,9 +274,15 @@ fn unsupported_import_attributes_reject_with_syntax_error() {
 
   {
     let mut scope = heap.scope();
-    let promise =
-      load_requested_modules(&mut vm, &mut scope, &mut modules, &mut host, a, HostDefined::default())
-        .unwrap();
+    let promise = load_requested_modules(
+      &mut vm,
+      &mut scope,
+      &mut modules,
+      &mut host,
+      a,
+      HostDefined::default(),
+    )
+    .unwrap();
     scope.push_root(promise).unwrap();
 
     let Value::Object(promise_obj) = promise else {
@@ -276,7 +293,10 @@ fn unsupported_import_attributes_reject_with_syntax_error() {
       scope.heap().promise_state(promise_obj).unwrap(),
       PromiseState::Rejected
     );
-    assert!(host.pending.is_empty(), "host loader should not have been invoked");
+    assert!(
+      host.pending.is_empty(),
+      "host loader should not have been invoked"
+    );
 
     let Some(result) = scope.heap().promise_result(promise_obj).unwrap() else {
       panic!("expected rejected promise to have a result");
@@ -286,7 +306,11 @@ fn unsupported_import_attributes_reject_with_syntax_error() {
     };
 
     let name_key = PropertyKey::from_string(scope.alloc_string("name").unwrap());
-    let Some(desc) = scope.heap().object_get_own_property(err_obj, &name_key).unwrap() else {
+    let Some(desc) = scope
+      .heap()
+      .object_get_own_property(err_obj, &name_key)
+      .unwrap()
+    else {
       panic!("expected SyntaxError object to have a 'name' property");
     };
     let PropertyKind::Data { value, .. } = desc.kind else {
@@ -295,7 +319,10 @@ fn unsupported_import_attributes_reject_with_syntax_error() {
     let Value::String(name) = value else {
       panic!("expected SyntaxError.name to be a string");
     };
-    assert_eq!(scope.heap().get_string(name).unwrap().to_utf8_lossy(), "SyntaxError");
+    assert_eq!(
+      scope.heap().get_string(name).unwrap().to_utf8_lossy(),
+      "SyntaxError"
+    );
 
     assert_eq!(modules.module(a).status, ModuleStatus::New);
     assert_eq!(modules.module(b).status, ModuleStatus::New);
@@ -323,15 +350,9 @@ impl ModuleLoaderHost for HostSupportingType {
     host_defined: HostDefined,
     payload: ModuleLoadPayload,
   ) -> Result<(), VmError> {
-    self.0.host_load_imported_module(
-      vm,
-      scope,
-      modules,
-      referrer,
-      request,
-      host_defined,
-      payload,
-    )
+    self
+      .0
+      .host_load_imported_module(vm, scope, modules, referrer, request, host_defined, payload)
   }
 
   fn host_get_supported_import_attributes(&self) -> &'static [&'static str] {
@@ -353,9 +374,15 @@ fn supported_import_attributes_allow_module_loading() {
 
   {
     let mut scope = heap.scope();
-    let promise =
-      load_requested_modules(&mut vm, &mut scope, &mut modules, &mut host, a, HostDefined::default())
-        .unwrap();
+    let promise = load_requested_modules(
+      &mut vm,
+      &mut scope,
+      &mut modules,
+      &mut host,
+      a,
+      HostDefined::default(),
+    )
+    .unwrap();
     scope.push_root(promise).unwrap();
 
     let Value::Object(promise_obj) = promise else {

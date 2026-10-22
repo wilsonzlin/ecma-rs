@@ -100,3 +100,4 @@ pub use signature::TypeParamVariance;
 pub use store::PrimitiveIds;
 pub use store::TypeStore;
 pub use store::TypeStoreSnapshot;
+pub use store::MAX_COMPOSITE_MEMBERS;

@@ -1,10 +1,10 @@
-use crate::env::{DeclarativeEnvRecord, EnvBinding, EnvRecord, ObjectEnvRecord};
+use crate::env::{DeclarativeEnvRecord, EnvBinding, EnvRecord, EnvRecordKind, ObjectEnvRecord};
 use crate::function::{
   CallHandler, ConstructHandler, EcmaFunctionId, FunctionData, JsFunction, NativeConstructId,
   NativeFunctionId, ThisMode,
 };
-use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::promise::{PromiseReaction, PromiseReactionType, PromiseState};
+use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::CompiledFunctionRef;
@@ -265,7 +265,12 @@ impl Heap {
     // Slot table + mark bits + free lists + GC worklist.
     total = total.saturating_add(self.slots.capacity().saturating_mul(mem::size_of::<Slot>()));
     total = total.saturating_add(self.marks.capacity()); // Vec<u8>
-    total = total.saturating_add(self.free_list.capacity().saturating_mul(mem::size_of::<u32>()));
+    total = total.saturating_add(
+      self
+        .free_list
+        .capacity()
+        .saturating_mul(mem::size_of::<u32>()),
+    );
     total = total.saturating_add(
       self
         .gc_worklist
@@ -539,9 +544,9 @@ impl Heap {
     } else {
       // Slow path: grow the env-root table (and ensure the free list is large enough that
       // `remove_env_root` never needs to allocate).
-      scope
-        .heap
-        .ensure_can_allocate_with(|heap| heap.additional_bytes_for_new_persistent_env_root_slot())?;
+      scope.heap.ensure_can_allocate_with(|heap| {
+        heap.additional_bytes_for_new_persistent_env_root_slot()
+      })?;
       scope.heap.reserve_for_new_persistent_env_root_slot()?;
       scope.heap.persistent_env_roots.push(None);
       scope.heap.persistent_env_roots.len() - 1
@@ -566,10 +571,7 @@ impl Heap {
     debug_assert!(self.is_valid_env(env));
 
     let idx = id.0 as usize;
-    debug_assert!(
-      idx < self.persistent_env_roots.len(),
-      "invalid EnvRootId"
-    );
+    debug_assert!(idx < self.persistent_env_roots.len(), "invalid EnvRootId");
     if idx >= self.persistent_env_roots.len() {
       return;
     }
@@ -585,10 +587,7 @@ impl Heap {
   /// Removes a persistent env root previously created by [`Heap::add_env_root`].
   pub fn remove_env_root(&mut self, id: EnvRootId) {
     let idx = id.0 as usize;
-    debug_assert!(
-      idx < self.persistent_env_roots.len(),
-      "invalid EnvRootId"
-    );
+    debug_assert!(idx < self.persistent_env_roots.len(), "invalid EnvRootId");
     if idx >= self.persistent_env_roots.len() {
       return;
     }
@@ -605,13 +604,107 @@ impl Heap {
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
       self.get_heap_object(obj.0),
-      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_))
+      Ok(
+        HeapObject::Object(_)
+          | HeapObject::Function(_)
+          | HeapObject::Promise(_)
+          | HeapObject::Generator(_)
+      )
     )
   }
 
   /// Returns `true` if `obj` currently points to a live Promise object allocation.
   ///
   /// This is the spec-shaped "brand check" used by `IsPromise`: an object is a Promise if it has
+  /// Returns whether `obj` is a generator object (has generator internal slots).
+  pub(crate) fn is_generator(&self, obj: GcObject) -> bool {
+    matches!(self.get_heap_object(obj.0), Ok(HeapObject::Generator(_)))
+  }
+
+  pub(crate) fn generator_state(&self, obj: GcObject) -> Result<GeneratorState, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Generator(g) => Ok(g.state),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_generator_state(
+    &mut self,
+    obj: GcObject,
+    state: GeneratorState,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Generator(g) => {
+        g.state = state;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Clones out the suspended body handle (None once completed).
+  pub(crate) fn generator_body(
+    &self,
+    obj: GcObject,
+  ) -> Result<Option<std::rc::Rc<std::cell::RefCell<crate::resumable::ResumableBody>>>, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Generator(g) => Ok(g.body.clone()),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Drops the suspended body (on completion), releasing frames/environments.
+  pub(crate) fn clear_generator_body(&mut self, obj: GcObject) -> Result<(), VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Generator(g) => {
+        g.body = None;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn generator_result_promise(
+    &self,
+    obj: GcObject,
+  ) -> Result<Option<GcObject>, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Generator(g) => Ok(g.result_promise),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_generator_result_promise(
+    &mut self,
+    obj: GcObject,
+    promise: GcObject,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Generator(g) => {
+        g.result_promise = Some(promise);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn clear_generator_result_promise(&mut self, obj: GcObject) -> Result<(), VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Generator(g) => {
+        g.result_promise = None;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn generator_kind(&self, obj: GcObject) -> Result<GeneratorKind, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Generator(g) => Ok(g.kind),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
   /// Promise internal slots (represented here by the `HeapObject::Promise` variant).
   pub fn is_promise_object(&self, obj: GcObject) -> bool {
     matches!(self.get_heap_object(obj.0), Ok(HeapObject::Promise(_)))
@@ -765,6 +858,7 @@ impl Heap {
       HeapObject::Object(o) => Ok(&o.base),
       HeapObject::Function(f) => Ok(&f.base),
       HeapObject::Promise(p) => Ok(&p.object.base),
+      HeapObject::Generator(g) => Ok(&g.object.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -774,6 +868,7 @@ impl Heap {
       HeapObject::Object(o) => Ok(&mut o.base),
       HeapObject::Function(f) => Ok(&mut f.base),
       HeapObject::Promise(p) => Ok(&mut p.object.base),
+      HeapObject::Generator(g) => Ok(&mut g.object.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -928,6 +1023,7 @@ impl Heap {
         fulfill_reaction_count: usize,
         reject_reaction_count: usize,
       },
+      Generator,
     }
 
     let (idx, target_kind, property_count) = {
@@ -953,7 +1049,11 @@ impl Heap {
             .position(|prop| self.property_key_eq(&prop.key, key)),
           TargetKind::Function {
             bound_args_len: func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0),
-            native_slots_len: func.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0),
+            native_slots_len: func
+              .native_slots
+              .as_ref()
+              .map(|slots| slots.len())
+              .unwrap_or(0),
           },
           func.base.properties.len(),
         ),
@@ -969,6 +1069,15 @@ impl Heap {
           },
           p.object.base.properties.len(),
         ),
+        HeapObject::Generator(g) => (
+          g.object
+            .base
+            .properties
+            .iter()
+            .position(|prop| self.property_key_eq(&prop.key, key)),
+          TargetKind::Generator,
+          g.object.base.properties.len(),
+        ),
         _ => return Err(VmError::InvalidHandle),
       }
     };
@@ -979,11 +1088,15 @@ impl Heap {
 
     let new_property_count = property_count.saturating_sub(1);
     let new_bytes = match target_kind {
-      TargetKind::OrdinaryObject => JsObject::heap_size_bytes_for_property_count(new_property_count),
+      TargetKind::OrdinaryObject => {
+        JsObject::heap_size_bytes_for_property_count(new_property_count)
+      }
       TargetKind::Function {
         bound_args_len,
         native_slots_len,
-      } => JsFunction::heap_size_bytes_for_counts(bound_args_len, native_slots_len, new_property_count),
+      } => {
+        JsFunction::heap_size_bytes_for_counts(bound_args_len, native_slots_len, new_property_count)
+      }
       TargetKind::Promise {
         fulfill_reaction_count,
         reject_reaction_count,
@@ -992,6 +1105,7 @@ impl Heap {
         fulfill_reaction_count,
         reject_reaction_count,
       ),
+      TargetKind::Generator => JsGenerator::heap_size_bytes_for_property_count(new_property_count),
     };
 
     // Allocate the new property table fallibly so hostile inputs cannot abort the host process
@@ -1016,6 +1130,10 @@ impl Heap {
           buf.extend_from_slice(&p.object.base.properties[..idx]);
           buf.extend_from_slice(&p.object.base.properties[idx + 1..]);
         }
+        Some(HeapObject::Generator(g)) => {
+          buf.extend_from_slice(&g.object.base.properties[..idx]);
+          buf.extend_from_slice(&g.object.base.properties[idx + 1..]);
+        }
         _ => return Err(VmError::InvalidHandle),
       }
     }
@@ -1028,6 +1146,7 @@ impl Heap {
       HeapObject::Object(obj) => obj.base.properties = properties,
       HeapObject::Function(func) => func.base.properties = properties,
       HeapObject::Promise(p) => p.object.base.properties = properties,
+      HeapObject::Generator(g) => g.object.base.properties = properties,
       _ => return Err(VmError::InvalidHandle),
     }
 
@@ -1532,7 +1651,11 @@ impl Heap {
   }
 
   /// Sets `promise.[[PromiseIsHandled]]`.
-  pub fn promise_set_is_handled(&mut self, promise: GcObject, handled: bool) -> Result<(), VmError> {
+  pub fn promise_set_is_handled(
+    &mut self,
+    promise: GcObject,
+    handled: bool,
+  ) -> Result<(), VmError> {
     self.get_promise_mut(promise)?.is_handled = handled;
     Ok(())
   }
@@ -1647,7 +1770,11 @@ impl Heap {
       let fulfill_reactions = mem::take(&mut promise.fulfill_reactions).unwrap_or_default();
       let reject_reactions = mem::take(&mut promise.reject_reactions).unwrap_or_default();
 
-      (fulfill_reactions, reject_reactions, promise.heap_size_bytes())
+      (
+        fulfill_reactions,
+        reject_reactions,
+        promise.heap_size_bytes(),
+      )
     };
 
     self.update_slot_bytes(idx, new_bytes);
@@ -1785,6 +1912,17 @@ impl Heap {
     Ok(())
   }
 
+  /// `KeyForSymbol(sym)` — returns the registry key string if `sym` was produced by
+  /// [`Self::symbol_for`], else `None`. Used by `Symbol.keyFor` and `CanBeHeldWeakly`.
+  pub fn symbol_key_for(&self, sym: GcSymbol) -> Result<Option<GcString>, VmError> {
+    for entry in &self.symbol_registry {
+      if entry.sym == sym {
+        return Ok(Some(entry.key));
+      }
+    }
+    Ok(None)
+  }
+
   /// Implements `Symbol.for`-like behaviour using a deterministic global registry.
   ///
   /// The registry is scanned by the GC, so registered symbols remain live even if they are not
@@ -1798,15 +1936,21 @@ impl Heap {
     // Pre-flight the allocation: creating a new registry entry may require growing both the heap
     // (new symbol allocation) and the registry vector itself.
     let extra_roots = [Value::String(key)];
-    self.ensure_can_allocate_with_extra_roots(|heap| {
-      let mut bytes = 0usize;
-      // New symbol allocation: payload size is 0 (symbols have no external payload bytes), but may
-      // require growing the heap slot table.
-      bytes = bytes.saturating_add(heap.additional_bytes_for_heap_alloc(0));
-      // Registry entry vector growth.
-      bytes = bytes.saturating_add(heap.additional_bytes_for_symbol_registry_insert(1));
-      bytes
-    }, &extra_roots, &[], &[], &[])?;
+    self.ensure_can_allocate_with_extra_roots(
+      |heap| {
+        let mut bytes = 0usize;
+        // New symbol allocation: payload size is 0 (symbols have no external payload bytes), but may
+        // require growing the heap slot table.
+        bytes = bytes.saturating_add(heap.additional_bytes_for_heap_alloc(0));
+        // Registry entry vector growth.
+        bytes = bytes.saturating_add(heap.additional_bytes_for_symbol_registry_insert(1));
+        bytes
+      },
+      &extra_roots,
+      &[],
+      &[],
+      &[],
+    )?;
 
     // Root `key` and the newly-created symbol while inserting into the registry in case the
     // allocation paths trigger GC.
@@ -1933,6 +2077,19 @@ impl Heap {
     Ok(self.get_env(env)?.outer())
   }
 
+  /// Classifies `env` without exposing a long-lived borrow of the record payload.
+  pub(crate) fn env_record_kind(&self, env: GcEnv) -> Result<EnvRecordKind, VmError> {
+    Ok(match self.get_env(env)? {
+      EnvRecord::Declarative(_) => EnvRecordKind::Declarative,
+      EnvRecord::Object(rec) => EnvRecordKind::Object {
+        binding_object: rec.binding_object,
+        with_environment: rec.with_environment,
+      },
+    })
+  }
+
+  /// Declarative-environment binding presence. Object environment records are not handled here —
+  /// callers that walk a mixed chain (e.g. `with`) must branch on [`Self::env_record_kind`].
   pub(crate) fn env_has_binding(&self, env: GcEnv, name: &str) -> Result<bool, VmError> {
     Ok(
       self
@@ -1958,12 +2115,9 @@ impl Heap {
     };
 
     let rec = self.get_declarative_env_mut(env)?;
-    let binding = rec
-      .bindings
-      .get_mut(idx)
-      .ok_or(VmError::Unimplemented(
-        "environment record binding index out of bounds",
-      ))?;
+    let binding = rec.bindings.get_mut(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
 
     if binding.initialized {
       return Err(VmError::Unimplemented("binding already initialized"));
@@ -2003,7 +2157,7 @@ impl Heap {
     env: GcEnv,
     name: &str,
     value: Value,
-    _strict: bool,
+    strict: bool,
   ) -> Result<(), VmError> {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
 
@@ -2015,12 +2169,9 @@ impl Heap {
     };
 
     let rec = self.get_declarative_env_mut(env)?;
-    let binding = rec
-      .bindings
-      .get_mut(idx)
-      .ok_or(VmError::Unimplemented(
-        "environment record binding index out of bounds",
-      ))?;
+    let binding = rec.bindings.get_mut(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
 
     if !binding.initialized {
       // TDZ.
@@ -2028,12 +2179,15 @@ impl Heap {
       return Err(VmError::Throw(Value::Null));
     }
 
+    // ECMA-262 SetMutableBinding: a strict binding forces S=true before the immutable check
+    // (`const` / class names are strict; named function-expression names are not).
+    let strict = strict || binding.strict;
     if !binding.mutable {
-      // Assignment to const.
-      //
-      // Like TDZ, this is currently a sentinel throw value that is later mapped to a TypeError
-      // object by higher-level evaluation code.
-      return Err(VmError::Throw(Value::Undefined));
+      if strict {
+        // Sentinel mapped to TypeError by higher-level evaluation code.
+        return Err(VmError::Throw(Value::Undefined));
+      }
+      return Ok(());
     }
 
     binding.value = value;
@@ -2049,7 +2203,9 @@ impl Heap {
     env: GcEnv,
     symbol: SymbolId,
   ) -> Result<Value, VmError> {
-    self.get_declarative_env(env)?.get_symbol_binding_value(symbol)
+    self
+      .get_declarative_env(env)?
+      .get_symbol_binding_value(symbol)
   }
 
   pub fn env_initialize_symbol_binding(
@@ -2162,6 +2318,7 @@ impl Heap {
         fulfill_reaction_count: usize,
         reject_reaction_count: usize,
       },
+      Generator,
     }
 
     let (target_kind, property_count, old_bytes, existing_idx, array_len) = {
@@ -2191,7 +2348,11 @@ impl Heap {
             .iter()
             .position(|entry| self.property_key_eq(&entry.key, &key));
           let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
-          let native_slots_len = func.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0);
+          let native_slots_len = func
+            .native_slots
+            .as_ref()
+            .map(|slots| slots.len())
+            .unwrap_or(0);
           (
             TargetKind::Function {
               bound_args_len,
@@ -2216,6 +2377,21 @@ impl Heap {
               reject_reaction_count: p.reject_reactions.as_deref().map(|r| r.len()).unwrap_or(0),
             },
             p.object.base.properties.len(),
+            slot.bytes,
+            existing_idx,
+            None,
+          )
+        }
+        HeapObject::Generator(g) => {
+          let existing_idx = g
+            .object
+            .base
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          (
+            TargetKind::Generator,
+            g.object.base.properties.len(),
             slot.bytes,
             existing_idx,
             None,
@@ -2257,19 +2433,24 @@ impl Heap {
           Some(HeapObject::Object(obj)) => obj.base.properties[existing_idx].desc = desc,
           Some(HeapObject::Function(func)) => func.base.properties[existing_idx].desc = desc,
           Some(HeapObject::Promise(p)) => p.object.base.properties[existing_idx].desc = desc,
+          Some(HeapObject::Generator(g)) => g.object.base.properties[existing_idx].desc = desc,
           _ => return Err(VmError::InvalidHandle),
         }
       }
       None => {
-        let new_property_count = property_count
-          .checked_add(1)
-          .ok_or(VmError::OutOfMemory)?;
+        let new_property_count = property_count.checked_add(1).ok_or(VmError::OutOfMemory)?;
         let new_bytes = match target_kind {
-          TargetKind::OrdinaryObject => JsObject::heap_size_bytes_for_property_count(new_property_count),
+          TargetKind::OrdinaryObject => {
+            JsObject::heap_size_bytes_for_property_count(new_property_count)
+          }
           TargetKind::Function {
             bound_args_len,
             native_slots_len,
-          } => JsFunction::heap_size_bytes_for_counts(bound_args_len, native_slots_len, new_property_count),
+          } => JsFunction::heap_size_bytes_for_counts(
+            bound_args_len,
+            native_slots_len,
+            new_property_count,
+          ),
           TargetKind::Promise {
             fulfill_reaction_count,
             reject_reaction_count,
@@ -2278,6 +2459,9 @@ impl Heap {
             fulfill_reaction_count,
             reject_reaction_count,
           ),
+          TargetKind::Generator => {
+            JsGenerator::heap_size_bytes_for_property_count(new_property_count)
+          }
         };
 
         // Before allocating, enforce heap limits based on the net growth of this object.
@@ -2297,6 +2481,7 @@ impl Heap {
             Some(HeapObject::Object(obj)) => buf.extend_from_slice(&obj.base.properties),
             Some(HeapObject::Function(func)) => buf.extend_from_slice(&func.base.properties),
             Some(HeapObject::Promise(p)) => buf.extend_from_slice(&p.object.base.properties),
+            Some(HeapObject::Generator(g)) => buf.extend_from_slice(&g.object.base.properties),
             _ => return Err(VmError::InvalidHandle),
           }
         }
@@ -2308,6 +2493,7 @@ impl Heap {
           Some(HeapObject::Object(obj)) => obj.base.properties = properties,
           Some(HeapObject::Function(func)) => func.base.properties = properties,
           Some(HeapObject::Promise(p)) => p.object.base.properties = properties,
+          Some(HeapObject::Generator(g)) => g.object.base.properties = properties,
           _ => return Err(VmError::InvalidHandle),
         }
 
@@ -2474,10 +2660,7 @@ impl Heap {
     Ok(())
   }
 
-  fn symbol_registry_binary_search(
-    &self,
-    key: &JsString,
-  ) -> Result<Result<usize, usize>, VmError> {
+  fn symbol_registry_binary_search(&self, key: &JsString) -> Result<Result<usize, usize>, VmError> {
     // Manual binary search so we can compare by string contents (not by handle identity).
     let mut low = 0usize;
     let mut high = self.symbol_registry.len();
@@ -2532,7 +2715,11 @@ impl Heap {
   }
 
   fn reserve_for_new_slot(&mut self) -> Result<(), VmError> {
-    let new_len = self.slots.len().checked_add(1).ok_or(VmError::OutOfMemory)?;
+    let new_len = self
+      .slots
+      .len()
+      .checked_add(1)
+      .ok_or(VmError::OutOfMemory)?;
 
     reserve_vec_to_len::<Slot>(&mut self.slots, new_len)?;
     reserve_vec_to_len::<u8>(&mut self.marks, new_len)?;
@@ -2604,7 +2791,9 @@ impl Heap {
       .len()
       .checked_add(additional)
       .ok_or(VmError::OutOfMemory)?;
-    self.ensure_can_allocate_with(|heap| heap.additional_bytes_for_symbol_registry_insert(additional))?;
+    self.ensure_can_allocate_with(|heap| {
+      heap.additional_bytes_for_symbol_registry_insert(additional)
+    })?;
     reserve_vec_to_len::<SymbolRegistryEntry>(&mut self.symbol_registry, required)?;
     Ok(())
   }
@@ -2628,6 +2817,24 @@ impl Heap {
   /// Returns the captured native slots for a function object.
   ///
   /// If the function has no native slots, this returns an empty slice.
+  /// Installs `[[Construct]]` on an existing native function without running `MakeConstructor`
+  /// (needed for constructors that must not gain a `.prototype`, e.g. `%Proxy%`).
+  pub fn set_function_construct_handler(
+    &mut self,
+    func: GcObject,
+    construct: crate::NativeConstructId,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.construct = Some(ConstructHandler::Native(construct));
+        Ok(())
+      }
+      _ => Err(VmError::TypeError(
+        "set_function_construct_handler: not a function",
+      )),
+    }
+  }
+
   pub fn get_function_native_slots(&self, func: GcObject) -> Result<&[Value], VmError> {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => Ok(f.native_slots.as_deref().unwrap_or(&[])),
@@ -2722,7 +2929,11 @@ impl Heap {
     }
   }
 
-  pub(crate) fn set_function_realm(&mut self, func: GcObject, realm: GcObject) -> Result<(), VmError> {
+  pub(crate) fn set_function_realm(
+    &mut self,
+    func: GcObject,
+    realm: GcObject,
+  ) -> Result<(), VmError> {
     match self.get_heap_object_mut(func.0)? {
       HeapObject::Function(f) => {
         f.realm = Some(realm);
@@ -2732,7 +2943,138 @@ impl Heap {
     }
   }
 
-  pub(crate) fn set_function_job_realm(&mut self, func: GcObject, realm: RealmId) -> Result<(), VmError> {
+  pub(crate) fn set_function_is_class_constructor(
+    &mut self,
+    func: GcObject,
+    is_class_constructor: bool,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.is_class_constructor = is_class_constructor;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_is_derived_constructor(
+    &mut self,
+    func: GcObject,
+    is_derived_constructor: bool,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.is_derived_constructor = is_derived_constructor;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn function_is_derived_constructor(&self, func: GcObject) -> Result<bool, VmError> {
+    Ok(self.get_function(func)?.is_derived_constructor)
+  }
+
+  /// `MakeMethod(F, homeObject)` — sets `[[HomeObject]]` for `super` property access.
+  pub(crate) fn set_function_home_object(
+    &mut self,
+    func: GcObject,
+    home_object: GcObject,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.home_object = Some(home_object);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn get_function_home_object(
+    &self,
+    func: GcObject,
+  ) -> Result<Option<GcObject>, VmError> {
+    Ok(self.get_function(func)?.home_object)
+  }
+
+  /// Stores the list of instance private names to install in `InitializeInstanceElements`.
+  pub(crate) fn set_function_instance_private_names(
+    &mut self,
+    func: GcObject,
+    names: Box<[GcSymbol]>,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.instance_private_names = if names.is_empty() { None } else { Some(names) };
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn get_function_instance_private_names(
+    &self,
+    func: GcObject,
+  ) -> Result<&[GcSymbol], VmError> {
+    Ok(
+      self
+        .get_function(func)?
+        .instance_private_names
+        .as_deref()
+        .unwrap_or(&[]),
+    )
+  }
+
+  /// PrivateElementAdd (presence-only): append `name` if not already present.
+  pub(crate) fn object_add_private_element(
+    &mut self,
+    obj: GcObject,
+    name: GcSymbol,
+  ) -> Result<(), VmError> {
+    let base = self.get_object_base_mut(obj)?;
+    if base.private_elements.iter().any(|&n| n == name) {
+      return Ok(());
+    }
+    let mut buf: Vec<GcSymbol> = Vec::new();
+    buf
+      .try_reserve_exact(base.private_elements.len().saturating_add(1))
+      .map_err(|_| VmError::OutOfMemory)?;
+    buf.extend_from_slice(&base.private_elements);
+    buf.push(name);
+    base.private_elements = buf.into_boxed_slice();
+    Ok(())
+  }
+
+  /// Whether `name` is among the object's `[[PrivateElements]]` keys.
+  pub(crate) fn object_has_private_element(
+    &self,
+    obj: GcObject,
+    name: GcSymbol,
+  ) -> Result<bool, VmError> {
+    let base = self.get_object_base(obj)?;
+    Ok(base.private_elements.iter().any(|&n| n == name))
+  }
+
+  /// InitializeInstanceElements — install each private name key on `obj`.
+  pub(crate) fn initialize_instance_private_elements(
+    &mut self,
+    obj: GcObject,
+    constructor: GcObject,
+  ) -> Result<(), VmError> {
+    let names: Vec<GcSymbol> = self
+      .get_function_instance_private_names(constructor)?
+      .to_vec();
+    for name in names {
+      self.object_add_private_element(obj, name)?;
+    }
+    Ok(())
+  }
+
+  pub(crate) fn set_function_job_realm(
+    &mut self,
+    func: GcObject,
+    realm: RealmId,
+  ) -> Result<(), VmError> {
     match self.get_heap_object_mut(func.0)? {
       HeapObject::Function(f) => {
         f.job_realm = Some(realm);
@@ -2854,12 +3196,15 @@ impl<'a> Scope<'a> {
       .len()
       .checked_add(1)
       .ok_or(VmError::OutOfMemory)?;
-    let growth_bytes = vec_capacity_growth_bytes::<GcEnv>(self.heap.env_root_stack.capacity(), new_len);
+    let growth_bytes =
+      vec_capacity_growth_bytes::<GcEnv>(self.heap.env_root_stack.capacity(), new_len);
 
     if growth_bytes != 0 {
       // Ensure `env` is treated as a root if this triggers a GC while we grow `env_root_stack`.
       let envs = [env];
-      self.heap.ensure_can_allocate_with_extra_roots(|_| growth_bytes, &[], &[], &envs, &[])?;
+      self
+        .heap
+        .ensure_can_allocate_with_extra_roots(|_| growth_bytes, &[], &[], &envs, &[])?;
       reserve_vec_to_len::<GcEnv>(&mut self.heap.env_root_stack, new_len)?;
     }
 
@@ -3073,6 +3418,7 @@ impl<'a> Scope<'a> {
         prototype: None,
         extensible: true,
         properties,
+        private_elements: Box::default(),
         kind: ObjectKind::Array(ArrayObject { length: len_u32 }),
       },
     };
@@ -3105,6 +3451,30 @@ impl<'a> Scope<'a> {
     let obj = HeapObject::Promise(JsPromise::new(prototype));
     Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
+
+  /// Allocates a generator object (state `suspendedStart`) holding a suspended resumable body.
+  pub(crate) fn alloc_generator(
+    &mut self,
+    prototype: Option<GcObject>,
+    body: std::rc::Rc<std::cell::RefCell<crate::resumable::ResumableBody>>,
+    kind: GeneratorKind,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC. The body's
+    // captured environments/values are traced through the body itself once the object exists;
+    // during this window the caller must keep them reachable (callers pass envs that are still
+    // rooted by the active `RuntimeEnv`).
+    let mut scope = self.reborrow();
+    if let Some(proto) = prototype {
+      scope.push_root(Value::Object(proto))?;
+    }
+
+    let gen = JsGenerator::new(prototype, body, kind);
+    let new_bytes = gen.heap_size_bytes();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+    let obj = HeapObject::Generator(gen);
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
+  }
+
   /// Defines (adds or replaces) an own property on `obj`.
   pub fn define_property(
     &mut self,
@@ -3300,8 +3670,10 @@ impl<'a> Scope<'a> {
     crate::function_properties::set_function_length(&mut scope, func, length)?;
 
     // Constructors get a `.prototype` object.
+    // Intrinsic bootstrap passes `None` and overwrites `.prototype` immediately; user
+    // functions should go through `alloc_ecma_function` with `%Object.prototype%`.
     if construct.is_some() {
-      crate::function_properties::make_constructor(&mut scope, func)?;
+      crate::function_properties::make_constructor(&mut scope, func, None)?;
     }
 
     Ok(func)
@@ -3357,10 +3729,7 @@ impl<'a> Scope<'a> {
 
     // Keep the table deterministic by sorting by `SymbolId`.
     buf.sort_by_key(|binding| binding.symbol);
-    if buf
-      .windows(2)
-      .any(|pair| pair[0].symbol == pair[1].symbol)
-    {
+    if buf.windows(2).any(|pair| pair[0].symbol == pair[1].symbol) {
       return Err(VmError::Unimplemented("duplicate env binding"));
     }
 
@@ -3372,7 +3741,11 @@ impl<'a> Scope<'a> {
   }
 
   /// Convenience alias for [`Scope::alloc_declarative_env_record`].
-  pub fn alloc_env_record(&mut self, outer: Option<GcEnv>, bindings: &[EnvBinding]) -> Result<GcEnv, VmError> {
+  pub fn alloc_env_record(
+    &mut self,
+    outer: Option<GcEnv>,
+    bindings: &[EnvBinding],
+  ) -> Result<GcEnv, VmError> {
     self.alloc_declarative_env_record(outer, bindings)
   }
 
@@ -3430,11 +3803,7 @@ impl<'a> Scope<'a> {
     Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
-  pub fn env_create_mutable_binding(
-    &mut self,
-    env: GcEnv,
-    name: &str,
-  ) -> Result<(), VmError> {
+  pub fn env_create_mutable_binding(&mut self, env: GcEnv, name: &str) -> Result<(), VmError> {
     if self.heap().env_has_binding(env, name)? {
       return Err(VmError::Unimplemented("duplicate binding"));
     }
@@ -3458,10 +3827,13 @@ impl<'a> Scope<'a> {
     )
   }
 
+  /// `CreateImmutableBinding(N, S)` — `strict` is the CreateImmutableBinding S flag
+  /// (true for `const` / class names; false for named function-expression names).
   pub(crate) fn env_create_immutable_binding(
     &mut self,
     env: GcEnv,
     name: &str,
+    strict: bool,
   ) -> Result<(), VmError> {
     if self.heap().env_has_binding(env, name)? {
       return Err(VmError::Unimplemented("duplicate binding"));
@@ -3481,12 +3853,15 @@ impl<'a> Scope<'a> {
         value: Value::Undefined,
         mutable: false,
         initialized: false,
-        strict: false,
+        strict,
       },
     )
   }
 
   /// Allocates an ECMAScript (user-defined) function object on the heap.
+  ///
+  /// When `is_constructable` is true, `object_prototype` should be `%Object.prototype%`
+  /// so MakeConstructor can `OrdinaryObjectCreate` the `.prototype` object correctly.
   pub fn alloc_ecma_function(
     &mut self,
     code: EcmaFunctionId,
@@ -3496,6 +3871,7 @@ impl<'a> Scope<'a> {
     this_mode: ThisMode,
     is_strict: bool,
     closure_env: Option<GcEnv>,
+    object_prototype: Option<GcObject>,
   ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
@@ -3505,6 +3881,9 @@ impl<'a> Scope<'a> {
       scope.push_env_root(env)?;
     } else {
       scope.push_root(Value::String(name))?;
+    }
+    if let Some(object_prototype) = object_prototype {
+      scope.push_root(Value::Object(object_prototype))?;
     }
 
     let func = JsFunction::new_ecma(
@@ -3531,9 +3910,9 @@ impl<'a> Scope<'a> {
     )?;
     crate::function_properties::set_function_length(&mut scope, func, length)?;
 
-    // Constructors get a `.prototype` object.
+    // Constructors get a `.prototype` object (OrdinaryObjectCreate(%Object.prototype%)).
     if is_constructable {
-      crate::function_properties::make_constructor(&mut scope, func)?;
+      crate::function_properties::make_constructor(&mut scope, func, object_prototype)?;
     }
 
     Ok(func)
@@ -3682,6 +4061,7 @@ enum HeapObject {
   Function(JsFunction),
   Env(EnvRecord),
   Promise(JsPromise),
+  Generator(JsGenerator),
 }
 
 impl Trace for HeapObject {
@@ -3693,6 +4073,7 @@ impl Trace for HeapObject {
       HeapObject::Function(f) => f.trace(tracer),
       HeapObject::Env(e) => e.trace(tracer),
       HeapObject::Promise(p) => p.trace(tracer),
+      HeapObject::Generator(g) => g.trace(tracer),
     }
   }
 }
@@ -3716,6 +4097,8 @@ pub(crate) struct ObjectBase {
   prototype: Option<GcObject>,
   extensible: bool,
   properties: Box<[PropertyEntry]>,
+  /// Private elements (`[[PrivateElements]]`) — presence keys for fields/methods/accessors.
+  private_elements: Box<[GcSymbol]>,
   kind: ObjectKind,
 }
 
@@ -3725,6 +4108,7 @@ impl ObjectBase {
       prototype,
       extensible: true,
       properties: Box::default(),
+      private_elements: Box::default(),
       kind: ObjectKind::Ordinary,
     }
   }
@@ -3747,6 +4131,7 @@ impl ObjectBase {
       prototype,
       extensible: true,
       properties: buf.into_boxed_slice(),
+      private_elements: Box::default(),
       kind: ObjectKind::Ordinary,
     })
   }
@@ -3760,6 +4145,7 @@ impl ObjectBase {
     //
     // Note: object headers are stored inline in the heap slot table, so this size intentionally
     // excludes the header size and only counts heap-owned payload allocations.
+    // Private element keys are traced but not folded into `used_bytes` (small, presence-only).
     count
       .checked_mul(mem::size_of::<PropertyEntry>())
       .unwrap_or(usize::MAX)
@@ -3798,6 +4184,9 @@ impl Trace for ObjectBase {
     }
     for prop in self.properties.iter() {
       prop.trace(tracer);
+    }
+    for &name in self.private_elements.iter() {
+      tracer.trace_value(Value::Symbol(name));
     }
   }
 }
@@ -3874,8 +4263,16 @@ impl JsPromise {
   fn heap_size_bytes(&self) -> usize {
     Self::heap_size_bytes_for_counts(
       self.object.base.properties.len(),
-      self.fulfill_reactions.as_deref().map(|r| r.len()).unwrap_or(0),
-      self.reject_reactions.as_deref().map(|r| r.len()).unwrap_or(0),
+      self
+        .fulfill_reactions
+        .as_deref()
+        .map(|r| r.len())
+        .unwrap_or(0),
+      self
+        .reject_reactions
+        .as_deref()
+        .map(|r| r.len())
+        .unwrap_or(0),
     )
   }
 
@@ -3921,6 +4318,92 @@ impl Trace for JsPromise {
   }
 }
 
+/// Spec `[[GeneratorState]]` (§27.5.3) — also reused for async-function / async-generator
+/// activations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GeneratorState {
+  SuspendedStart,
+  SuspendedYield,
+  Executing,
+  Completed,
+}
+
+/// Distinguishes sync generators, internal async-function activations, and async generators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GeneratorKind {
+  Sync,
+  /// Internal activation for an async function (not user-visible; holds the result promise).
+  AsyncFunction,
+  AsyncGenerator,
+}
+
+/// A generator object (or the internal activation record of an async function).
+///
+/// The suspended interpreter state lives in `body` behind `Rc<RefCell<...>>`:
+/// - the `Rc` lets the driver hold the state across heap mutations (the heap slot may move
+///   in the slots `Vec`, the `Rc` target does not);
+/// - the `RefCell` enforces at runtime that GC tracing never overlaps a structural mutation
+///   (the driver only borrows briefly inside `resumable::step`, never across allocations).
+///
+/// Byte accounting counts the base object + fixed overhead; the frame stack's dynamic growth is
+/// intentionally not charged to the heap (bounded by lexical nesting depth in practice).
+pub(crate) struct JsGenerator {
+  object: JsObject,
+  pub(crate) state: GeneratorState,
+  pub(crate) kind: GeneratorKind,
+  pub(crate) body: Option<std::rc::Rc<std::cell::RefCell<crate::resumable::ResumableBody>>>,
+  /// Async function: result promise settled on completion.
+  /// Async generator: promise for the currently in-flight `next`/`return`/`throw` request.
+  pub(crate) result_promise: Option<GcObject>,
+}
+
+impl std::fmt::Debug for JsGenerator {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("JsGenerator")
+      .field("state", &self.state)
+      .field("kind", &self.kind)
+      .finish_non_exhaustive()
+  }
+}
+
+impl JsGenerator {
+  fn new(
+    prototype: Option<GcObject>,
+    body: std::rc::Rc<std::cell::RefCell<crate::resumable::ResumableBody>>,
+    kind: GeneratorKind,
+  ) -> Self {
+    Self {
+      object: JsObject::new(prototype),
+      state: GeneratorState::SuspendedStart,
+      kind,
+      body: Some(body),
+      result_promise: None,
+    }
+  }
+
+  fn heap_size_bytes(&self) -> usize {
+    Self::heap_size_bytes_for_property_count(self.object.base.properties.len())
+  }
+
+  pub(crate) fn heap_size_bytes_for_property_count(count: usize) -> usize {
+    JsObject::heap_size_bytes_for_property_count(count) + std::mem::size_of::<Self>()
+  }
+}
+
+impl Trace for JsGenerator {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    self.object.trace(tracer);
+    if let Some(body) = &self.body {
+      // Tracing runs inside allocation; the driver never holds a borrow across allocations, so
+      // this borrow cannot conflict (a violation would panic here, loudly).
+      body.borrow().trace(tracer);
+    }
+    if let Some(p) = self.result_promise {
+      tracer.trace_value(Value::Object(p));
+    }
+  }
+}
+
 #[derive(Debug)]
 enum ObjectKind {
   Ordinary,
@@ -3957,7 +4440,11 @@ pub(crate) struct Tracer<'a> {
 
 impl<'a> Tracer<'a> {
   fn new(slots: &'a [Slot], marks: &'a mut [u8], worklist: &'a mut Vec<HeapId>) -> Self {
-    Self { slots, marks, worklist }
+    Self {
+      slots,
+      marks,
+      worklist,
+    }
   }
 
   fn pop_work(&mut self) -> Option<HeapId> {

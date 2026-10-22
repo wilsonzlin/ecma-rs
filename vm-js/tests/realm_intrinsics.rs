@@ -85,7 +85,12 @@ fn realm_function_prototype_is_callable_and_has_object_prototype() -> Result<(),
 
   let result = {
     let mut scope = heap.scope();
-    vm.call_without_host(&mut scope, Value::Object(function_prototype), Value::Undefined, &[])?
+    vm.call_without_host(
+      &mut scope,
+      Value::Object(function_prototype),
+      Value::Undefined,
+      &[],
+    )?
   };
   assert_eq!(result, Value::Undefined);
   assert!(!heap.is_constructor(Value::Object(function_prototype))?);

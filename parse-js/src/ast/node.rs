@@ -29,6 +29,23 @@ pub struct NodeAssocData {
 #[derive(Clone, Copy, Debug)]
 pub struct ParenthesizedExpr;
 
+/// Marker attached to an object-literal member parsed as
+/// `CoverInitializedName` (`IdentifierReference Initializer`).
+///
+/// ECMA-262 cover grammar: legal when the object is reinterpreted as an
+/// `ObjectAssignmentPattern` / binding pattern; an early SyntaxError if the
+/// member remains part of a plain `ObjectLiteral` expression.
+#[derive(Clone, Copy, Debug)]
+pub struct CoverInitializedName;
+
+/// Marker attached to an array/object literal that has a rest element followed
+/// only by a trailing comma (`[...a,]`, `{...a,}`).
+///
+/// Trailing commas after rest are legal in literal expressions, but the cover
+/// grammar does not produce a valid AssignmentPattern (rest must be last).
+#[derive(Clone, Copy, Debug)]
+pub struct TrailingCommaAfterRest;
+
 /// Marker attached to a numeric literal node that originated from a legacy octal
 /// integer literal (e.g. `010`).
 ///
@@ -56,6 +73,17 @@ pub struct LeadingZeroDecimalLiteral;
 /// text.
 #[derive(Clone, Copy, Debug)]
 pub struct LegacyOctalEscapeSequence(pub Loc);
+
+/// Marker attached to a string literal expression (or a node derived from one)
+/// when its raw source contained any EscapeSequence or LineContinuation
+/// (i.e. a `\` in the literal body).
+///
+/// Used by downstream passes that need the raw-form distinction without source
+/// text — notably Directive Prologue / Use Strict Directive (§11.2.1, §14.1.1):
+/// only the unescaped literals `"use strict"` / `'use strict'` count, so a
+/// cooked SV of `"use strict"` with this marker present is **not** a directive.
+#[derive(Clone, Copy, Debug)]
+pub struct StringLiteralContainsEscapes;
 
 /// Marker attached to a string literal expression node recording the exact UTF-16
 /// code units produced by escape decoding.

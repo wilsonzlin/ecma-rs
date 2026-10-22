@@ -1,0 +1,54 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling parse-js v0.24.1 (/root/r/ecma-rs/parse-js)
+   Compiling hir-js v0.1.0 (/root/r/ecma-rs/hir-js)
+   Compiling types-ts-interned v0.1.0 (/root/r/ecma-rs/types-ts-interned)
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+    --> types-ts-interned/tests/relate.rs:1216:14
+     |
+1216 |   let hook = RelateHooks {
+     |              ^^^^^^^^^^^ missing `should_stop`
+
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+    --> types-ts-interned/tests/relate.rs:1476:14
+     |
+1476 |   let hook = RelateHooks {
+     |              ^^^^^^^^^^^ missing `should_stop`
+
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+    --> types-ts-interned/tests/relate.rs:1648:15
+     |
+1648 |   let hooks = RelateHooks {
+     |               ^^^^^^^^^^^ missing `should_stop`
+
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+    --> types-ts-interned/tests/relate.rs:1895:15
+     |
+1895 |   let hooks = RelateHooks {
+     |               ^^^^^^^^^^^ missing `should_stop`
+
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+   --> types-ts-interned/tests/proptests.rs:442:15
+    |
+442 |   let hooks = RelateHooks {
+    |               ^^^^^^^^^^^ missing `should_stop`
+
+For more information about this error, try `rustc --explain E0063`.
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+   --> types-ts-interned/tests/proptests.rs:513:17
+    |
+513 |     let hooks = RelateHooks {
+    |                 ^^^^^^^^^^^ missing `should_stop`
+
+error[E0063]: missing field `should_stop` in initializer of `RelateHooks<'_>`
+   --> types-ts-interned/tests/proptests.rs:532:17
+    |
+532 |     let hooks = RelateHooks {
+    |                 ^^^^^^^^^^^ missing `should_stop`
+
+error: could not compile `types-ts-interned` (test "relate") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `types-ts-interned` (test "proptests") due to 3 previous errors

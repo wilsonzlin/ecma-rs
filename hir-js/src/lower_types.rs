@@ -177,12 +177,12 @@ impl<'a> TypeLowerer<'a> {
   }
 
   pub fn lower_enum(&mut self, decl: &Node<EnumDecl>) -> DefTypeInfo {
-    let members = decl
-      .stx
-      .members
-      .iter()
-      .map(|member| self.lower_enum_member(member))
-      .collect();
+    let mut next_auto = 0f64;
+    let mut members = Vec::with_capacity(decl.stx.members.len());
+    for member in decl.stx.members.iter() {
+      let info = self.lower_enum_member(member, &mut next_auto);
+      members.push(info);
+    }
     DefTypeInfo::Enum { members }
   }
 
@@ -736,17 +736,44 @@ impl<'a> TypeLowerer<'a> {
   fn lower_enum_member(
     &mut self,
     member: &Node<parse_js::ast::ts_stmt::EnumMember>,
+    next_auto: &mut f64,
   ) -> EnumMemberInfo {
     let name = self.names.intern(&member.stx.name);
     let span = self.ctx.to_range(member.loc);
     let value = match &member.stx.initializer {
       Some(init) => match &*init.stx {
-        AstExpr::LitNum(_) => EnumMemberValue::Number,
-        AstExpr::LitStr(_) => EnumMemberValue::String,
+        AstExpr::LitNum(n) => {
+          let v = n.stx.value.0;
+          *next_auto = v + 1.0;
+          EnumMemberValue::Number(v)
+        }
+        AstExpr::LitStr(s) => {
+          // After a string member, numeric autos are not well-defined; leave
+          // `next_auto` untouched (subsequent bare members stay Computed if we
+          // cannot continue the numeric sequence — see None branch).
+          EnumMemberValue::String(s.stx.value.clone())
+        }
         _ => EnumMemberValue::Computed,
       },
-      None => EnumMemberValue::Number,
+      None => {
+        // Bare member: numeric auto-increment, unless a prior string/computed
+        // member made the sequence ambiguous (tsc errors; we mark Computed).
+        if next_auto.is_finite() {
+          let v = *next_auto;
+          *next_auto = v + 1.0;
+          EnumMemberValue::Number(v)
+        } else {
+          EnumMemberValue::Computed
+        }
+      }
     };
+    // String / computed members invalidate further numeric autos.
+    if matches!(
+      value,
+      EnumMemberValue::String(_) | EnumMemberValue::Computed
+    ) {
+      *next_auto = f64::NAN;
+    }
     EnumMemberInfo { name, span, value }
   }
 
@@ -770,6 +797,10 @@ impl<'a> TypeLowerer<'a> {
         TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
           PropertyName::Number(direct.stx.key.clone())
         }
+        // Identifiers and private names (`#foo`). Private names keep the
+        // leading `#` so they stay distinct from a public `foo`. Annotations on
+        // private fields share the Prop arm with public ones in
+        // `lower_class_members` — do not special-case them away.
         _ => PropertyName::Ident(self.names.intern(&direct.stx.key)),
       },
       ClassOrObjKey::Computed(expr) => match &*expr.stx {
@@ -859,6 +890,19 @@ impl<'a> TypeLowerer<'a> {
 
   fn lower_heritage_expr(&mut self, expr: &Node<AstExpr>) -> TypeExprId {
     let span = self.ctx.to_range(expr.loc);
+    // `extends Parent<T>` is an Instantiation expression; keep type args so
+    // generic heritage is not LOWER0003→any (privateNamesConstructorChain-2).
+    if let AstExpr::Instantiation(inst) = expr.stx.as_ref() {
+      if let Some(name) = self.type_name_from_expr(&inst.stx.expression) {
+        let type_args = inst
+          .stx
+          .type_arguments
+          .iter()
+          .map(|arg| self.lower_type_expr(arg))
+          .collect();
+        return self.alloc_type_expr(span, TypeExprKind::TypeRef(TypeRef { name, type_args }));
+      }
+    }
     if let Some(name) = self.type_name_from_expr(expr) {
       self.alloc_type_expr(
         span,
@@ -879,6 +923,7 @@ impl<'a> TypeLowerer<'a> {
   fn type_name_from_expr(&mut self, expr: &Node<AstExpr>) -> Option<TypeName> {
     match &*expr.stx {
       AstExpr::Id(id) => Some(TypeName::Ident(self.names.intern(&id.stx.name))),
+      AstExpr::Instantiation(inst) => self.type_name_from_expr(&inst.stx.expression),
       AstExpr::Member(member) if !member.stx.optional_chaining => {
         let mut parts = Vec::new();
         if self.collect_member_path(&member.stx.left, &mut parts) {

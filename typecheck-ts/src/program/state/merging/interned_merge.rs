@@ -61,6 +61,113 @@ impl ProgramState {
     }
   }
 
+  /// After class+interface declaration merging, interface `new (): T` sigs land
+  /// on the class *instance* TYPE (tsc keeps them there so `const y = new C();
+  /// new y()` works). The VALUE constructor still returns the pre-merge
+  /// structural instance, which lacks those sigs.
+  ///
+  /// When the instance TYPE has construct signatures, rewrite VALUE construct
+  /// signature returns that still point at a non-constructable object to the
+  /// merged instance TYPE so `new C()` carries them.
+  pub(in super::super) fn sync_class_value_ctor_returns_to_instance_type(
+    store: &Arc<tti::TypeStore>,
+    value_defs: &HashMap<DefId, DefId>,
+    def_types: &mut HashMap<DefId, tti::TypeId>,
+  ) {
+    let mut entries: Vec<(DefId, DefId)> = value_defs
+      .iter()
+      .map(|(type_def, value_def)| (*type_def, *value_def))
+      .collect();
+    entries.sort_by_key(|(type_def, value_def)| (type_def.0, value_def.0));
+
+    for (type_def, value_def) in entries {
+      let Some(type_ty) = def_types.get(&type_def).copied() else {
+        continue;
+      };
+      let type_ty = store.canon(type_ty);
+      let type_ctors = ProgramState::construct_sigs_of(store, type_ty);
+      if type_ctors.is_empty() {
+        continue;
+      }
+
+      let Some(value_ty) = def_types.get(&value_def).copied() else {
+        continue;
+      };
+      let value_ty = store.canon(value_ty);
+      let value_ctors = ProgramState::construct_sigs_of(store, value_ty);
+      if value_ctors.is_empty() {
+        continue;
+      }
+
+      let mut new_sigs = Vec::with_capacity(value_ctors.len());
+      let mut changed = false;
+      for sig_id in value_ctors.iter().copied() {
+        let mut sig = store.signature(sig_id);
+        let ret = store.canon(sig.ret);
+        if ret == type_ty {
+          new_sigs.push(sig_id);
+          continue;
+        }
+        // Stale structural instance: object-like, no construct sigs of its own.
+        let ret_ctors = ProgramState::construct_sigs_of(store, ret);
+        let ret_is_object = matches!(
+          store.type_kind(ret),
+          tti::TypeKind::Object(_) | tti::TypeKind::Intersection(_)
+        );
+        if ret_ctors.is_empty() && ret_is_object {
+          sig.ret = type_ty;
+          new_sigs.push(store.intern_signature(sig));
+          changed = true;
+        } else {
+          new_sigs.push(sig_id);
+        }
+      }
+      if changed {
+        def_types.insert(
+          value_def,
+          ProgramState::with_construct_signatures(store, value_ty, &new_sigs),
+        );
+      }
+    }
+  }
+
+  fn construct_sigs_of(store: &Arc<tti::TypeStore>, ty: tti::TypeId) -> Vec<tti::SignatureId> {
+    match store.type_kind(ty) {
+      tti::TypeKind::Object(obj_id) => store.shape(store.object(obj_id).shape).construct_signatures,
+      tti::TypeKind::Intersection(members) => {
+        let mut out = Vec::new();
+        for member in members.iter().copied() {
+          out.extend(ProgramState::construct_sigs_of(store, store.canon(member)));
+        }
+        out
+      }
+      _ => Vec::new(),
+    }
+  }
+
+  fn with_construct_signatures(
+    store: &Arc<tti::TypeStore>,
+    ty: tti::TypeId,
+    sigs: &[tti::SignatureId],
+  ) -> tti::TypeId {
+    match store.type_kind(ty) {
+      tti::TypeKind::Object(obj_id) => {
+        let mut shape = store.shape(store.object(obj_id).shape);
+        shape.construct_signatures = sigs.to_vec();
+        let shape_id = store.intern_shape(shape);
+        let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+        store.intern_type(tti::TypeKind::Object(obj_id))
+      }
+      _ => {
+        let mut shape = tti::Shape::new();
+        shape.construct_signatures = sigs.to_vec();
+        let shape_id = store.intern_shape(shape);
+        let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+        store.intern_type(tti::TypeKind::Object(obj_id))
+      }
+    }
+  }
+
   pub(in super::super) fn merge_interned_decl_types(
     store: &Arc<tti::TypeStore>,
     existing: tti::TypeId,
@@ -68,6 +175,23 @@ impl ProgramState {
   ) -> tti::TypeId {
     match (store.type_kind(existing), store.type_kind(incoming)) {
       (tti::TypeKind::Callable { overloads: a }, tti::TypeKind::Callable { overloads: b }) => {
+        // Prefer a complete declaration-order overload set over appending a
+        // single prior signature in front (e.g. existing `[E]` + incoming
+        // `[Object, E]` must stay `[Object, E]`, not become `[E, Object]`).
+        let a_set: HashSet<_> = a.iter().copied().collect();
+        let b_set: HashSet<_> = b.iter().copied().collect();
+        if a_set.is_subset(&b_set) && b.len() >= a.len() {
+          let mut unique = b;
+          let mut seen_ids = HashSet::new();
+          unique.retain(|sig| seen_ids.insert(*sig));
+          return store.intern_type(tti::TypeKind::Callable { overloads: unique });
+        }
+        if b_set.is_subset(&a_set) && a.len() >= b.len() {
+          let mut unique = a;
+          let mut seen_ids = HashSet::new();
+          unique.retain(|sig| seen_ids.insert(*sig));
+          return store.intern_type(tti::TypeKind::Callable { overloads: unique });
+        }
         let mut merged = Vec::with_capacity(a.len() + b.len());
         merged.extend(a);
         merged.extend(b.into_iter());

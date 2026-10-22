@@ -17,8 +17,8 @@ mod timeout;
 pub use expectations::{AppliedExpectation, Expectation, ExpectationKind, Expectations};
 pub use fail_on::FailOn;
 pub use report::{
-  to_json_pretty_stable, write_json_report, write_json_report_to_stdout, write_json_report_to_writer,
-  ReportRef,
+  to_json_pretty_stable, write_json_report, write_json_report_to_stdout,
+  write_json_report_to_writer, ReportRef,
 };
-pub use shard::{apply_shard, Shard};
+pub use shard::{apply_shard, Shard, ShardStrategy};
 pub use timeout::{CancellationToken, TimeoutGuard, TimeoutManager};

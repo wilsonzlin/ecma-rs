@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "strictPropertyInitialization": false,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "distributive_conditionals.ts",
+      "start": 369,
+      "end": 381,
+      "category": "error",
+      "message": "Type 'string' is not assignable to type 'boolean'."
+    },
+    {
+      "code": 2322,
+      "file": "distributive_conditionals.ts",
+      "start": 520,
+      "end": 526,
+      "category": "error",
+      "message": "Type '1' is not assignable to type '\"a\" | \"b\"'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "distributive_conditionals.ts",
+        "name": "distNo",
+        "type": "false"
+      },
+      {
+        "file": "distributive_conditionals.ts",
+        "name": "distYes",
+        "type": "true"
+      },
+      {
+        "file": "distributive_conditionals.ts",
+        "name": "onlyA",
+        "type": "\"a\" | \"b\""
+      },
+      {
+        "file": "distributive_conditionals.ts",
+        "name": "wrapped",
+        "type": "false"
+      }
+    ]
+  }
+}

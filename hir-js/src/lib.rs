@@ -2,7 +2,7 @@
 //!
 //! `hir-js` turns a `parse-js` [`parse_js::ast::stx::TopLevel`] AST into a
 //! [`HirFile`] plus per-definition bodies and arenas, assigning deterministic IDs
-//! (`DefId`, `BodyId`, `ExprId`, `PatId`, `TypeExprId`) and building a [`SpanMap`]
+//! (`DefId`, `BodyId`, `LocalId`, `ExprId`, `PatId`, `TypeExprId`) and building a [`SpanMap`]
 //! for byte-offset lookups.
 //!
 //! Call [`lower_file`] if you already have a parsed AST. For tests and simple
@@ -89,6 +89,8 @@ pub use hir::JsxExprContainer;
 pub use hir::JsxMemberExpr;
 pub use hir::JsxName;
 pub use hir::Literal;
+pub use hir::LocalData;
+pub use hir::LocalKind;
 pub use hir::LowerResult;
 pub use hir::MemberExpr;
 pub use hir::ModuleAttributes;
@@ -102,9 +104,9 @@ pub use hir::Param;
 pub use hir::Pat;
 pub use hir::PatKind;
 pub use hir::PropertyName;
-pub use hir::StringLiteral;
 pub use hir::Stmt;
 pub use hir::StmtKind;
+pub use hir::StringLiteral;
 pub use hir::TemplateLiteral;
 pub use hir::TemplateLiteralSpan;
 pub use hir::TypeArenas;
@@ -147,6 +149,7 @@ pub use ids::ExportSpecifierId;
 pub use ids::ExprId;
 pub use ids::ImportId;
 pub use ids::ImportSpecifierId;
+pub use ids::LocalId;
 pub use ids::NameId;
 pub use ids::PatId;
 pub use ids::StmtId;

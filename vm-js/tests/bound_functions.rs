@@ -1,5 +1,7 @@
 use std::cell::Cell;
-use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+};
 
 thread_local! {
   static LAST_THIS: Cell<Value> = Cell::new(Value::Undefined);
@@ -150,6 +152,9 @@ fn bound_function_gc_preserves_bound_slots() -> Result<(), VmError> {
   assert!(scope.heap().is_valid_object(target));
   assert!(scope.heap().is_valid_object(bound_this));
   assert!(scope.heap().is_valid_object(bound_arg));
-  assert_eq!(scope.heap().get_string(bound_name)?.to_utf8_lossy(), "bound");
+  assert_eq!(
+    scope.heap().get_string(bound_name)?.to_utf8_lossy(),
+    "bound"
+  );
   Ok(())
 }

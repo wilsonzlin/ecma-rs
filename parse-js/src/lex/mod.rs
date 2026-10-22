@@ -117,6 +117,10 @@ type LexResult<T> = Result<T, LexNotFound>;
 pub struct Lexer<'a> {
   source: &'a str,
   next: usize,
+  /// Annex B HTML-like comments (`<!--` / `-->`) are script-only (§B.1.1).
+  /// Defaults to `true` for backwards-compatible standalone lexing; the parser
+  /// clears this for module `SourceType`.
+  allow_html_comments: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -124,7 +128,12 @@ impl<'a> Lexer<'a> {
     Lexer {
       source: code,
       next: 0,
+      allow_html_comments: true,
     }
+  }
+
+  pub fn set_allow_html_comments(&mut self, allow: bool) {
+    self.allow_html_comments = allow;
   }
 
   pub fn next(&self) -> usize {
@@ -519,20 +528,35 @@ fn find_line_terminator(text: &str) -> Option<(usize, usize)> {
   })
 }
 
-/// Returns whether the comment includes a line terminator.
-fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
+/// Outcome of lexing a multi-line comment.
+enum MultilineCommentLex {
+  /// Comment closed with `*/`. Bool is whether it contained a line terminator.
+  Closed(bool),
+  /// Reached EOF without `*/` (ECMA-262 §12.4).
+  Unterminated,
+}
+
+/// Lexes a multi-line comment starting at `/*`.
+fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> MultilineCommentLex {
   // Consume `/*`.
   lexer.skip_expect(2);
   let mut contains_newline = false;
   loop {
-    let (tt, mat) = ML_COMMENT
-      .find(lexer)
-      // We can't reject with an error, so we just consume the rest of the source code if no matching `*/` is found.
-      .unwrap_or_else(|_| (TT::EOF, Match(lexer.remaining())));
+    let (tt, mat) = match ML_COMMENT.find(lexer) {
+      Ok(found) => found,
+      Err(_) => {
+        // Consume the remainder so the Invalid token spans to EOF.
+        lexer.consume(Match(lexer.remaining()));
+        return MultilineCommentLex::Unterminated;
+      }
+    };
     lexer.consume(mat);
     match tt {
-      TT::CommentMultilineEnd | TT::EOF => {
-        break;
+      TT::CommentMultilineEnd => {
+        return MultilineCommentLex::Closed(contains_newline);
+      }
+      TT::EOF => {
+        return MultilineCommentLex::Unterminated;
       }
       TT::LineTerminator => {
         contains_newline = true;
@@ -540,7 +564,11 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
       _ => unreachable!(),
     };
   }
-  contains_newline
+}
+
+/// After a NumericLiteral / BigIntLiteral, IdentifierStart must not follow (ECMA-262 §12.9.3).
+fn number_followed_by_identifier_start(lexer: &Lexer<'_>) -> bool {
+  lexer.peek_or_eof(0).is_some_and(|c| is_identifier_start(c))
 }
 
 fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) -> bool {
@@ -555,7 +583,7 @@ fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) -> bool {
   }
 }
 
-fn is_identifier_start(c: char) -> bool {
+pub(crate) fn is_identifier_start(c: char) -> bool {
   if c.is_ascii() {
     matches!(c, '$' | '_' | 'a'..='z' | 'A'..='Z')
   } else {
@@ -755,6 +783,9 @@ fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       valid = false;
     }
     lexer.skip_expect(1);
+    if number_followed_by_identifier_start(lexer) {
+      return Ok(TT::Invalid);
+    }
     return Ok(if valid {
       TT::LiteralBigInt
     } else {
@@ -793,11 +824,29 @@ fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
     valid &= ok && digits;
   }
 
+  if number_followed_by_identifier_start(lexer) {
+    return Ok(TT::Invalid);
+  }
+
   Ok(if valid {
     TT::LiteralNumber
   } else {
     TT::Invalid
   })
+}
+
+fn finish_radix_number(lexer: &mut Lexer<'_>, valid: bool, is_bigint: bool) -> TT {
+  if number_followed_by_identifier_start(lexer) {
+    return TT::Invalid;
+  }
+  if !valid {
+    return TT::Invalid;
+  }
+  if is_bigint {
+    TT::LiteralBigInt
+  } else {
+    TT::LiteralNumber
+  }
 }
 
 fn lex_binary_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
@@ -812,31 +861,14 @@ fn lex_binary_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   valid &= extra_valid && !has_invalid_digits;
 
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
-
-  if !valid {
-    return TT::Invalid;
-  }
-
-  if is_bigint {
-    TT::LiteralBigInt
-  } else {
-    TT::LiteralNumber
-  }
+  finish_radix_number(lexer, valid, is_bigint)
 }
 
 fn lex_hex_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
   let (has_digits, valid_digits) = consume_digits_with_separators(lexer, &DIGIT_HEX);
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
-  if has_digits && valid_digits {
-    if is_bigint {
-      TT::LiteralBigInt
-    } else {
-      TT::LiteralNumber
-    }
-  } else {
-    TT::Invalid
-  }
+  finish_radix_number(lexer, has_digits && valid_digits, is_bigint)
 }
 
 fn lex_oct_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
@@ -846,22 +878,20 @@ fn lex_oct_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   let (_, extra_valid) = consume_digits_with_separators(lexer, &DIGIT);
   let has_invalid_digits = lexer.next() > invalid_start;
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
-
-  if has_digits && valid_digits && extra_valid && !has_invalid_digits {
-    if is_bigint {
-      TT::LiteralBigInt
-    } else {
-      TT::LiteralNumber
-    }
-  } else {
-    TT::Invalid
-  }
+  finish_radix_number(
+    lexer,
+    has_digits && valid_digits && extra_valid && !has_invalid_digits,
+    is_bigint,
+  )
 }
 
 fn lex_private_member(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Include the `#` in the token.
   lexer.skip_expect(1);
-  consume_identifier(lexer, LexMode::Standard)?;
+  // TypeScript's scanner accepts a bare `#` as a PrivateIdentifier and reports
+  // TS1127 ("Invalid character") during parse. Keep the token (text `"#"`) so
+  // recovery can continue and emit one diagnostic per bare hash.
+  let _ = consume_identifier(lexer, LexMode::Standard);
   Ok(TT::PrivateMember)
 }
 
@@ -1078,6 +1108,9 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
     return lexer.drive_fallible(false, |lexer| lex_template_string_continue(lexer));
   };
 
+  // HTML-like comments are Annex B script-only (ECMA-262 §B.1.1).
+  let allow_html_comments = lexer.allow_html_comments;
+
   // Skip whitespace and comments before the next significant token.
   // Track whether we're at the start of a line. We're at line start if:
   // 1. We're at the very beginning of the source (position 0), OR
@@ -1092,6 +1125,19 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
       // Not at start of line, so don't treat as comment - break out
       break;
     }
+    // Module code: do not treat `<!--` / `-->` as comments — surface as Invalid.
+    if !allow_html_comments && tt == TT::CommentSingle && (mat.len() == 3 || mat.len() == 4) {
+      let prefix = &lexer.source[lexer.next()..lexer.next() + mat.len()];
+      if prefix == "<!--" || prefix == "-->" {
+        let cp = lexer.checkpoint();
+        lexer.consume(mat);
+        return Token {
+          loc: lexer.since_checkpoint(cp),
+          typ: TT::Invalid,
+          preceded_by_line_terminator,
+        };
+      }
+    }
     match tt {
       TT::LineTerminator => {
         lexer.consume(mat);
@@ -1103,13 +1149,24 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
         // Whitespace doesn't change whether we're at line start
       }
       TT::CommentMultiline => {
-        let comment_has_line_terminator = lex_multiline_comment(lexer);
-        // Multiline comments are insignificant for determining line start.
-        // Only update at_line_start if the comment contains a line terminator.
-        if comment_has_line_terminator {
-          at_line_start = true;
+        let cp = lexer.checkpoint();
+        match lex_multiline_comment(lexer) {
+          MultilineCommentLex::Closed(comment_has_line_terminator) => {
+            // Multiline comments are insignificant for determining line start.
+            // Only update at_line_start if the comment contains a line terminator.
+            if comment_has_line_terminator {
+              at_line_start = true;
+            }
+            preceded_by_line_terminator |= comment_has_line_terminator;
+          }
+          MultilineCommentLex::Unterminated => {
+            return Token {
+              loc: lexer.since_checkpoint(cp),
+              typ: TT::Invalid,
+              preceded_by_line_terminator,
+            };
+          }
         }
-        preceded_by_line_terminator |= comment_has_line_terminator;
       }
       TT::CommentSingle => {
         let comment_has_line_terminator = lex_single_comment(lexer, mat);

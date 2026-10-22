@@ -9,7 +9,7 @@ use hir_js::{
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::bind_ts_locals;
 use typecheck_ts::check::flow_bindings::FlowBindings;
-use typecheck_ts::check::hir_body::check_body_with_env_with_bindings;
+use typecheck_ts::check::hir_body::{check_body_with_env_with_bindings, DaTypeAliasMap};
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(
@@ -63,6 +63,7 @@ function f(x: string | null) {
   initial.insert(name_id(lowered.names.as_ref(), "x"), expected);
 
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let type_aliases = DaTypeAliasMap::from_lowered(&lowered);
   let res = check_body_with_env_with_bindings(
     body_id,
     body,
@@ -74,6 +75,11 @@ function f(x: string | null) {
     Some(&bindings),
     relate,
     None,
+    lowered.type_arenas(body.owner),
+    Some(&type_aliases),
+    HashMap::new(),
+    None,
+    false,
   );
 
   let ret_ty = res.return_types()[0];
@@ -105,6 +111,7 @@ function f(x: string | null) {
   );
 
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let type_aliases = DaTypeAliasMap::from_lowered(&lowered);
   let res = check_body_with_env_with_bindings(
     body_id,
     body,
@@ -116,6 +123,11 @@ function f(x: string | null) {
     Some(&bindings),
     relate,
     None,
+    lowered.type_arenas(body.owner),
+    Some(&type_aliases),
+    HashMap::new(),
+    None,
+    false,
   );
 
   let ret_ty = res.return_types()[0];

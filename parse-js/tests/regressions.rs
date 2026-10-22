@@ -14,6 +14,10 @@ mod async_identifier_disambiguation;
 mod async_line_terminator_comments;
 #[path = "regressions/await_yield.rs"]
 mod await_yield;
+#[path = "regressions/bare_fn_type_param.rs"]
+mod bare_fn_type_param;
+#[path = "regressions/break_continue_asi_and_spans.rs"]
+mod break_continue_asi_and_spans;
 #[path = "regressions/class_async_method_line_terminator.rs"]
 mod class_async_method_line_terminator;
 #[path = "regressions/class_get_set_computed.rs"]
@@ -26,6 +30,8 @@ mod class_heritage;
 mod class_method_overload;
 #[path = "regressions/class_method_type_params.rs"]
 mod class_method_type_params;
+#[path = "regressions/cover_grammar_and_targets.rs"]
+mod cover_grammar_and_targets;
 #[path = "regressions/destructuring_type_params.rs"]
 mod destructuring_type_params;
 #[path = "regressions/exponentiation.rs"]
@@ -34,6 +40,8 @@ mod exponentiation;
 mod export_assignment_asi;
 #[path = "regressions/export_default_async_line_terminator.rs"]
 mod export_default_async_line_terminator;
+#[path = "regressions/fail_cluster_rejections.rs"]
+mod fail_cluster_rejections;
 #[path = "regressions/for_header_asi.rs"]
 mod for_header_asi;
 #[path = "regressions/function_name_reserved_words.rs"]
@@ -46,6 +54,8 @@ mod jsx_namespaces;
 mod jsx_text;
 #[path = "regressions/jsx_tsx_disambiguation.rs"]
 mod jsx_tsx_disambiguation;
+#[path = "regressions/let_newline_asi_statement_position.rs"]
+mod let_newline_asi_statement_position;
 #[path = "regressions/literal_validation.rs"]
 mod literal_validation;
 #[path = "regressions/modifier_line_terminator_comments.rs"]
@@ -54,16 +64,22 @@ mod modifier_line_terminator_comments;
 mod module_item_positions;
 #[path = "regressions/module_namespace_identifiers.rs"]
 mod module_namespace_identifiers;
+#[path = "regressions/new_target_arrow_inheritance.rs"]
+mod new_target_arrow_inheritance;
 #[path = "regressions/numeric_literal_overflow.rs"]
 mod numeric_literal_overflow;
 #[path = "regressions/numeric_separators.rs"]
 mod numeric_separators;
-#[path = "regressions/object_literal_modifier_line_terminator.rs"]
-mod object_literal_modifier_line_terminator;
 #[path = "regressions/object_literal_method_type_params.rs"]
 mod object_literal_method_type_params;
+#[path = "regressions/object_literal_modifier_line_terminator.rs"]
+mod object_literal_modifier_line_terminator;
+#[path = "regressions/optional_chain_from_new.rs"]
+mod optional_chain_from_new;
 #[path = "regressions/private_index_signature.rs"]
 mod private_index_signature;
+#[path = "regressions/private_name_parse_recovery.rs"]
+mod private_name_parse_recovery;
 #[path = "regressions/strict_ecma_rejections.rs"]
 mod strict_ecma_rejections;
 #[path = "regressions/ts_declare_modifiers.rs"]
@@ -76,3 +92,5 @@ mod ts_module_blocks;
 mod ts_optional_call_type_args;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;
+#[path = "regressions/yield_in_formal_parameters.rs"]
+mod yield_in_formal_parameters;

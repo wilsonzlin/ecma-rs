@@ -1,6 +1,4 @@
-use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
-};
+use vm_js::{Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError};
 
 fn enumerable_configurable_data(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
@@ -109,7 +107,11 @@ fn ordinary_own_property_keys_array_index_edge_cases() -> Result<(), VmError> {
 
   // Define in order: ["00", "4294967294", "4294967295", "0"].
   scope.define_property(obj, k_00, enumerable_configurable_data(Value::Null))?;
-  scope.define_property(obj, k_max_minus_1, enumerable_configurable_data(Value::Null))?;
+  scope.define_property(
+    obj,
+    k_max_minus_1,
+    enumerable_configurable_data(Value::Null),
+  )?;
   scope.define_property(obj, k_max, enumerable_configurable_data(Value::Null))?;
   scope.define_property(obj, k_0, enumerable_configurable_data(Value::Null))?;
 

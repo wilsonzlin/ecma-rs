@@ -1,0 +1,23 @@
+# Map / Set / WeakMap / WeakSet collection built-ins
+# (ECMA-262 §24.1 / §24.2 / §24.3 / §24.4).
+#
+# Core surface: constructor (+ iterable), get/set/add/has/delete/clear/size,
+# iteration (Map/Set), @@toStringTag, @@species,
+# Set composition (union/intersection/difference/symmetricDifference/
+# isSubsetOf/isSupersetOf/isDisjointFrom),
+# Map.groupBy, Map/WeakMap getOrInsert / getOrInsertComputed.
+# WeakMap/WeakSet: object + unregistered-symbol keys, get/set/has/delete
+# (entries stored strongly for now; true weak GC edges deferred).
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "built-ins/Map/**/*.js",
+  "built-ins/Set/**/*.js",
+  "built-ins/WeakMap/**/*.js",
+  "built-ins/WeakSet/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

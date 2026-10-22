@@ -98,12 +98,7 @@ pub fn run_cli(args: ValidateArgs) -> Result<ExitCode> {
   let mut report = ValidationReport::default();
 
   for suite in suites {
-    report.extend(validate_suite(
-      &suite,
-      &discovered,
-      &discovered_ids,
-      &args,
-    ));
+    report.extend(validate_suite(&suite, &discovered, &discovered_ids, &args));
   }
 
   if let Some(manifest_path) = &args.manifest {
@@ -211,7 +206,10 @@ fn validate_suite(
 
   // Per-glob match counts (to catch stale patterns that match 0 tests).
   for (pattern, matcher) in &include_matchers {
-    let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
+    let count = discovered
+      .iter()
+      .filter(|t| matcher.is_match(&t.id))
+      .count();
     if count == 0 {
       report.push_issue(
         args.include_glob_zero,
@@ -220,7 +218,10 @@ fn validate_suite(
     }
   }
   for (pattern, matcher) in &exclude_matchers {
-    let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
+    let count = discovered
+      .iter()
+      .filter(|t| matcher.is_match(&t.id))
+      .count();
     if count == 0 {
       report.push_issue(
         args.exclude_glob_zero,
@@ -249,18 +250,27 @@ fn validate_suite(
 
   if !include_matchers.is_empty() {
     for test in discovered {
-      if include_matchers.iter().any(|(_, matcher)| matcher.is_match(&test.id)) {
+      if include_matchers
+        .iter()
+        .any(|(_, matcher)| matcher.is_match(&test.id))
+      {
         selected.insert(test.id.clone());
       }
     }
   }
 
   if !exclude_matchers.is_empty() {
-    selected.retain(|id| !exclude_matchers.iter().any(|(_, matcher)| matcher.is_match(id)));
+    selected.retain(|id| {
+      !exclude_matchers
+        .iter()
+        .any(|(_, matcher)| matcher.is_match(id))
+    });
   }
 
   if selected.is_empty() {
-    report.errors.push(format!("{} selected 0 tests", suite.label));
+    report
+      .errors
+      .push(format!("{} selected 0 tests", suite.label));
   }
 
   report
@@ -348,9 +358,9 @@ fn validate_manifest(
       continue;
     }
     if seen > 1 {
-      report
-        .errors
-        .push(format!("{prefix} must specify exactly one of `id`/`glob`/`regex`"));
+      report.errors.push(format!(
+        "{prefix} must specify exactly one of `id`/`glob`/`regex`"
+      ));
       continue;
     }
 
@@ -367,7 +377,10 @@ fn validate_manifest(
       match Glob::new(glob) {
         Ok(glob) => {
           let matcher = glob.compile_matcher();
-          let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
+          let count = discovered
+            .iter()
+            .filter(|t| matcher.is_match(&t.id))
+            .count();
           if report_counts {
             report
               .notes
@@ -440,7 +453,10 @@ mod tests {
     let suite = SuiteSpec {
       label: "suite \"smoke\"".to_string(),
       suite: Suite {
-        tests: vec!["language/a.js".to_string(), "language/missing.js".to_string()],
+        tests: vec![
+          "language/a.js".to_string(),
+          "language/missing.js".to_string(),
+        ],
         ..Suite::default()
       },
     };
@@ -522,7 +538,10 @@ mod tests {
 
     let report = validate_suite(&suite, &discovered, &discovered_ids, &args);
     assert!(
-      report.errors.iter().any(|msg| msg.contains("selected 0 tests")),
+      report
+        .errors
+        .iter()
+        .any(|msg| msg.contains("selected 0 tests")),
       "expected suite-empty error, got: {:#?}",
       report.errors
     );
@@ -583,10 +602,7 @@ tracking_issue = "https://example.invalid/issue/1"
       report.warnings
     );
     assert!(
-      report
-        .notes
-        .iter()
-        .any(|note| note.contains("matched 2")),
+      report.notes.iter().any(|note| note.contains("matched 2")),
       "expected match count note, got: {:#?}",
       report.notes
     );

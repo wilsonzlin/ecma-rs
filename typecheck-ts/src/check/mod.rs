@@ -1,4 +1,7 @@
 //! Internal helpers for type inference, flow analysis, and generic instantiation.
+//!
+//! HIR-first type lowering lives in [`decls`] (`HirDeclLowerer`). [`type_expr`]
+//! (`TypeLowerer`) is the residual AST quarantine — see that module's docs.
 
 pub mod caches;
 pub mod cfg;
@@ -35,5 +38,6 @@ pub(crate) fn relate_hooks<'a>() -> RelateHooks<'a> {
   RelateHooks {
     expander: None,
     is_same_origin_private_member: Some(&same_origin),
+    should_stop: None,
   }
 }

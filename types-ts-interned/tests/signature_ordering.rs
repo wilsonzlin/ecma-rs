@@ -32,12 +32,11 @@ fn build_signature_set(store: &TypeStore) -> Vec<SignatureId> {
 }
 
 #[test]
-fn callable_overload_sets_are_order_independent() {
+fn callable_overload_sets_preserve_declaration_order() {
+  // Overload resolution is first-match in source order, so order is part of the
+  // callable's identity (reversed lists must not collapse to the same TypeId).
   let store = TypeStore::new();
   let signatures = build_signature_set(&store);
-
-  let mut expected = signatures.clone();
-  expected.sort_by(|a, b| store.compare_signatures(*a, *b));
 
   let callable_a = store.intern_type(TypeKind::Callable {
     overloads: signatures.clone(),
@@ -45,25 +44,28 @@ fn callable_overload_sets_are_order_independent() {
   let mut reversed = signatures.clone();
   reversed.reverse();
   let callable_b = store.intern_type(TypeKind::Callable {
-    overloads: reversed,
+    overloads: reversed.clone(),
   });
 
-  assert_eq!(callable_a, callable_b);
+  assert_ne!(callable_a, callable_b);
 
   let overloads = match store.type_kind(callable_a) {
     TypeKind::Callable { overloads } => overloads,
     other => panic!("expected callable, got {:?}", other),
   };
-  assert_eq!(overloads, expected);
+  assert_eq!(overloads, signatures);
+
+  let overloads_b = match store.type_kind(callable_b) {
+    TypeKind::Callable { overloads } => overloads,
+    other => panic!("expected callable, got {:?}", other),
+  };
+  assert_eq!(overloads_b, reversed);
 }
 
 #[test]
-fn shape_signature_lists_are_order_independent() {
+fn shape_signature_lists_preserve_declaration_order() {
   let store = TypeStore::new();
   let signatures = build_signature_set(&store);
-
-  let mut expected = signatures.clone();
-  expected.sort_by(|a, b| store.compare_signatures(*a, *b));
 
   let mut shape_a = Shape::new();
   shape_a.call_signatures = signatures.clone();
@@ -74,14 +76,18 @@ fn shape_signature_lists_are_order_independent() {
   reversed.reverse();
   let mut shape_b = Shape::new();
   shape_b.call_signatures = reversed.clone();
-  shape_b.construct_signatures = reversed;
+  shape_b.construct_signatures = reversed.clone();
   let id_b = store.intern_shape(shape_b);
 
-  assert_eq!(id_a, id_b);
+  assert_ne!(id_a, id_b);
 
   let shape = store.shape(id_a);
-  assert_eq!(shape.call_signatures, expected);
-  assert_eq!(shape.construct_signatures, expected);
+  assert_eq!(shape.call_signatures, signatures);
+  assert_eq!(shape.construct_signatures, signatures);
+
+  let shape_rev = store.shape(id_b);
+  assert_eq!(shape_rev.call_signatures, reversed);
+  assert_eq!(shape_rev.construct_signatures, reversed);
 }
 
 #[test]

@@ -202,6 +202,7 @@ impl Program {
             &state.interned_type_param_decls,
             &state.interned_intrinsics,
             &state.interned_class_instances,
+            &state.interned_enum_defs,
             caches.eval.clone(),
           );
           let mut prop_ty =

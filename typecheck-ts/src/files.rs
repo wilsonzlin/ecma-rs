@@ -53,14 +53,14 @@ fn stable_hash(key: &FileKey, origin: FileOrigin, salt: u64) -> u64 {
 ///
 /// All other keys use a stable hash-based fallback in a high numeric range to
 /// avoid colliding with small test IDs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FileRegistry {
   keys: AHashMap<FileKey, FileRegistryEntry>,
   id_to_key: AHashMap<FileId, FileKey>,
   id_to_origin: AHashMap<FileId, FileOrigin>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FileRegistryEntry {
   source: Option<FileId>,
   lib: Option<FileId>,

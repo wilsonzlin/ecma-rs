@@ -4,13 +4,16 @@ use types_ts_interned::Accessibility;
 use types_ts_interned::DefId;
 use types_ts_interned::Indexer;
 use types_ts_interned::ObjectType;
+use types_ts_interned::Param;
 use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
 use types_ts_interned::Shape;
+use types_ts_interned::Signature;
 use types_ts_interned::TemplateChunk;
 use types_ts_interned::TemplateLiteralType;
 use types_ts_interned::TupleElem;
+use types_ts_interned::TypeId;
 use types_ts_interned::TypeKind;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
@@ -203,6 +206,86 @@ fn intersection_contradictions_reduce_to_never() {
 }
 
 #[test]
+fn object_property_contradictions_reduce_intersection_to_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  fn obj(store: &TypeStore, props: &[(&str, TypeId, bool)]) -> TypeId {
+    let mut shape = Shape::new();
+    for (name, ty, optional) in props {
+      shape.properties.push(Property {
+        key: PropKey::String(store.intern_name(*name)),
+        data: PropData {
+          ty: *ty,
+          optional: *optional,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+    let shape_id = store.intern_shape(shape);
+    let obj = store.intern_object(ObjectType { shape: shape_id });
+    store.intern_type(TypeKind::Object(obj))
+  }
+
+  let kind_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let kind_b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
+  let left = obj(
+    &store,
+    &[("kind", kind_a, false), ("foo", primitives.string, false)],
+  );
+  let right = obj(
+    &store,
+    &[("kind", kind_b, false), ("foo", primitives.number, false)],
+  );
+  assert_eq!(store.intersection(vec![left, right]), primitives.never);
+
+  // Optional-only conflicts stay as an intersection (may contain `a?: never`).
+  let opt_left = obj(&store, &[("a", kind_a, true)]);
+  let opt_right = obj(&store, &[("a", kind_b, true)]);
+  assert_ne!(
+    store.intersection(vec![opt_left, opt_right]),
+    primitives.never
+  );
+
+  // neverIntersectionNotCallable shape: call signature + conflicting `a`.
+  let empty = store.intern_type(TypeKind::StringLiteral(store.intern_name("")));
+  let mut callable_shape = Shape::new();
+  callable_shape.properties.push(Property {
+    key: PropKey::String(store.intern_name("a")),
+    data: PropData {
+      ty: empty,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  });
+  let sig = store.intern_signature(Signature {
+    params: vec![Param {
+      name: None,
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+    }],
+    ret: primitives.number,
+    type_params: vec![],
+    this_param: None,
+  });
+  callable_shape.call_signatures.push(sig);
+  let callable = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(callable_shape),
+  })));
+  let other = obj(&store, &[("a", primitives.number, false)]);
+  assert_eq!(store.intersection(vec![callable, other]), primitives.never);
+}
+
+#[test]
 fn union_of_boolean_literals_collapses_to_boolean() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
@@ -259,7 +342,9 @@ fn shape_canonicalization_merges_duplicate_properties() {
     store.intersection(vec![primitives.string, primitives.number])
   );
   assert!(!prop.data.optional);
-  assert!(prop.data.readonly);
+  // Writable if any declaration is writable (matches getter+setter and
+  // `{ readonly x } & { x }` assignability).
+  assert!(!prop.data.readonly);
   assert_eq!(prop.data.accessibility, Some(Accessibility::Private));
 }
 

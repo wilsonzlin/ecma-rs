@@ -1,82 +1,6 @@
 use super::*;
 
 impl ProgramState {
-  fn param_type_for_def(&mut self, def: DefId, file: FileId) -> Result<TypeId, FatalError> {
-    let unknown = self.interned_unknown();
-    let Some(lowered) = self.hir_lowered.get(&file) else {
-      return Ok(unknown);
-    };
-    let Some(hir_def) = lowered.def(def) else {
-      return Ok(unknown);
-    };
-    let target_span = hir_def.span;
-
-    fn record_matches(
-      body_id: BodyId,
-      body: &hir_js::Body,
-      pat_id: HirPatId,
-      target_span: TextRange,
-      matches: &mut Vec<(BodyId, HirPatId)>,
-    ) {
-      let Some(pat) = body.pats.get(pat_id.0 as usize) else {
-        return;
-      };
-      if pat.span == target_span {
-        if matches!(pat.kind, HirPatKind::Ident(_)) {
-          matches.push((body_id, pat_id));
-        }
-      }
-      match &pat.kind {
-        HirPatKind::Ident(_) | HirPatKind::AssignTarget(_) => {}
-        HirPatKind::Array(arr) => {
-          for elem in arr.elements.iter().flatten() {
-            record_matches(body_id, body, elem.pat, target_span, matches);
-          }
-          if let Some(rest) = arr.rest {
-            record_matches(body_id, body, rest, target_span, matches);
-          }
-        }
-        HirPatKind::Object(obj) => {
-          for prop in obj.props.iter() {
-            record_matches(body_id, body, prop.value, target_span, matches);
-          }
-          if let Some(rest) = obj.rest {
-            record_matches(body_id, body, rest, target_span, matches);
-          }
-        }
-        HirPatKind::Rest(inner) => {
-          record_matches(body_id, body, **inner, target_span, matches);
-        }
-        HirPatKind::Assign { target, .. } => {
-          record_matches(body_id, body, *target, target_span, matches);
-        }
-      }
-    }
-
-    let mut body_ids: Vec<_> = lowered.body_index.keys().copied().collect();
-    body_ids.sort_by_key(|id| id.0);
-    let mut matches = Vec::new();
-    for body_id in body_ids {
-      let Some(body) = lowered.body(body_id) else {
-        continue;
-      };
-      let Some(function) = body.function.as_ref() else {
-        continue;
-      };
-      for param in function.params.iter() {
-        record_matches(body_id, body, param.pat, target_span, &mut matches);
-      }
-    }
-
-    matches.sort_by_key(|(body_id, pat_id)| (body_id.0, pat_id.0));
-    let Some((body_id, pat_id)) = matches.first().copied() else {
-      return Ok(unknown);
-    };
-
-    let result = self.check_body(body_id)?;
-    Ok(result.pat_type(PatId(pat_id.0)).unwrap_or(unknown))
-  }
-
   pub(in super::super) fn type_of_def(&mut self, def: DefId) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let store = Arc::clone(&self.store);
@@ -107,13 +31,6 @@ impl ProgramState {
       }
     };
 
-    let is_param_def = self
-      .hir_lowered
-      .get(&def_data.file)
-      .and_then(|lowered| lowered.def(def))
-      .map(|hir_def| hir_def.path.kind == HirDefKind::Param)
-      .unwrap_or(false);
-
     let synthetic_value_def = matches!(def_data.kind, DefKind::Var(_))
       && self.value_defs.values().any(|value_def| *value_def == def);
 
@@ -128,20 +45,12 @@ impl ProgramState {
       } else {
         prim.unknown
       };
-      let is_self_ref = matches!(
-        store.type_kind(ty),
-        tti::TypeKind::Ref { def: ref_def, args }
-          if args.is_empty() && ref_def.0 == def.0
-      );
 
-      if matches!(store.type_kind(ty), tti::TypeKind::Unknown)
-        || skip_cache
-        || (is_param_def && is_self_ref)
-      {
+      if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache {
         self.interned_def_types.remove(&def);
       } else {
         if let DefKind::Function(func) = &def_data.kind {
-          if func.return_ann.is_none()
+          if !self.function_has_return_annotation(def, func)
             && func.body.is_some()
             && callable_return_is_unknown(&store, ty)
           {
@@ -243,11 +152,24 @@ impl ProgramState {
     self.current_file = Some(def_data.file);
 
     if self.type_stack.contains(&def) {
-      let ty = store.canon(store.intern_type(tti::TypeKind::Ref {
-        def: tti::DefId(def.0),
-        args: Vec::new(),
-      }));
-      self.interned_def_types.entry(def).or_insert(ty);
+      // Match tsc `reportCircularityError`: under `--noImplicitAny`, unannotated
+      // bindings referenced in their own initializer become `any` + TS7022.
+      // Report on the re-entered def and the waiter currently resolving (stack
+      // top) so mutual cycles (`#foo`/`#bar`) get both diagnostics.
+      self.report_circular_initializer_implicit_any(def);
+      if let Some(waiter) = self.type_stack.last().copied() {
+        if waiter != def {
+          self.report_circular_initializer_implicit_any(waiter);
+        }
+      }
+      // Return `any` to the re-entrant caller, but do NOT insert it into
+      // `interned_def_types`: for genuine self-cycles the outer completion
+      // computes and lands the same `any`, while for re-entrant lookups during
+      // an in-flight resolution (e.g. `import Alias = N.x` resolving `N.x`
+      // while `x`'s initializer is being checked) the insert would poison the
+      // completion's replace check and stick `any` on a def whose real type is
+      // about to land.
+      let ty = prim.any;
       if let Some(span) = span.take() {
         span.finish(Some(ty));
       }
@@ -266,9 +188,10 @@ impl ProgramState {
       let ty = match def_data.kind.clone() {
         DefKind::Function(func) => self.function_type(def, func)?,
         DefKind::Var(var) => {
-          if is_param_def {
-            return Ok(self.param_type_for_def(def, def_data.file)?);
-          }
+          // Body-local params/vars are LocalId-only (no DefKind::Param /
+          // body-local DefKind::Var). Their types live in body check side
+          // tables / `type_of_local` / `type_at`, not type_of_def.
+          // This arm covers module-level and namespace/module member vars.
 
           fn pat_for_span(state: &ProgramState, body_id: BodyId, span: TextRange) -> Option<PatId> {
             let meta = state.body_map.get(&body_id)?;
@@ -317,7 +240,11 @@ impl ProgramState {
           let mut init_span_for_const = None;
           let mut init_pat_is_root = true;
 
-          let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
+          // Prefer HIR `DefData.declared_type` (class fields) when the DefId is
+          // known; fall back to span-based AST/HIR lookup, then `VarData.typ`.
+          let declared_ann = self
+            .hir_declared_type_for_def(def)
+            .or_else(|| self.declared_type_for_span(def_data.file, def_data.span));
           let annotated_raw = declared_ann.or(var.typ);
           let annotated = match annotated_raw {
             Some(ty) => Some(self.resolve_value_ref_type(ty)?),
@@ -328,12 +255,17 @@ impl ProgramState {
           let mut inferred = if let Some(t) = annotated {
             t
           } else if let Some(init) = init {
-            if self.checking_bodies.contains(&init.body) {
+            if self
+              .checking_bodies
+              .lock()
+              .unwrap_or_else(|err| err.into_inner())
+              .contains(&init.body)
+            {
               skip_implicit_any = true;
               prim.unknown
             } else {
               if !self.snapshot_loaded {
-                self.body_results.remove(&init.body);
+                self.local_body_results.remove(&init.body);
               }
               let res = self.check_body(init.body)?;
               init_span_for_const = res.expr_span(init.expr);
@@ -392,7 +324,7 @@ impl ProgramState {
           if const_like && init_pat_is_root {
             if let Some(init_span) = init_span_for_const {
               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
-                if let Some(res) = self.body_results.get(&file_body).cloned() {
+                if let Some(res) = self.local_body_results.get(&file_body).cloned() {
                   let top_ty = res
                     .expr_spans()
                     .iter()
@@ -429,11 +361,26 @@ impl ProgramState {
           {
             // Like TypeScript with `--noImplicitAny`, flag unannotated bindings
             // that could not be inferred. Use `any` for recovery so later checks
-            // don't cascade.
-            self.push_program_diagnostic(codes::IMPLICIT_ANY.error(
-              codes::implicit_any_message(Some(&def_data.name)),
-              Span::new(def_data.file, def_data.span),
-            ));
+            // don't cascade. Class fields use TS7008 ("Member '…'"); other
+            // bindings keep our TC3000 placeholder until they gain stable tsc
+            // codes.
+            let is_class_field = self
+              .hir_lowered
+              .get(&def_data.file)
+              .and_then(|lowered| lowered.def(HirDefId(def.0)))
+              .is_some_and(|d| d.path.kind == HirDefKind::Field);
+            let (name_span, display_name) = self.binding_name_span_and_display(def, &def_data);
+            if is_class_field {
+              self.push_program_diagnostic(codes::MEMBER_IMPLICIT_ANY.error(
+                format!("Member '{display_name}' implicitly has an 'any' type."),
+                Span::new(def_data.file, name_span),
+              ));
+            } else {
+              self.push_program_diagnostic(codes::IMPLICIT_ANY.error(
+                codes::implicit_any_message(Some(&display_name)),
+                Span::new(def_data.file, name_span),
+              ));
+            }
             inferred = prim.any;
           }
 
@@ -650,4 +597,137 @@ impl ProgramState {
       }
     }
   }
+
+  /// TS7022 for unannotated defs whose type resolution re-entered via
+  /// `type_stack` (circular initializer). No-op when annotated or when
+  /// `--noImplicitAny` is off.
+  fn report_circular_initializer_implicit_any(&mut self, def: DefId) {
+    if !self.compiler_options.no_implicit_any {
+      return;
+    }
+    let Some(def_data) = self.def_data.get(&def).cloned() else {
+      return;
+    };
+    // Only value vars/fields participate in initializer circularity (class
+    // fields are lowered as `DefKind::Var`).
+    let DefKind::Var(var) = &def_data.kind else {
+      return;
+    };
+    if var.typ.is_some() {
+      return;
+    }
+    let has_hir_annotation = self
+      .hir_lowered
+      .get(&def_data.file)
+      .and_then(|lowered| lowered.def(HirDefId(def.0)))
+      .and_then(|hir_def| hir_def.declared_type)
+      .is_some();
+    if has_hir_annotation {
+      return;
+    }
+
+    let (name_span, display_name) = self.binding_name_span_and_display(def, &def_data);
+    self.push_program_diagnostic(codes::CIRCULAR_INITIALIZER_IMPLICIT_ANY.error(
+      format!(
+        "'{display_name}' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer."
+      ),
+      Span::new(def_data.file, name_span),
+    ));
+  }
+
+  /// Name span + display string for binding/member diagnostics (TS7008/TS7022).
+  ///
+  /// For computed class fields, tsc highlights the full `["key"]` ComputedPropertyName
+  /// (not our synthetic `<computed:…>` def name).
+  fn binding_name_span_and_display(&self, def: DefId, def_data: &DefData) -> (TextRange, String) {
+    let member_span = def_data.span;
+    let name = def_data.name.as_str();
+    let file_text = db::file_text(&self.typecheck_db, def_data.file);
+
+    if name.starts_with("<computed:") {
+      if let Some((span, display)) =
+        computed_member_name_span_and_display(file_text.as_ref(), member_span)
+      {
+        return (span, display);
+      }
+    }
+
+    // Prefer a precise name token within the member/declarator span.
+    if let Some(span) = find_exact_name_span(file_text.as_ref(), name, member_span) {
+      return (span, name.to_string());
+    }
+
+    let end = member_span
+      .start
+      .saturating_add(name.len() as u32)
+      .min(member_span.end);
+    if end > member_span.start {
+      return (TextRange::new(member_span.start, end), name.to_string());
+    }
+
+    // Fall back: keep HIR def id in scope for future refinements.
+    let _ = def;
+    (member_span, name.to_string())
+  }
+}
+
+fn computed_member_name_span_and_display(
+  source: &str,
+  member_span: TextRange,
+) -> Option<(TextRange, String)> {
+  let bytes = source.as_bytes();
+  let start = member_span.start as usize;
+  if start >= bytes.len() || bytes[start] != b'[' {
+    return None;
+  }
+  let end_limit = (member_span.end as usize).min(bytes.len());
+  let mut depth = 0i32;
+  let mut i = start;
+  while i < end_limit {
+    match bytes[i] {
+      b'[' => depth += 1,
+      b']' => {
+        depth -= 1;
+        if depth == 0 {
+          let end = i + 1;
+          let display = source[start..end].to_string();
+          return Some((TextRange::new(start as u32, end as u32), display));
+        }
+      }
+      b'\'' | b'"' | b'`' => {
+        let quote = bytes[i];
+        i += 1;
+        while i < end_limit {
+          if bytes[i] == b'\\' {
+            i = i.saturating_add(2);
+            continue;
+          }
+          if bytes[i] == quote {
+            break;
+          }
+          i += 1;
+        }
+      }
+      _ => {}
+    }
+    i += 1;
+  }
+  None
+}
+
+fn find_exact_name_span(source: &str, name: &str, range: TextRange) -> Option<TextRange> {
+  if name.is_empty() || name.starts_with('<') {
+    return None;
+  }
+  let bytes = source.as_bytes();
+  let start = (range.start as usize).min(bytes.len());
+  let end = (range.end as usize).min(bytes.len());
+  let slice = &source[start..end];
+  let pos = slice.find(name)?;
+  let abs_start = start + pos;
+  let abs_end = abs_start + name.len();
+  if abs_end > bytes.len() {
+    return None;
+  }
+  Some(TextRange::new(abs_start as u32, abs_end as u32))
 }

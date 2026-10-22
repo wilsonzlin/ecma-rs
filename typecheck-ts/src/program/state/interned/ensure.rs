@@ -61,6 +61,17 @@ impl ProgramState {
       }
       self.diagnostics.extend(decls.diagnostics.iter().cloned());
     }
+    // Lib `.d.ts` still ships `interface Array<T>` without an `out` annotation.
+    // tsc measures variance (method params are bivariant) and treats those
+    // containers as covariant. Unannotated same-def refs otherwise compare
+    // invariantly in `relate` (needed for generic classes), so apply the
+    // measured default here for the high-value lib containers.
+    for (def, params) in type_param_decls.iter_mut() {
+      let Some(name) = self.def_data.get(def).map(|d| d.name.as_str()) else {
+        continue;
+      };
+      apply_default_covariant_container_variance(name, params);
+    }
     let mut namespace_types: HashMap<(FileId, String), TypeId> = HashMap::new();
     let mut declared_type_cache: HashMap<(FileId, TextRange), Option<TypeId>> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
@@ -71,6 +82,15 @@ impl ProgramState {
         qualified_def_members.insert((parent, name.clone(), *ns), *def_id);
       }
     }
+    // JS expando property-assignment members (`var Outer = {}; Outer.X =
+    // class {…}`) register under the canonical outer var def; the outer var's
+    // type is augmented via `namespace_types` below.
+    self.register_js_expando_members(
+      &store,
+      &mut qualified_def_members,
+      &mut def_types,
+      &mut namespace_types,
+    )?;
     self.qualified_def_members = Arc::new(qualified_def_members);
     let mut hir_def_maps: HashMap<FileId, HashMap<HirDefId, DefId>> = HashMap::new();
     let hir_namespaces = |kind: HirDefKind| -> sem_ts::Namespace {
@@ -175,6 +195,16 @@ impl ProgramState {
       &hir_def_maps,
       &def_by_name,
     )?;
+    self.check_interface_extends(
+      host,
+      &store,
+      &def_types,
+      &type_params,
+      &type_param_decls,
+      &lowered_entries,
+      &hir_def_maps,
+      &def_by_name,
+    )?;
 
     // Populate declared types for ambient value declarations (notably `.d.ts`
     // `declare const ...: ...` bindings). These do not appear in HIR `type_info`
@@ -190,7 +220,10 @@ impl ProgramState {
       .collect();
     declared_value_defs.sort_by_key(|(def, file, span)| (file.0, span.start, span.end, def.0));
     for (def, file, span) in declared_value_defs.into_iter() {
-      if let Some(declared) = self.declared_type_for_span(file, span) {
+      if let Some(declared) = self
+        .hir_declared_type_for_def(def)
+        .or_else(|| self.declared_type_for_span(file, span))
+      {
         def_types
           .entry(def)
           .and_modify(|existing| {
@@ -408,7 +441,15 @@ impl ProgramState {
     let mut namespace_infos: Vec<NamespaceInfo> = namespace_infos
       .into_iter()
       .map(|mut info| {
-        let mut members = namespace_members.remove(&info.def).unwrap_or_default();
+        // Multiple namespace declarations can share one canonical def
+        // (cross-file and same-file declaration merging). Every participant
+        // must see the *combined* member list — consuming it for the first
+        // decl leaves the others with an empty object, and which one a body
+        // seeds from is file-order dependent. Clone instead.
+        let mut members = namespace_members
+          .get(&info.def)
+          .cloned()
+          .unwrap_or_default();
         members.sort_by(|a, b| {
           let ord = a.0.cmp(&b.0);
           if ord == std::cmp::Ordering::Equal {
@@ -436,8 +477,12 @@ impl ProgramState {
 
     let mut namespace_cache: HashMap<DefId, TypeId> = HashMap::new();
     for info in namespace_infos.iter() {
-      let mut props: BTreeMap<String, TypeId> = BTreeMap::new();
+      let mut props: BTreeMap<String, (TypeId, bool)> = BTreeMap::new();
       for (name, member_def, member_kind) in info.members.iter() {
+        // tsc: namespace members are writable unless declared `const`
+        // (`foo.v = …` is legal; `foo.c = …` is TS2540).
+        let readonly =
+          matches!(member_kind, HirDefKind::Var) && self.def_is_readonly_const(*member_def);
         let prop_ty = match member_kind {
           HirDefKind::Namespace | HirDefKind::Module => namespace_cache
             .get(member_def)
@@ -445,13 +490,32 @@ impl ProgramState {
             .or_else(|| namespace_types.get(&(info.file, name.clone())).copied())
             .unwrap_or(prim.any),
           HirDefKind::Var | HirDefKind::Function | HirDefKind::Class | HirDefKind::Enum => {
-            let member_declared_type = match self.def_data.get(member_def) {
-              Some(data) => {
-                let key = (data.file, data.span);
+            // Class/enum members contribute their *value* side (the
+            // constructor value stored under the synthetic value def), not
+            // the instance type stored under the class def — tsc makes
+            // `namespace N { export class C {} }` give `N.C` the constructor
+            // (`new N.C(0)`), same pattern as `merging/canonical.rs`.
+            let member_def = if matches!(member_kind, HirDefKind::Class | HirDefKind::Enum) {
+              self
+                .value_defs
+                .get(member_def)
+                .copied()
+                .unwrap_or(*member_def)
+            } else {
+              *member_def
+            };
+            let member_declared_type = match self
+              .def_data
+              .get(&member_def)
+              .map(|data| (data.file, data.span))
+            {
+              Some(key) => {
                 if let Some(cached) = declared_type_cache.get(&key).copied() {
                   cached
                 } else {
-                  let declared = self.declared_type_for_span(data.file, data.span);
+                  let declared = self
+                    .hir_declared_type_for_def(member_def)
+                    .or_else(|| self.declared_type_for_span(key.0, key.1));
                   declared_type_cache.insert(key, declared);
                   declared
                 }
@@ -459,18 +523,18 @@ impl ProgramState {
               None => None,
             };
             let mut ty = member_declared_type
-              .or_else(|| def_types.get(member_def).copied())
+              .or_else(|| def_types.get(&member_def).copied())
               .unwrap_or(prim.unknown);
             ty = store.canon(ty);
             if matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
-              ty = store.canon(self.type_of_def(*member_def)?);
+              ty = store.canon(self.type_of_def(member_def)?);
             }
             if matches!(member_kind, HirDefKind::Class | HirDefKind::Enum)
               && matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown)
             {
               ty = prim.any;
             }
-            def_types.insert(*member_def, ty);
+            def_types.insert(member_def, ty);
             ty
           }
           _ => continue,
@@ -478,20 +542,21 @@ impl ProgramState {
         props
           .entry(name.clone())
           .and_modify(|existing| {
-            *existing = ProgramState::merge_interned_decl_types(&store, *existing, prop_ty);
+            existing.0 = ProgramState::merge_interned_decl_types(&store, existing.0, prop_ty);
+            existing.1 = existing.1 || readonly;
           })
-          .or_insert(prop_ty);
+          .or_insert((prop_ty, readonly));
       }
 
       let mut shape = tti::Shape::new();
-      for (name, prop_ty) in props.into_iter() {
+      for (name, (prop_ty, readonly)) in props.into_iter() {
         let key = PropKey::String(store.intern_name(name.clone()));
         shape.properties.push(Property {
           key,
           data: PropData {
             ty: prop_ty,
             optional: false,
-            readonly: true,
+            readonly,
             accessibility: None,
             is_method: false,
             origin: None,
@@ -648,7 +713,11 @@ impl ProgramState {
             data: PropData {
               ty,
               optional: false,
-              readonly: true,
+              // tsc: namespace members are writable unless declared `const`
+              // (`foo.v = …` / `foo.f = …` are legal; `foo.c = …` is TS2540).
+              readonly: best_def
+                .map(|(_, def)| self.def_is_readonly_const(def))
+                .unwrap_or_default(),
               accessibility: None,
               is_method: false,
               origin: None,
@@ -684,7 +753,10 @@ impl ProgramState {
             data: PropData {
               ty,
               optional: false,
-              readonly: true,
+              readonly: entry
+                .def
+                .map(|def| self.def_is_readonly_const(def))
+                .unwrap_or_default(),
               accessibility: None,
               is_method: false,
               origin: None,
@@ -796,10 +868,22 @@ impl ProgramState {
         if defs.len() <= 1 {
           continue;
         }
+        // tsc requires merged generic interfaces to declare identical type
+        // parameters (TS2428), so positional unification is safe: substitute
+        // later declarations' params onto the first declaration's ids,
+        // otherwise the merged overload set keeps a second, free `T`
+        // (`twoMergedInterfacesWithDifferingOverloads`).
+        let canonical_params: Vec<TypeParamId> =
+          type_params.get(&defs[0]).cloned().unwrap_or_default();
         let mut merged: Option<tti::TypeId> = None;
-        for def in defs.iter().copied() {
+        for (idx, def) in defs.iter().copied().enumerate() {
           let Some(incoming) = def_types.get(&def).copied() else {
             continue;
+          };
+          let incoming = if idx == 0 {
+            incoming
+          } else {
+            unify_interface_type_params(&store, incoming, type_params.get(&def), &canonical_params)
           };
           merged = Some(match merged {
             Some(existing) => ProgramState::merge_interned_decl_types(&store, existing, incoming),
@@ -811,9 +895,109 @@ impl ProgramState {
         };
         for def in defs.iter().copied() {
           def_types.insert(def, merged);
+          if !canonical_params.is_empty() {
+            type_params.insert(def, canonical_params.clone());
+          }
         }
       }
     }
+
+    // Namespace-nested interfaces merge across declarations too (cross-file
+    // lib augmentation: `Intl.PluralRulesConstructor` is declared in both
+    // `lib.es2018.intl` and `lib.es2020.intl`; tsc merges them into one
+    // overload set). Nested defs carry no semantic symbols (the binder only
+    // collects top-level/global decls), so group by (canonical namespace def,
+    // name) and fold like the top-level pass above. Iterate `def_data` (not
+    // `def_by_name`, which is one slot per key) so same-file duplicate
+    // declarations are seen too.
+    {
+      let mut parent_of: HashMap<DefId, DefId> = HashMap::new();
+      for (_file, lowered) in self.hir_lowered.iter() {
+        for def in lowered.defs.iter() {
+          if let Some(parent) = def.parent {
+            parent_of.insert(def.id, parent);
+          }
+        }
+      }
+      let mut nested_groups: BTreeMap<(DefId, String), Vec<DefId>> = BTreeMap::new();
+      for (def_id, data) in self.def_data.iter() {
+        if !matches!(data.kind, DefKind::Interface(_)) {
+          continue;
+        }
+        let Some(raw_parent) = parent_of.get(def_id).copied() else {
+          continue;
+        };
+        let Some(parent_data) = self.def_data.get(&raw_parent) else {
+          continue;
+        };
+        if !matches!(parent_data.kind, DefKind::Namespace(_) | DefKind::Module(_)) {
+          continue;
+        }
+        let canonical_parent = def_by_name
+          .get(&(
+            data.file,
+            None,
+            parent_data.name.clone(),
+            sem_ts::Namespace::NAMESPACE,
+          ))
+          .copied()
+          .unwrap_or(raw_parent);
+        nested_groups
+          .entry((canonical_parent, data.name.clone()))
+          .or_default()
+          .push(*def_id);
+      }
+      for defs in nested_groups.values_mut() {
+        defs.sort_by_key(|def| {
+          self
+            .def_data
+            .get(def)
+            .map(|data| (data.file.0, data.span.start, data.span.end, def.0))
+            .unwrap_or((u32::MAX, u32::MAX, u32::MAX, def.0))
+        });
+        defs.dedup();
+      }
+      for defs in nested_groups.values() {
+        if defs.len() <= 1 {
+          continue;
+        }
+        let canonical_params: Vec<TypeParamId> =
+          type_params.get(&defs[0]).cloned().unwrap_or_default();
+        let mut merged: Option<tti::TypeId> = None;
+        for (idx, def) in defs.iter().copied().enumerate() {
+          let Some(incoming) = def_types.get(&def).copied() else {
+            continue;
+          };
+          let incoming = if idx == 0 {
+            incoming
+          } else {
+            unify_interface_type_params(&store, incoming, type_params.get(&def), &canonical_params)
+          };
+          merged = Some(match merged {
+            Some(existing) => ProgramState::merge_interned_decl_types(&store, existing, incoming),
+            None => incoming,
+          });
+        }
+        let Some(merged) = merged else {
+          continue;
+        };
+        for def in defs.iter().copied() {
+          def_types.insert(def, merged);
+          if !canonical_params.is_empty() {
+            type_params.insert(def, canonical_params.clone());
+          }
+        }
+      }
+    }
+
+    // Class+interface merge parks interface `new (): T` on the instance TYPE
+    // (tsc). Sync VALUE constructor returns onto that merged instance so
+    // `const y = new C(); new y()` sees the construct signatures.
+    ProgramState::sync_class_value_ctor_returns_to_instance_type(
+      &store,
+      &self.value_defs,
+      &mut def_types,
+    );
 
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
@@ -824,8 +1008,86 @@ impl ProgramState {
     self.refresh_import_def_types()?;
     self.rebuild_interned_named_def_types();
     self.recompute_global_bindings();
+    // After class shapes exist, replace unknown accessor properties with
+    // inferred getter return / setter param types (avoids TC3000 on `this.g`).
+    self.refine_class_accessor_property_types()?;
+    // Infer unannotated method returns (`getInstance() { return new C() }` → `C`)
+    // so private access on the result can emit TS18013.
+    self.refine_class_method_property_types()?;
+    // Infer unannotated static fields from static-block / initializer
+    // assignments (`static x;` + `static { this.x = 1 }` → `number`). Runs
+    // before the instance-field refine: that pass calls `type_of_def` on every
+    // field, which would otherwise cache the still-unknown field type (and
+    // emit TS7008) before this synthesis registers the assignment-based one.
+    self.refine_class_static_field_types_from_assignments()?;
+    // Infer unannotated field initializers (`three = 3` → `number`, numeric
+    // keys included) so reads through the declared instance type are precise.
+    self.refine_class_field_property_types()?;
     codes::normalize_diagnostics(&mut self.diagnostics);
     self.decl_types_fingerprint = Some(fingerprint);
     Ok(())
+  }
+}
+
+/// Mark the primary type parameter of known covariant lib containers as `out`
+/// when the source declaration left variance unannotated.
+fn apply_default_covariant_container_variance(name: &str, params: &mut Arc<[tti::TypeParamDecl]>) {
+  const COVARIANT_CONTAINERS: &[&str] = &[
+    "Array",
+    "ReadonlyArray",
+    "ArrayLike",
+    "Promise",
+    "PromiseLike",
+    "Iterable",
+    "Iterator",
+    "AsyncIterable",
+    "AsyncIterator",
+  ];
+  if !COVARIANT_CONTAINERS.contains(&name) {
+    return;
+  }
+  let Some(first) = params.first() else {
+    return;
+  };
+  if first.variance.is_some() {
+    return;
+  }
+  let mut owned = params.to_vec();
+  owned[0].variance = Some(tti::TypeParamVariance::Out);
+  *params = Arc::from(owned.into_boxed_slice());
+}
+
+/// Positional type-param unification for merged generic interfaces (tsc
+/// TS2428 requires identical type-parameter lists across declarations).
+fn unify_interface_type_params(
+  store: &Arc<tti::TypeStore>,
+  ty: tti::TypeId,
+  from: Option<&Vec<TypeParamId>>,
+  to: &[TypeParamId],
+) -> tti::TypeId {
+  let Some(from) = from else {
+    return ty;
+  };
+  if from.as_slice() == to {
+    return ty;
+  }
+  let subst: HashMap<TypeParamId, tti::TypeId> = from
+    .iter()
+    .zip(to.iter())
+    .map(|(f, t)| (*f, store.intern_type(tti::TypeKind::TypeParam(*t))))
+    .collect();
+  let mut substituter = crate::check::instantiate::Substituter::new(Arc::clone(store), subst);
+  substituter.substitute_type(ty)
+}
+
+impl ProgramState {
+  /// Whether a namespace member def is a `const` binding (tsc: only those are
+  /// read-only through the namespace object; `var`/`let`/functions are
+  /// writable — `foo.v = …` is legal).
+  pub(crate) fn def_is_readonly_const(&self, def: DefId) -> bool {
+    matches!(
+      self.def_data.get(&def).map(|data| &data.kind),
+      Some(DefKind::Var(var)) if matches!(var.mode, VarDeclMode::Const)
+    )
   }
 }

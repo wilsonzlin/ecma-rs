@@ -1,6 +1,8 @@
 use super::*;
 
 impl ProgramState {
+  // Used by snapshot loading (`program/snapshot.rs`, `serde` feature).
+  #[cfg_attr(not(feature = "serde"), allow(dead_code))]
   pub(in super::super) fn find_namespace_def(&self, file: FileId, name: &str) -> Option<DefId> {
     self
       .def_data

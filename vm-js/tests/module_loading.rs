@@ -47,8 +47,10 @@ fn module_requests_equal_checks_specifier_and_attributes() {
   assert!(!module_requests_equal(&left, &different_attrs));
 
   // Different attribute count => not equal.
-  let extra_attr =
-    ModuleRequest::new("./foo.mjs", vec![a_type_json, ImportAttribute::new("mode", "strict")]);
+  let extra_attr = ModuleRequest::new(
+    "./foo.mjs",
+    vec![a_type_json, ImportAttribute::new("mode", "strict")],
+  );
   assert!(!module_requests_equal(&left, &extra_attr));
 }
 

@@ -10,7 +10,7 @@ fn decl_type_diagnostics_are_reported() {
   assert!(
     diagnostics
       .iter()
-      .any(|diag| diag.code.as_str() == "TC0005"),
-    "expected unknown identifier diagnostic from decl type lowering"
+      .any(|diag| diag.code.as_str() == "TC2008"),
+    "expected unresolved type reference (TC2008) from decl type lowering, got {diagnostics:?}"
   );
 }

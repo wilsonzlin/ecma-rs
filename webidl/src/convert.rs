@@ -1,6 +1,6 @@
 use crate::{
-  index_to_property_key, AsyncSequence, AsyncSequenceKind, IdlType, IdlValue, JsRuntime, PropertyKey,
-  UnionValue, WebIdlError, WebIdlLimit, WellKnownSymbol,
+  index_to_property_key, AsyncSequence, AsyncSequenceKind, IdlType, IdlValue, JsRuntime,
+  PropertyKey, UnionValue, WebIdlError, WebIdlLimit, WellKnownSymbol,
 };
 
 /// Cached `@@iterator` method used to avoid re-invoking side-effectful getters during union/overload
@@ -45,9 +45,13 @@ pub(crate) fn convert_js_to_idl_with_hints<R: JsRuntime>(
         Err(type_error(cx, "expected undefined"))
       }
     }
-    IdlType::Boolean => Ok(IdlValue::Boolean(cx.to_boolean(v).map_err(WebIdlError::js)?)),
+    IdlType::Boolean => Ok(IdlValue::Boolean(
+      cx.to_boolean(v).map_err(WebIdlError::js)?,
+    )),
     IdlType::Double => Ok(IdlValue::Double(cx.to_number(v).map_err(WebIdlError::js)?)),
-    IdlType::DomString => Ok(IdlValue::DomString(cx.to_string(v).map_err(WebIdlError::js)?)),
+    IdlType::DomString => Ok(IdlValue::DomString(
+      cx.to_string(v).map_err(WebIdlError::js)?,
+    )),
     IdlType::Object => {
       if cx.is_object(v) {
         Ok(IdlValue::Object(v))
@@ -208,10 +212,7 @@ fn create_sequence_from_iterable<R: JsRuntime>(
     .map_err(WebIdlError::js)?;
 
   let mut out = Vec::new();
-  while let Some(step_value) = cx
-    .iterator_step_value(iterator)
-    .map_err(WebIdlError::js)?
-  {
+  while let Some(step_value) = cx.iterator_step_value(iterator).map_err(WebIdlError::js)? {
     if out.len() >= cx.limits().max_sequence_length {
       return Err(WebIdlError::limit_exceeded(
         WebIdlLimit::MaxSequenceLength,
@@ -293,10 +294,13 @@ fn convert_js_to_union<R: JsRuntime>(
     // ---- async_sequence special-case ----
     let types_include_string = types.iter().any(|t| t.contains_string_type());
 
-    if let Some(async_seq_ty) = types
-      .iter()
-      .find_map(|t| if matches!(t, IdlType::AsyncSequence(_)) { Some(*t) } else { None })
-    {
+    if let Some(async_seq_ty) = types.iter().find_map(|t| {
+      if matches!(t, IdlType::AsyncSequence(_)) {
+        Some(*t)
+      } else {
+        None
+      }
+    }) {
       // Distinguishability requirement (d): when a string type is also present, a string object is
       // never converted to async_sequence, even though it might have @@iterator.
       if !types_include_string || !cx.is_string_object(v) {
@@ -345,10 +349,13 @@ fn convert_js_to_union<R: JsRuntime>(
     }
 
     // ---- sequence<T> ----
-    if let Some(seq_ty) = types
-      .iter()
-      .find_map(|t| if let IdlType::Sequence(_) = t { Some(*t) } else { None })
-    {
+    if let Some(seq_ty) = types.iter().find_map(|t| {
+      if let IdlType::Sequence(_) = t {
+        Some(*t)
+      } else {
+        None
+      }
+    }) {
       let obj = cx.as_object(v).unwrap();
       let iter_sym = cx
         .well_known_symbol(WellKnownSymbol::Iterator)
@@ -357,7 +364,8 @@ fn convert_js_to_union<R: JsRuntime>(
         .get_method(obj, PropertyKey::Symbol(iter_sym))
         .map_err(WebIdlError::js)?
       {
-        let value = convert_js_to_idl_with_hints(cx, seq_ty, v, Some(IteratorHint { method }), None)?;
+        let value =
+          convert_js_to_idl_with_hints(cx, seq_ty, v, Some(IteratorHint { method }), None)?;
         return Ok(IdlValue::Union(UnionValue {
           selected_type: seq_ty.clone(),
           value: Box::new(value),
@@ -366,10 +374,13 @@ fn convert_js_to_union<R: JsRuntime>(
     }
 
     // ---- FrozenArray<T> ----
-    if let Some(fa_ty) = types
-      .iter()
-      .find_map(|t| if let IdlType::FrozenArray(_) = t { Some(*t) } else { None })
-    {
+    if let Some(fa_ty) = types.iter().find_map(|t| {
+      if let IdlType::FrozenArray(_) = t {
+        Some(*t)
+      } else {
+        None
+      }
+    }) {
       let obj = cx.as_object(v).unwrap();
       let iter_sym = cx
         .well_known_symbol(WellKnownSymbol::Iterator)
@@ -378,7 +389,8 @@ fn convert_js_to_union<R: JsRuntime>(
         .get_method(obj, PropertyKey::Symbol(iter_sym))
         .map_err(WebIdlError::js)?
       {
-        let value = convert_js_to_idl_with_hints(cx, fa_ty, v, Some(IteratorHint { method }), None)?;
+        let value =
+          convert_js_to_idl_with_hints(cx, fa_ty, v, Some(IteratorHint { method }), None)?;
         return Ok(IdlValue::Union(UnionValue {
           selected_type: fa_ty.clone(),
           value: Box::new(value),
@@ -388,7 +400,10 @@ fn convert_js_to_union<R: JsRuntime>(
   }
 
   // ---- string fallback ----
-  if let Some(string_ty) = types.iter().find_map(|t| if t.is_string_type() { Some(*t) } else { None }) {
+  if let Some(string_ty) = types
+    .iter()
+    .find_map(|t| if t.is_string_type() { Some(*t) } else { None })
+  {
     let value = convert_js_to_idl(cx, string_ty, v)?;
     return Ok(IdlValue::Union(UnionValue {
       selected_type: string_ty.clone(),

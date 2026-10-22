@@ -244,7 +244,9 @@ impl Heap {
       Value::Number(n) => scope.alloc_string(&number_to_string(n)),
       Value::BigInt(n) => scope.alloc_string(&n.to_decimal_string()),
       Value::String(s) => Ok(s),
-      Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
+      Value::Symbol(_) => Err(VmError::TypeError(
+        "Cannot convert a Symbol value to a string",
+      )),
       Value::Object(_) => Err(VmError::Unimplemented(
         "ToString on objects requires ToPrimitive/built-ins",
       )),

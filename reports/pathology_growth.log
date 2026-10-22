@@ -1,0 +1,35 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling typecheck-ts v0.1.0 (/root/r/ecma-rs/typecheck-ts)
+    Finished `release` profile [optimized] target(s) in 1m 07s
+     Running tests/pathology_diag.rs (target/release/deps/pathology_diag-69935897dda02e33)
+
+running 1 test
+
+thread 'diag_growth' (1405257) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/registry.rs:171:10:
+The global thread pool has not been initialized.: ThreadPoolBuildError { kind: IOError(Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+caught panic in catch_fatal
+CASE mini10.ts: elapsed=841.791909ms diags=1
+
+thread 'diag_growth' (1405257) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/registry.rs:171:10:
+The global thread pool has not been initialized.: ThreadPoolBuildError { kind: GlobalPoolAlreadyInitialized }
+caught panic in catch_fatal
+CASE mini20.ts: elapsed=833.439865ms diags=1
+
+thread 'diag_growth' (1405257) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/registry.rs:171:10:
+The global thread pool has not been initialized.: ThreadPoolBuildError { kind: GlobalPoolAlreadyInitialized }
+caught panic in catch_fatal
+CASE mini30.ts: elapsed=811.029479ms diags=1
+
+thread 'diag_growth' (1405257) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/registry.rs:171:10:
+The global thread pool has not been initialized.: ThreadPoolBuildError { kind: GlobalPoolAlreadyInitialized }
+caught panic in catch_fatal
+CASE mini40.ts: elapsed=824.257105ms diags=1
+test diag_growth ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.37s
+

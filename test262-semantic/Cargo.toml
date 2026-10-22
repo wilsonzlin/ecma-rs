@@ -18,7 +18,9 @@ clap = { workspace = true, features = ["derive"] }
 conformance-harness = { workspace = true }
 diagnostics = { workspace = true }
 globset = { workspace = true }
+parse-js = { workspace = true }
 regex = { workspace = true }
+semantic-js = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

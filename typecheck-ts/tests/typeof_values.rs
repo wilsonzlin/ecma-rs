@@ -97,14 +97,18 @@ const a = e.A;
       )
     });
   match program.interned_type_kind(enum_member_ty) {
-    TypeKind::Number | TypeKind::NumberLiteral(_) => {}
-    other => panic!("expected enum member to be number, got {:?}", other),
+    // Enum member access is typed as the enum (tsc); widen on `let` binding.
+    TypeKind::Ref { .. } | TypeKind::Number | TypeKind::NumberLiteral(_) => {}
+    other => panic!(
+      "expected enum member to be enum ref or number, got {:?}",
+      other
+    ),
   }
 
   let a_def = def_by_name(&mut program, FileKey::new("main.ts"), "a");
   let ty = program.type_of_def_interned(a_def);
   match program.interned_type_kind(ty) {
-    TypeKind::Number | TypeKind::NumberLiteral(_) => {}
+    TypeKind::Ref { .. } | TypeKind::Number | TypeKind::NumberLiteral(_) => {}
     other => panic!("expected numeric enum value, got {:?}", other),
   }
 }

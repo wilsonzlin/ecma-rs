@@ -178,7 +178,14 @@ pub(super) fn match_kind_from_def(kind: &DefKind) -> DefMatchKind {
 
 pub(super) fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
   match kind {
-    HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => DefMatchKind::Function,
+    // Getters/setters are function-bodied members (return/param annotations +
+    // body inference). Mapping them to `Other` produced bare `Var`s and spurious
+    // TC3000 under `--noImplicitAny` on `get g()` / `set g(v)` themselves.
+    HirDefKind::Function
+    | HirDefKind::Method
+    | HirDefKind::Constructor
+    | HirDefKind::Getter
+    | HirDefKind::Setter => DefMatchKind::Function,
     HirDefKind::ImportBinding => DefMatchKind::Import,
     HirDefKind::Class => DefMatchKind::Class,
     HirDefKind::Enum => DefMatchKind::Enum,

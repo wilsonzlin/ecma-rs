@@ -320,24 +320,31 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
   host.insert(file.clone(), Arc::from(source.to_string()));
 
   let lowered = hir_js::lower_from_source(source).expect("lower");
-  let mut value_spans: Vec<_> = lowered
+  // Module-level `value` keeps a DefId; the shadowed body-local is LocalId-only.
+  let value_defs: Vec<_> = lowered
     .defs
     .iter()
     .filter(|d| {
-      lowered
-        .names
-        .resolve(d.name)
-        .map(|n| n == "value")
-        .unwrap_or(false)
+      d.path.kind == hir_js::DefKind::Var
+        && lowered
+          .names
+          .resolve(d.name)
+          .map(|n| n == "value")
+          .unwrap_or(false)
     })
-    .map(|d| d.span)
     .collect();
-  value_spans.sort_by_key(|s| (s.start, s.end));
-  value_spans.dedup();
   assert_eq!(
-    value_spans.len(),
-    2,
-    "lowering should produce one outer and one inner value definition"
+    value_defs.len(),
+    1,
+    "lowering should produce one module-level value DefId"
+  );
+  assert!(
+    lowered.bodies.iter().any(|body| {
+      body
+        .locals_with_kind(hir_js::LocalKind::Var)
+        .any(|(_, local)| lowered.names.resolve(local.name) == Some("value"))
+    }),
+    "inner shadowed value should be a LocalId"
   );
 
   // Ensure the local semantics consider the inner arrow to reference the innermost

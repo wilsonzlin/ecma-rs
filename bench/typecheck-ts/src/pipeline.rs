@@ -118,6 +118,10 @@ pub struct IncrementalTimings {
   pub edit: Duration,
   pub full_summary: TypecheckSummary,
   pub edit_summary: TypecheckSummary,
+  /// Actual salsa `check_body` executions during the cold full check.
+  pub full_body_checks: usize,
+  /// Actual salsa `check_body` executions during the edit re-check (delta).
+  pub edit_body_checks: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -400,60 +404,165 @@ fn find_body_named(
     .unwrap_or_else(|| panic!("missing body for {name} in {fixture_name}"))
 }
 
+/// Full check, then a live-Program edit via [`Program::set_file_text`], then re-check.
+///
+/// Both passes share one `Program` so salsa memoization is observable: edit
+/// `body_check_count` deltas should be strictly smaller than the cold full check
+/// for body-local edits.
 pub fn incremental_recheck(
   graph: &ModuleGraphFixture,
   edit: &IncrementalEdit,
 ) -> IncrementalTimings {
   let entries = entries_from_graph(graph);
-  let roots = vec![graph.files[0].name.to_string()];
-  let manager = Arc::new(LibManager::new());
+  let host = BenchHost::new(entries);
+  let edit_key = host
+    .key_for(edit.file)
+    .unwrap_or_else(|| panic!("edit target {} not found in module graph", edit.file));
+  // Register every graph file as a root so edit targets are always loaded
+  // even before import edges are walked; resolve still wires the imports.
+  let roots: Vec<FileKey> = graph
+    .files
+    .iter()
+    .filter_map(|file| host.key_for(file.name))
+    .collect();
+  assert!(
+    !roots.is_empty(),
+    "module graph {} must have at least one root",
+    graph.name
+  );
 
-  let (full_summary, full_duration) =
-    timed_typecheck(entries.clone(), roots.clone(), Arc::clone(&manager));
+  let mut program = Program::new(host, roots);
 
-  let mut edited_entries = entries;
-  apply_edit(&mut edited_entries, edit);
+  let full_started = Instant::now();
+  let full_diagnostics = program.check();
+  let full_duration = full_started.elapsed();
+  let full_body_checks = program.body_check_count();
+  let full_stats = program.query_stats();
+  let full_summary = typecheck_summary_from_program(&program, full_diagnostics.len(), full_stats);
 
-  let (edit_summary, edit_duration) = timed_typecheck(edited_entries, roots, manager);
+  let edit_file = program
+    .file_id(&edit_key)
+    .unwrap_or_else(|| panic!("missing file id for {}", edit.file));
+  let original = program
+    .file_text(edit_file)
+    .unwrap_or_else(|| panic!("missing text for {}", edit.file));
+  let edited = apply_edit_to_text(original.as_ref(), edit);
+
+  let before_edit_checks = program.body_check_count();
+  let stats_before_edit = program.query_stats();
+  program.set_file_text(edit_file, edited);
+
+  let edit_started = Instant::now();
+  let edit_diagnostics = program.check();
+  let edit_duration = edit_started.elapsed();
+  let edit_body_checks = program.body_check_count() - before_edit_checks;
+  let edit_stats = query_stats_delta(&stats_before_edit, &program.query_stats());
+  let edit_summary = typecheck_summary_from_program(&program, edit_diagnostics.len(), edit_stats);
 
   IncrementalTimings {
     full: full_duration,
     edit: edit_duration,
     full_summary,
     edit_summary,
+    full_body_checks,
+    edit_body_checks,
   }
 }
 
-fn timed_typecheck(
-  entries: Vec<(String, Arc<str>)>,
-  roots: Vec<String>,
-  lib_manager: Arc<LibManager>,
-) -> (TypecheckSummary, Duration) {
-  let started = Instant::now();
-  let host = BenchHost::new(entries);
-  let root_keys: Vec<FileKey> = roots
-    .into_iter()
-    .filter_map(|name| host.key_for(&name))
-    .collect();
-  let summary = run_typecheck_with_manager(host, root_keys, Some(lib_manager));
-  (summary, started.elapsed())
+fn apply_edit_to_text(content: &str, edit: &IncrementalEdit) -> Arc<str> {
+  let replaced = content.replacen(edit.from, edit.to, 1);
+  assert!(
+    replaced != content,
+    "edit text '{}' not found in {}",
+    edit.from,
+    edit.file
+  );
+  Arc::from(replaced)
 }
 
-fn apply_edit(entries: &mut Vec<(String, Arc<str>)>, edit: &IncrementalEdit) {
-  for (name, content) in entries.iter_mut() {
-    if name == edit.file {
-      let replaced = content.replacen(edit.from, edit.to, 1);
-      assert!(
-        replaced != content.as_ref(),
-        "edit text '{}' not found in {}",
-        edit.from,
-        edit.file
-      );
-      *content = Arc::from(replaced);
-      return;
+fn query_stats_delta(before: &QueryStats, after: &QueryStats) -> QueryStats {
+  use typecheck_ts::{CacheKind, CacheStat, QueryKind, QueryStat};
+
+  let mut queries = std::collections::BTreeMap::new();
+  for kind in QueryKind::ALL {
+    let a = after.queries.get(&kind).cloned().unwrap_or_default();
+    let b = before.queries.get(&kind).cloned().unwrap_or_default();
+    let total = a.total.saturating_sub(b.total);
+    let cache_hits = a.cache_hits.saturating_sub(b.cache_hits);
+    let cache_misses = a.cache_misses.saturating_sub(b.cache_misses);
+    let total_time_ms = (a.total_time_ms - b.total_time_ms).max(0.0);
+    if total == 0 && cache_hits == 0 && cache_misses == 0 && total_time_ms == 0.0 {
+      continue;
+    }
+    queries.insert(
+      kind,
+      QueryStat {
+        total,
+        cache_hits,
+        cache_misses,
+        total_time_ms,
+        hit_rate: if total == 0 {
+          0.0
+        } else {
+          cache_hits as f64 / total as f64
+        },
+      },
+    );
+  }
+
+  let mut caches = std::collections::BTreeMap::new();
+  for kind in CacheKind::ALL {
+    let a = after.caches.get(&kind).cloned().unwrap_or_default();
+    let b = before.caches.get(&kind).cloned().unwrap_or_default();
+    let hits = a.hits.saturating_sub(b.hits);
+    let misses = a.misses.saturating_sub(b.misses);
+    let insertions = a.insertions.saturating_sub(b.insertions);
+    let evictions = a.evictions.saturating_sub(b.evictions);
+    if hits == 0 && misses == 0 && insertions == 0 && evictions == 0 {
+      continue;
+    }
+    let lookups = hits + misses;
+    caches.insert(
+      kind,
+      CacheStat {
+        hits,
+        misses,
+        insertions,
+        evictions,
+        hit_rate: if lookups == 0 {
+          0.0
+        } else {
+          hits as f64 / lookups as f64
+        },
+      },
+    );
+  }
+
+  QueryStats { queries, caches }
+}
+
+fn typecheck_summary_from_program(
+  program: &Program,
+  diagnostics: usize,
+  stats: QueryStats,
+) -> TypecheckSummary {
+  let mut bodies = 0;
+  for file in program.files() {
+    if program.file_body(file).is_some() {
+      bodies += 1;
+    }
+    for def in program.definitions_in_file(file) {
+      if program.body_of_def(def).is_some() {
+        bodies += 1;
+      }
     }
   }
-  panic!("edit target {} not found in module graph", edit.file);
+
+  TypecheckSummary {
+    diagnostics,
+    bodies,
+    stats,
+  }
 }
 
 fn entries_from_graph(graph: &ModuleGraphFixture) -> Vec<(String, Arc<str>)> {
@@ -724,24 +833,7 @@ fn run_typecheck_with_manager(
   };
   let diagnostics = program.check();
   let stats = program.query_stats();
-
-  let mut bodies = 0;
-  for file in program.files() {
-    if program.file_body(file).is_some() {
-      bodies += 1;
-    }
-    for def in program.definitions_in_file(file) {
-      if program.body_of_def(def).is_some() {
-        bodies += 1;
-      }
-    }
-  }
-
-  TypecheckSummary {
-    diagnostics: diagnostics.len(),
-    bodies,
-    stats,
-  }
+  typecheck_summary_from_program(&program, diagnostics.len(), stats)
 }
 
 #[derive(Clone)]
@@ -919,9 +1011,88 @@ fn push_candidates(path: &Path, candidates: &mut Vec<String>) {
 
 fn normalize(path: &Path) -> String {
   let raw = path.to_string_lossy();
-  if raw.contains('\\') {
+  let unified = if raw.contains('\\') {
     raw.replace('\\', "/")
   } else {
     raw.into_owned()
+  };
+  // Collapse `.` / `..` and drop a leading `./` so resolve candidates like
+  // `src/api/../types.ts` match interned keys such as `src/types.ts`.
+  let mut parts: Vec<&str> = Vec::new();
+  for part in unified.split('/') {
+    if part.is_empty() || part == "." {
+      continue;
+    }
+    if part == ".." {
+      let _ = parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  parts.join("/")
+}
+
+#[cfg(test)]
+mod incremental_tests {
+  use super::*;
+  use crate::fixtures::module_graph_fixtures;
+
+  #[test]
+  fn body_local_edit_rechecks_fewer_bodies_than_full() {
+    let project = module_graph_fixtures()
+      .iter()
+      .find(|g| g.name == "small_project")
+      .expect("small_project fixture");
+    // Same-length body-only edit: keep declaration types *and* def spans
+    // identical so BodyCheckContext backdates and only project_text.ts
+    // bodies re-execute (a longer edit would shift later def spans and
+    // defeat context equality).
+    let edit = IncrementalEdit {
+      file: "project_text.ts",
+      from: "let i = 0",
+      to: "let i = 1",
+    };
+    let timings = incremental_recheck(project, &edit);
+    assert!(
+      timings.full_body_checks > 0,
+      "full check must execute body checks"
+    );
+    assert!(
+      timings.edit_body_checks < timings.full_body_checks,
+      "live Program edit should re-check fewer bodies than cold full \
+       (full={}, edit={})",
+      timings.full_body_checks,
+      timings.edit_body_checks
+    );
+    eprintln!(
+      "incremental_recheck small_project: full={:?} ({} body checks), \
+       edit={:?} ({} body checks)",
+      timings.full, timings.full_body_checks, timings.edit, timings.edit_body_checks
+    );
+  }
+
+  #[test]
+  fn nested_module_edit_uses_live_program() {
+    let project = module_graph_fixtures()
+      .iter()
+      .find(|g| g.name == "real_world/mini_project")
+      .expect("real_world/mini_project fixture");
+    let edit = IncrementalEdit {
+      file: "real_world/mini_project/src/types.ts",
+      from: "completed: boolean;",
+      to: "completed: boolean | null;",
+    };
+    let timings = incremental_recheck(project, &edit);
+    assert!(
+      timings.full_body_checks > 0,
+      "full check must execute body checks"
+    );
+    // Decl-type edits currently re-check broadly; the contract here is that
+    // the edit runs on the same Program (set_file_text path) without panic.
+    eprintln!(
+      "incremental_recheck mini_project: full={:?} ({} body checks), \
+       edit={:?} ({} body checks)",
+      timings.full, timings.full_body_checks, timings.edit, timings.edit_body_checks
+    );
   }
 }

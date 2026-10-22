@@ -7,7 +7,7 @@ use types_ts_interned::TypeId;
 
 #[allow(dead_code)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DefData {
   pub name: String,
   pub file: FileId,
@@ -18,7 +18,7 @@ pub struct DefData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DefKind {
   Function(FuncData),
   Var(VarData),
@@ -34,7 +34,7 @@ pub enum DefKind {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FuncData {
   pub params: Vec<ParamData>,
   pub return_ann: Option<TypeId>,
@@ -42,7 +42,7 @@ pub struct FuncData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParamData {
   pub name: String,
   pub typ: Option<TypeId>,
@@ -51,7 +51,7 @@ pub struct ParamData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VarData {
   pub typ: Option<TypeId>,
   pub init: Option<ExprId>,
@@ -64,7 +64,7 @@ pub struct VarData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VarDeclaratorData {
   pub body: Option<BodyId>,
 }
@@ -75,39 +75,39 @@ fn default_var_mode() -> VarDeclMode {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportData {
   pub target: ImportTarget,
   pub original: String,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportAliasData {
   pub path: Vec<String>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportTarget {
   File(FileId),
   Unresolved { specifier: String },
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InterfaceData {
   pub typ: TypeId,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAliasData {
   pub typ: TypeId,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassData {
   pub body: Option<BodyId>,
   pub instance_type: Option<TypeId>,
@@ -116,7 +116,7 @@ pub struct ClassData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumData {
   pub body: Option<BodyId>,
   pub is_const: bool,
@@ -126,7 +126,7 @@ pub struct EnumData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceData {
   pub body: Option<BodyId>,
   pub value_type: Option<TypeId>,
@@ -135,7 +135,7 @@ pub struct NamespaceData {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleData {
   pub body: Option<BodyId>,
   pub value_type: Option<TypeId>,

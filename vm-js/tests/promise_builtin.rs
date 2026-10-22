@@ -28,7 +28,13 @@ fn executor_calls_and_resolves(
 ) -> Result<Value, VmError> {
   EXECUTOR_CALLS.with(|c| c.set(c.get() + 1));
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  vm.call_with_host(
+    scope,
+    hooks,
+    resolve,
+    Value::Undefined,
+    &[Value::Number(1.0)],
+  )?;
   Ok(Value::Undefined)
 }
 
@@ -42,7 +48,10 @@ fn then1_handler(
   args: &[Value],
 ) -> Result<Value, VmError> {
   THEN1_CALLS.with(|c| c.set(c.get() + 1));
-  assert_eq!(args.get(0).copied().unwrap_or(Value::Undefined), Value::Number(1.0));
+  assert_eq!(
+    args.get(0).copied().unwrap_or(Value::Undefined),
+    Value::Number(1.0)
+  );
   Ok(Value::Number(2.0))
 }
 
@@ -107,11 +116,11 @@ fn promise_is_installed_on_global_and_constructable() -> Result<(), VmError> {
   );
 
   // new Promise(executor) calls executor and returns a Promise instance.
-    let promise_instance = {
-      let mut scope = heap.scope();
-      let call_id = vm.register_native_call(executor_calls_and_resolves)?;
-      let executor_name = scope.alloc_string("executor")?;
-      let executor = scope.alloc_native_function(call_id, None, executor_name, 1)?;
+  let promise_instance = {
+    let mut scope = heap.scope();
+    let call_id = vm.register_native_call(executor_calls_and_resolves)?;
+    let executor_name = scope.alloc_string("executor")?;
+    let executor = scope.alloc_native_function(call_id, None, executor_name, 1)?;
 
     let value = vm.construct_without_host(
       &mut scope,
@@ -126,7 +135,10 @@ fn promise_is_installed_on_global_and_constructable() -> Result<(), VmError> {
   };
 
   assert_eq!(EXECUTOR_CALLS.with(|c| c.get()), 1);
-  assert_eq!(heap.object_prototype(promise_instance)?, Some(promise_prototype));
+  assert_eq!(
+    heap.object_prototype(promise_instance)?,
+    Some(promise_prototype)
+  );
 
   realm.teardown(&mut heap);
   Ok(())
@@ -239,16 +251,16 @@ fn promise_constructor_throws_type_error_when_executor_not_callable() -> Result<
       &[Value::Number(1.0)],
       Value::Object(promise),
     );
- 
+
     let thrown = match err {
       Ok(v) => panic!("expected Promise constructor to throw, got {v:?}"),
       Err(e) => e.thrown_value().ok_or(e)?,
     };
- 
+
     let Value::Object(obj) = thrown else {
       panic!("expected thrown object, got {thrown:?}");
     };
- 
+
     assert_eq!(
       scope.heap().object_prototype(obj)?,
       Some(realm.intrinsics().type_error_prototype())

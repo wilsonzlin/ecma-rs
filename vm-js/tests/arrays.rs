@@ -14,7 +14,11 @@ fn length_key(scope: &mut vm_js::Scope<'_>) -> Result<PropertyKey, VmError> {
   Ok(PropertyKey::from_string(scope.alloc_string("length")?))
 }
 
-fn get_length(scope: &vm_js::Scope<'_>, array: GcObject, key: PropertyKey) -> Result<Value, VmError> {
+fn get_length(
+  scope: &vm_js::Scope<'_>,
+  array: GcObject,
+  key: PropertyKey,
+) -> Result<Value, VmError> {
   Ok(
     scope
       .heap()

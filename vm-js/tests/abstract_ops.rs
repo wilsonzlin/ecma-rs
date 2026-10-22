@@ -1,7 +1,7 @@
 use vm_js::{
   create_data_property_or_throw, define_property_or_throw, delete_property_or_throw, get_method,
-  Heap, HeapLimits, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Value,
-  Vm, VmError, VmOptions,
+  Heap, HeapLimits, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Realm,
+  Value, Vm, VmError, VmOptions,
 };
 
 #[test]
@@ -58,7 +58,8 @@ fn define_property_or_throw_throws_on_non_extensible_object_under_gc() -> Result
   scope.object_prevent_extensions(obj)?;
 
   let key = PropertyKey::from_string(scope.alloc_string("x")?);
-  let err = define_property_or_throw(&mut scope, obj, key, PropertyDescriptorPatch::default()).unwrap_err();
+  let err =
+    define_property_or_throw(&mut scope, obj, key, PropertyDescriptorPatch::default()).unwrap_err();
   assert!(matches!(err, VmError::TypeError(_)));
   Ok(())
 }
@@ -121,16 +122,20 @@ fn get_method_throws_type_error_for_non_callable() -> Result<(), VmError> {
 }
 
 #[test]
-fn get_method_on_non_object_is_unimplemented_for_now() -> Result<(), VmError> {
+fn get_method_on_non_object_boxes_via_getv() -> Result<(), VmError> {
   let mut vm = Vm::new(VmOptions::default());
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  // `GetV` on primitives needs intrinsics (the `%Object%` box / prototypes).
+  let mut realm = Realm::new(&mut vm, &mut heap)?;
   let mut scope = heap.scope();
 
+  // `GetMethod` uses `GetV` semantics (ECMA-262): primitives resolve against
+  // the matching intrinsic prototype, so a missing method on a Number is
+  // `None`, not an error.
   let key = PropertyKey::from_string(scope.alloc_string("m")?);
-  let err = get_method(&mut vm, &mut scope, Value::Number(1.0), key).unwrap_err();
-  assert!(matches!(
-    err,
-    VmError::Unimplemented("GetMethod on non-object")
-  ));
+  let method = get_method(&mut vm, &mut scope, Value::Number(1.0), key)?;
+  assert!(method.is_none());
+  drop(scope);
+  realm.teardown(&mut heap);
   Ok(())
 }

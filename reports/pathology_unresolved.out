@@ -1,0 +1,8 @@
+
+running 1 test
+test diag_unresolved_vs_resolved ... CASE resolved_n.ts: elapsed=1.091310407s diags=0
+CASE unresolved_n.ts: elapsed=1.020255074s diags=302
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s
+

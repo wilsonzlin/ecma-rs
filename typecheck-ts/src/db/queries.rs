@@ -13,7 +13,7 @@ use hir_js::{
   FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::error::SyntaxErrorType;
-use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
+use parse_js::{parse_with_options_cancellable_detailed, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{CacheStats, PrimitiveIds, TypeStore};
 
@@ -37,7 +37,7 @@ use crate::triple_slash::{
   normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
 };
 use crate::FileKey;
-use crate::{BodyId, DefId, ExprId, Host, HostError, TypeId};
+use crate::{BodyId, DefId, ExprId, HostError, TypeId};
 use salsa::plumbing::current_revision;
 use salsa::Setter;
 
@@ -404,7 +404,7 @@ pub trait GlobalBindingsDb {
   fn primitive_ids(&self) -> Option<PrimitiveIds>;
 }
 
-fn deterministic_symbol_id(name: &str) -> SymbolId {
+pub(crate) fn deterministic_symbol_id(name: &str) -> SymbolId {
   // FNV-1a 64-bit with fold-down to keep outputs stable across runs.
   let mut hash: u64 = 0xcbf29ce484222325;
   for byte in name.as_bytes() {
@@ -413,6 +413,121 @@ fn deterministic_symbol_id(name: &str) -> SymbolId {
   }
   let folded = hash ^ (hash >> 32);
   SymbolId(folded)
+}
+
+/// Ambient value binding used for checker-synthesized globals (e.g. `globalThis`,
+/// CommonJS `require`/`module`/`exports` in `.js` files).
+pub(crate) fn ambient_any_binding(name: &str, any: Option<TypeId>) -> SymbolBinding {
+  SymbolBinding {
+    symbol: deterministic_symbol_id(name),
+    def: None,
+    type_id: any,
+  }
+}
+
+/// CommonJS ambient value names injected for JavaScript source files under
+/// checkJs-style checking. Types are intentionally `any` — we do not model
+/// Node's `require` signature or module shape here.
+///
+/// Seeded only when [`js_ast_has_commonjs_module_indicator`] is true (tsc's
+/// `commonJsModuleIndicator`), not for every `.js` file.
+pub(crate) const COMMONJS_AMBIENT_GLOBALS: &[&str] = &["require", "module", "exports"];
+
+/// Whether a JS/JSX AST would set tsc's `SourceFile.commonJsModuleIndicator`.
+///
+/// Mirrors the binder's high-value triggers:
+/// - `require(...)` calls
+/// - `module.exports = …`
+/// - `exports.foo = …` / `module.exports.foo = …` (and string/number computed
+///   forms) where the property is a **public** name
+///
+/// Private access such as `exports.#nope = 1` does **not** count
+/// (`isBindableStaticAccessExpression` requires an Identifier, not
+/// PrivateIdentifier), so bare `exports.#…` stays unresolved (TS2304).
+pub(crate) fn js_ast_has_commonjs_module_indicator(
+  ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
+) -> bool {
+  use derive_visitor::{Drive, Visitor};
+  use parse_js::ast::expr::Expr;
+  use parse_js::ast::node::Node;
+  use parse_js::operator::OperatorName;
+
+  type ExprNode = Node<Expr>;
+
+  fn is_id(expr: &Node<Expr>, name: &str) -> bool {
+    matches!(expr.stx.as_ref(), Expr::Id(id) if id.stx.name == name)
+  }
+
+  fn is_public_prop(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('#')
+  }
+
+  fn is_module_exports(expr: &Node<Expr>) -> bool {
+    matches!(
+      expr.stx.as_ref(),
+      Expr::Member(m) if is_id(&m.stx.left, "module") && m.stx.right == "exports"
+    )
+  }
+
+  fn is_literal_prop_key(expr: &Node<Expr>) -> bool {
+    matches!(
+      expr.stx.as_ref(),
+      Expr::LitStr(_) | Expr::LitNum(_) | Expr::LitBigInt(_)
+    )
+  }
+
+  /// `exports.foo` / `module.exports.foo` / `exports["foo"]` / …
+  fn is_exports_property_lhs(lhs: &Node<Expr>) -> bool {
+    match lhs.stx.as_ref() {
+      Expr::Member(m) => {
+        if is_id(&m.stx.left, "exports") {
+          return is_public_prop(&m.stx.right);
+        }
+        if is_module_exports(&m.stx.left) {
+          return is_public_prop(&m.stx.right);
+        }
+        false
+      }
+      Expr::ComputedMember(m) => {
+        if !is_literal_prop_key(&m.stx.member) {
+          return false;
+        }
+        is_id(&m.stx.object, "exports") || is_module_exports(&m.stx.object)
+      }
+      _ => false,
+    }
+  }
+
+  #[derive(Visitor)]
+  #[visitor(ExprNode(enter))]
+  struct Finder {
+    found: bool,
+  }
+
+  impl Finder {
+    fn enter_expr_node(&mut self, node: &ExprNode) {
+      if self.found {
+        return;
+      }
+      match node.stx.as_ref() {
+        Expr::Call(call) if is_id(&call.stx.callee, "require") => {
+          self.found = true;
+        }
+        Expr::Binary(bin) if matches!(bin.stx.operator, OperatorName::Assignment) => {
+          // `module.exports = …` (ModuleExports) or `exports.foo = …`
+          // (ExportsProperty). `exports.#nope = …` is intentionally excluded.
+          if is_module_exports(&bin.stx.left) || is_exports_property_lhs(&bin.stx.left) {
+            self.found = true;
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let mut finder = Finder { found: false };
+  ast.drive(&mut finder);
+  finder.found
 }
 
 /// Global value bindings derived from TS semantics, `.d.ts` files, and builtin
@@ -475,6 +590,10 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
   // ordering from `.d.ts` inputs. When a declaration exists we preserve its
   // `symbol`/`def` identity but prefer our canonical primitive type IDs so that
   // downstream queries (and tests) see the expected types.
+  //
+  // `globalThis` mirrors tsc's checker-synthesized global (always present), so
+  // checkJs / lib fixtures that reference it do not spuriously report
+  // unresolved-name diagnostics when the loaded lib set omits it.
   if let Some(primitives) = db.primitive_ids() {
     globals
       .entry("undefined".to_string())
@@ -496,6 +615,14 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
         def: None,
         type_id: Some(primitives.any),
       });
+    globals
+      .entry("globalThis".to_string())
+      .and_modify(|binding| {
+        if binding.type_id.is_none() {
+          binding.type_id = Some(primitives.any);
+        }
+      })
+      .or_insert(ambient_any_binding("globalThis", Some(primitives.any)));
   } else {
     globals
       .entry("undefined".to_string())
@@ -509,1031 +636,15 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
       def: None,
       type_id: None,
     });
+    globals
+      .entry("globalThis".to_string())
+      .or_insert(ambient_any_binding("globalThis", None));
   }
 
   Arc::new(globals)
 }
 
-pub mod body_check {
-  use std::cell::RefCell;
-  use std::collections::{HashMap, HashSet};
-  use std::fmt;
-  use std::panic::panic_any;
-  use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-  use std::sync::{Arc, OnceLock, RwLock};
-  use std::time::Instant;
-
-  use diagnostics::{Diagnostic, FileId, Span, TextRange};
-  use hir_js::{Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, NameInterner};
-  use hir_js::{PatId as HirPatId, PatKind as HirPatKind};
-  use parse_js::ast::node::Node;
-  use parse_js::ast::stx::TopLevel;
-  use semantic_js::ts as sem_ts;
-  use types_ts_interned::{
-    IntrinsicKind, RelateCtx, TypeId as InternedTypeId, TypeParamDecl, TypeParamId, TypeStore,
-  };
-
-  use crate::check::caches::{CheckerCacheStats, CheckerCaches};
-  use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver,
-  };
-  use crate::codes;
-  use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
-  use crate::files::FileRegistry;
-  use crate::lib_support::{CacheMode, CacheOptions, JsxMode, ScriptTarget};
-  use crate::profile::{QueryKind, QueryStatsCollector};
-  use crate::program::check::relate_hooks;
-  use crate::program::{NamespaceMemberIndex, ProgramTypeResolver};
-  use crate::{BodyCheckResult, BodyId, DefId, ExportMap, Host, PatId, SymbolBinding, TypeId};
-
-  #[derive(Clone)]
-  pub struct ArcAst(Arc<Node<TopLevel>>);
-
-  impl PartialEq for ArcAst {
-    fn eq(&self, other: &Self) -> bool {
-      Arc::ptr_eq(&self.0, &other.0)
-    }
-  }
-
-  impl Eq for ArcAst {}
-
-  impl fmt::Debug for ArcAst {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      f.debug_tuple("ArcAst").finish()
-    }
-  }
-
-  impl std::ops::Deref for ArcAst {
-    type Target = Node<TopLevel>;
-
-    fn deref(&self) -> &Self::Target {
-      self.0.as_ref()
-    }
-  }
-
-  #[derive(Clone)]
-  pub struct ArcLowered(Arc<hir_js::LowerResult>);
-
-  impl PartialEq for ArcLowered {
-    fn eq(&self, other: &Self) -> bool {
-      Arc::ptr_eq(&self.0, &other.0)
-    }
-  }
-
-  impl Eq for ArcLowered {}
-
-  impl fmt::Debug for ArcLowered {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      f.debug_tuple("ArcLowered").finish()
-    }
-  }
-
-  impl std::ops::Deref for ArcLowered {
-    type Target = hir_js::LowerResult;
-
-    fn deref(&self) -> &Self::Target {
-      self.0.as_ref()
-    }
-  }
-
-  #[derive(Clone)]
-  pub struct BodyCheckContext {
-    pub store: Arc<TypeStore>,
-    pub target: ScriptTarget,
-    pub no_implicit_any: bool,
-    pub use_define_for_class_fields: bool,
-    pub interned_def_types: HashMap<DefId, InternedTypeId>,
-    pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
-    pub interned_type_param_decls: HashMap<DefId, Arc<[TypeParamDecl]>>,
-    pub interned_intrinsics: HashMap<DefId, IntrinsicKind>,
-    pub asts: HashMap<FileId, Arc<Node<TopLevel>>>,
-    pub lowered: HashMap<FileId, Arc<hir_js::LowerResult>>,
-    pub body_info: HashMap<BodyId, BodyInfo>,
-    pub body_parents: HashMap<BodyId, BodyId>,
-    pub global_bindings: HashMap<String, SymbolBinding>,
-    pub file_bindings: HashMap<FileId, HashMap<String, SymbolBinding>>,
-    pub def_spans: HashMap<(FileId, TextRange), DefId>,
-    pub semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
-    pub def_kinds: Arc<HashMap<DefId, crate::DefKind>>,
-    pub def_files: Arc<HashMap<DefId, FileId>>,
-    pub def_id_spans: Arc<HashMap<DefId, TextRange>>,
-    pub exports: Arc<HashMap<FileId, ExportMap>>,
-    pub module_namespace_defs: Arc<HashMap<FileId, DefId>>,
-    pub(crate) namespace_members: Arc<NamespaceMemberIndex>,
-    pub qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
-    pub(crate) file_registry: Arc<FileRegistry>,
-    pub host: Arc<dyn Host>,
-    pub checker_caches: CheckerCaches,
-    pub cache_mode: CacheMode,
-    pub cache_options: CacheOptions,
-    pub jsx_mode: Option<JsxMode>,
-    pub query_stats: QueryStatsCollector,
-    pub cancelled: Arc<AtomicBool>,
-  }
-
-  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-  pub struct BodyInfo {
-    pub file: FileId,
-    pub hir: Option<HirBodyId>,
-    pub kind: HirBodyKind,
-  }
-
-  #[derive(Clone)]
-  pub struct BodyCheckDb {
-    context: Arc<BodyCheckContext>,
-    memo: RefCell<HashMap<BodyId, Arc<BodyCheckResult>>>,
-    ast_indexes: RefCell<HashMap<FileId, Arc<crate::check::hir_body::AstIndex>>>,
-    cache_stats: RefCell<CheckerCacheStats>,
-  }
-
-  #[derive(Debug, Default)]
-  pub struct ParallelTracker {
-    active: AtomicUsize,
-    max_active: AtomicUsize,
-  }
-
-  impl ParallelTracker {
-    pub fn new() -> Self {
-      Self::default()
-    }
-
-    pub fn max_active(&self) -> usize {
-      self.max_active.load(Ordering::SeqCst)
-    }
-  }
-
-  pub struct ParallelGuard {
-    trackers: Vec<Arc<ParallelTracker>>,
-  }
-
-  impl Drop for ParallelGuard {
-    fn drop(&mut self) {
-      for tracker in &self.trackers {
-        tracker.active.fetch_sub(1, Ordering::SeqCst);
-      }
-    }
-  }
-
-  impl ParallelGuard {
-    fn new(trackers: Vec<Arc<ParallelTracker>>) -> Self {
-      for tracker in trackers.iter() {
-        let current = tracker.active.fetch_add(1, Ordering::SeqCst) + 1;
-        tracker.max_active.fetch_max(current, Ordering::SeqCst);
-      }
-      ParallelGuard { trackers }
-    }
-  }
-
-  static PARALLEL_TRACKER: OnceLock<RwLock<Vec<Arc<ParallelTracker>>>> = OnceLock::new();
-
-  thread_local! {
-    static LOCAL_TRACKER: RefCell<Option<Arc<ParallelTracker>>> = RefCell::new(None);
-  }
-
-  fn tracker_slot() -> &'static RwLock<Vec<Arc<ParallelTracker>>> {
-    PARALLEL_TRACKER.get_or_init(|| RwLock::new(Vec::new()))
-  }
-
-  pub fn set_parallel_tracker(tracker: Option<Arc<ParallelTracker>>) {
-    LOCAL_TRACKER.with(|local| {
-      let mut local = local.borrow_mut();
-      let mut global = tracker_slot().write().unwrap();
-
-      if let Some(existing) = local.take() {
-        global.retain(|registered| !Arc::ptr_eq(registered, &existing));
-      }
-
-      if let Some(tracker) = tracker {
-        if !global
-          .iter()
-          .any(|registered| Arc::ptr_eq(registered, &tracker))
-        {
-          global.push(Arc::clone(&tracker));
-        }
-        *local = Some(tracker);
-      }
-    });
-  }
-
-  pub fn parallel_guard() -> Option<ParallelGuard> {
-    let trackers: Vec<_> = tracker_slot().read().unwrap().iter().cloned().collect();
-    (!trackers.is_empty()).then(|| ParallelGuard::new(trackers))
-  }
-
-  impl BodyCheckDb {
-    pub fn new(context: BodyCheckContext) -> Self {
-      Self::from_shared_context(Arc::new(context))
-    }
-
-    pub fn from_shared_context(context: Arc<BodyCheckContext>) -> Self {
-      Self {
-        context,
-        memo: RefCell::new(HashMap::new()),
-        ast_indexes: RefCell::new(HashMap::new()),
-        cache_stats: RefCell::new(CheckerCacheStats::default()),
-      }
-    }
-
-    pub fn from_shared_context_with_seed_results(
-      context: Arc<BodyCheckContext>,
-      seed_results: &[(BodyId, Arc<BodyCheckResult>)],
-    ) -> Self {
-      let memo = seed_results
-        .iter()
-        .map(|(body, res)| (*body, Arc::clone(res)))
-        .collect();
-      Self {
-        context,
-        memo: RefCell::new(memo),
-        ast_indexes: RefCell::new(HashMap::new()),
-        cache_stats: RefCell::new(CheckerCacheStats::default()),
-      }
-    }
-
-    pub(crate) fn into_cache_stats(self) -> CheckerCacheStats {
-      self.cache_stats.into_inner()
-    }
-  }
-
-  impl TypeExpanderDb for BodyCheckContext {
-    fn type_store(&self) -> Arc<TypeStore> {
-      Arc::clone(&self.store)
-    }
-
-    fn decl_type(&self, def: types_ts_interned::DefId) -> Option<InternedTypeId> {
-      self
-        .interned_def_types
-        .get(&crate::api::DefId(def.0))
-        .copied()
-    }
-
-    fn type_params(&self, def: types_ts_interned::DefId) -> Arc<[TypeParamId]> {
-      self
-        .interned_type_params
-        .get(&crate::api::DefId(def.0))
-        .cloned()
-        .map(Arc::from)
-        .unwrap_or_else(|| Arc::from([]))
-    }
-
-    fn type_param_decls(&self, def: types_ts_interned::DefId) -> Option<Arc<[TypeParamDecl]>> {
-      self
-        .interned_type_param_decls
-        .get(&crate::api::DefId(def.0))
-        .cloned()
-    }
-
-    fn type_of_def(&self, def: types_ts_interned::DefId) -> Option<InternedTypeId> {
-      self
-        .interned_def_types
-        .get(&crate::api::DefId(def.0))
-        .copied()
-    }
-
-    fn intrinsic_kind(&self, def: types_ts_interned::DefId) -> Option<IntrinsicKind> {
-      self
-        .interned_intrinsics
-        .get(&crate::api::DefId(def.0))
-        .copied()
-    }
-  }
-
-  impl BodyCheckDb {
-    fn bc_parse(&self, file: FileId) -> Option<ArcAst> {
-      self.context.asts.get(&file).cloned().map(ArcAst)
-    }
-
-    fn bc_lower_hir(&self, file: FileId) -> Option<ArcLowered> {
-      let _ = self.bc_parse(file)?;
-      self.context.lowered.get(&file).cloned().map(ArcLowered)
-    }
-
-    fn bc_body_info(&self, body: BodyId) -> Option<BodyInfo> {
-      self.context.body_info.get(&body).copied()
-    }
-  }
-
-  fn missing_body(body: BodyId) -> BodyCheckResult {
-    BodyCheckResult {
-      body,
-      expr_types: Vec::new(),
-      expr_spans: Vec::new(),
-      pat_types: Vec::new(),
-      pat_spans: Vec::new(),
-      diagnostics: vec![codes::MISSING_BODY.error(
-        "missing body",
-        Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
-      )],
-      return_types: Vec::new(),
-    }
-  }
-
-  fn missing_ast(body: BodyId, file: FileId) -> BodyCheckResult {
-    BodyCheckResult {
-      body,
-      expr_types: Vec::new(),
-      expr_spans: Vec::new(),
-      pat_types: Vec::new(),
-      pat_spans: Vec::new(),
-      diagnostics: vec![codes::MISSING_BODY.error(
-        "missing parsed AST for body",
-        Span::new(file, TextRange::new(0, 0)),
-      )],
-      return_types: Vec::new(),
-    }
-  }
-
-  fn empty_result(body: BodyId) -> BodyCheckResult {
-    BodyCheckResult {
-      body,
-      expr_types: Vec::new(),
-      expr_spans: Vec::new(),
-      pat_types: Vec::new(),
-      pat_spans: Vec::new(),
-      diagnostics: Vec::new(),
-      return_types: Vec::new(),
-    }
-  }
-
-  impl BodyCheckDb {
-    pub fn check_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
-      if let Some(cached) = self.memo.borrow().get(&body_id).cloned() {
-        return cached;
-      }
-      let res = self.compute_body(body_id);
-      self.memo.borrow_mut().insert(body_id, Arc::clone(&res));
-      res
-    }
-
-    fn ast_index(&self, file: FileId, ast: &ArcAst) -> Arc<crate::check::hir_body::AstIndex> {
-      let cached = self.ast_indexes.borrow().get(&file).cloned();
-      if let Some(index) = cached {
-        return index;
-      }
-      let index = Arc::new(crate::check::hir_body::AstIndex::new(
-        Arc::clone(&ast.0),
-        file,
-        Some(&self.context.cancelled),
-      ));
-      self
-        .ast_indexes
-        .borrow_mut()
-        .insert(file, Arc::clone(&index));
-      index
-    }
-
-    fn compute_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
-      if self.context.cancelled.load(Ordering::Relaxed) {
-        panic_any(crate::FatalError::Cancelled);
-      }
-      let started = Instant::now();
-      let ctx = &self.context;
-      let Some(meta) = self.bc_body_info(body_id) else {
-        return Arc::new(missing_body(body_id));
-      };
-      let Some(lowered) = self.bc_lower_hir(meta.file) else {
-        return Arc::new(empty_result(body_id));
-      };
-      let Some(ast) = self.bc_parse(meta.file) else {
-        return Arc::new(missing_ast(body_id, meta.file));
-      };
-
-      let mut _synthetic = None;
-      let body = if let Some(hir_id) = meta.hir {
-        lowered.body(hir_id)
-      } else if matches!(meta.kind, HirBodyKind::TopLevel) {
-        _synthetic = Some(HirBody {
-          owner: hir_js::ids::MISSING_DEF,
-          span: TextRange::new(0, 0),
-          kind: HirBodyKind::TopLevel,
-          exprs: Vec::new(),
-          stmts: Vec::new(),
-          pats: Vec::new(),
-          root_stmts: Vec::new(),
-          function: None,
-          class: None,
-          expr_types: None,
-        });
-        _synthetic.as_ref()
-      } else {
-        None
-      };
-      let Some(body) = body else {
-        return Arc::new(empty_result(body_id));
-      };
-      let _parallel_guard = parallel_guard();
-
-      let prim = ctx.store.primitive_ids();
-      let map_def_ty = |def: DefId| {
-        ctx
-          .interned_def_types
-          .get(&def)
-          .copied()
-          .unwrap_or(prim.unknown)
-      };
-
-      let mut bindings: HashMap<String, TypeId> = HashMap::new();
-      let mut binding_defs: HashMap<String, DefId> = HashMap::new();
-
-      seed_bindings(
-        &mut bindings,
-        &mut binding_defs,
-        &ctx.global_bindings,
-        map_def_ty,
-        prim.unknown,
-      );
-      if let Some(file_bindings) = ctx.file_bindings.get(&meta.file) {
-        seed_bindings(
-          &mut bindings,
-          &mut binding_defs,
-          file_bindings,
-          map_def_ty,
-          prim.unknown,
-        );
-      }
-
-      collect_parent_bindings(
-        self,
-        body_id,
-        &mut bindings,
-        &mut binding_defs,
-        prim.unknown,
-      );
-
-      let caches = ctx.checker_caches.for_body();
-      let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
-      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
-        function_expr_span(self, body_id)
-          .and_then(|span| contextual_callable_for_body(self, body_id, span))
-      } else {
-        None
-      };
-      let resolver = if let Some(semantics) = ctx.semantics.as_ref() {
-        Some(Arc::new(ProgramTypeResolver::new(
-          Arc::clone(&ctx.host),
-          Arc::clone(semantics),
-          Arc::clone(&ctx.def_kinds),
-          Arc::clone(&ctx.def_files),
-          Arc::clone(&ctx.def_id_spans),
-          Arc::clone(&ctx.file_registry),
-          meta.file,
-          binding_defs,
-          Arc::clone(&ctx.exports),
-          Arc::clone(&ctx.module_namespace_defs),
-          Arc::clone(&ctx.namespace_members),
-          Arc::clone(&ctx.qualified_def_members),
-        )) as Arc<_>)
-      } else if binding_defs.is_empty() {
-        None
-      } else {
-        Some(Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>)
-      };
-      let ast_index = self.ast_index(meta.file, &ast);
-      let mut result = check_body_with_expander(
-        body_id,
-        body,
-        &lowered.names,
-        meta.file,
-        ast_index.as_ref(),
-        Arc::clone(&ctx.store),
-        ctx.target,
-        ctx.use_define_for_class_fields,
-        &caches,
-        &bindings,
-        resolver,
-        Some(&expander),
-        Some(&ctx.interned_type_param_decls),
-        contextual_fn_ty,
-        ctx.no_implicit_any,
-        ctx.jsx_mode,
-        Some(&ctx.cancelled),
-      );
-
-      if !body.exprs.is_empty()
-        && matches!(meta.kind, HirBodyKind::Function | HirBodyKind::TopLevel)
-      {
-        if ctx.cancelled.load(Ordering::Relaxed) {
-          panic_any(crate::FatalError::Cancelled);
-        }
-        let mut initial_env: HashMap<_, _> = HashMap::new();
-        fn record_param_pats(
-          body: &HirBody,
-          pat_id: HirPatId,
-          pat_types: &[TypeId],
-          unknown: TypeId,
-          initial_env: &mut HashMap<hir_js::NameId, TypeId>,
-        ) {
-          let Some(pat) = body.pats.get(pat_id.0 as usize) else {
-            return;
-          };
-          match &pat.kind {
-            HirPatKind::Ident(name_id) => {
-              if let Some(ty) = pat_types.get(pat_id.0 as usize).copied() {
-                if ty != unknown {
-                  initial_env.insert(*name_id, ty);
-                }
-              }
-            }
-            HirPatKind::Array(arr) => {
-              for elem in arr.elements.iter().flatten() {
-                record_param_pats(body, elem.pat, pat_types, unknown, initial_env);
-              }
-              if let Some(rest) = arr.rest {
-                record_param_pats(body, rest, pat_types, unknown, initial_env);
-              }
-            }
-            HirPatKind::Object(obj) => {
-              for prop in obj.props.iter() {
-                record_param_pats(body, prop.value, pat_types, unknown, initial_env);
-              }
-              if let Some(rest) = obj.rest {
-                record_param_pats(body, rest, pat_types, unknown, initial_env);
-              }
-            }
-            HirPatKind::Rest(inner) => {
-              record_param_pats(body, **inner, pat_types, unknown, initial_env);
-            }
-            HirPatKind::Assign { target, .. } => {
-              record_param_pats(body, *target, pat_types, unknown, initial_env);
-            }
-            HirPatKind::AssignTarget(_) => {}
-          }
-        }
-
-        if let Some(function) = body.function.as_ref() {
-          for param in function.params.iter() {
-            record_param_pats(
-              body,
-              param.pat,
-              &result.pat_types,
-              prim.unknown,
-              &mut initial_env,
-            );
-          }
-        }
-        for (idx, expr) in body.exprs.iter().enumerate() {
-          if let hir_js::ExprKind::Ident(name_id) = expr.kind {
-            if initial_env.contains_key(&name_id) {
-              continue;
-            }
-            if let Some(name) = lowered.names.resolve(name_id) {
-              let binding_ty = bindings.get(name).copied();
-              let candidate = match binding_ty {
-                Some(ty) if ty != prim.unknown => Some(ty),
-                _ => result
-                  .expr_types
-                  .get(idx)
-                  .copied()
-                  .filter(|t| *t != prim.unknown),
-              };
-              if let Some(ty) = candidate {
-                initial_env.insert(name_id, ty);
-              }
-            }
-          }
-        }
-        let mut flow_hooks = relate_hooks();
-        flow_hooks.expander = Some(&expander);
-        let flow_relate = RelateCtx::with_hooks_and_cache(
-          Arc::clone(&ctx.store),
-          ctx.store.options(),
-          flow_hooks,
-          caches.relation.clone(),
-        );
-        let flow_result = check_body_with_env(
-          body_id,
-          body,
-          &lowered.names,
-          meta.file,
-          "",
-          Arc::clone(&ctx.store),
-          &initial_env,
-          flow_relate,
-          Some(&expander),
-        );
-        let mut relate_hooks = relate_hooks();
-        relate_hooks.expander = Some(&expander);
-        let relate = RelateCtx::with_hooks_and_cache(
-          Arc::clone(&ctx.store),
-          ctx.store.options(),
-          relate_hooks,
-          caches.relation.clone(),
-        );
-        if flow_result.expr_types.len() == result.expr_types.len() {
-          for (idx, ty) in flow_result.expr_types.iter().enumerate() {
-            if *ty != prim.unknown {
-              let existing = result.expr_types[idx];
-              let narrower =
-                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              let flow_literal_on_primitive = matches!(
-                (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
-                (
-                  types_ts_interned::TypeKind::Number,
-                  types_ts_interned::TypeKind::NumberLiteral(_)
-                ) | (
-                  types_ts_interned::TypeKind::String,
-                  types_ts_interned::TypeKind::StringLiteral(_),
-                ) | (
-                  types_ts_interned::TypeKind::Boolean,
-                  types_ts_interned::TypeKind::BooleanLiteral(_),
-                ) | (
-                  types_ts_interned::TypeKind::BigInt,
-                  types_ts_interned::TypeKind::BigIntLiteral(_),
-                )
-              );
-              if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
-                result.expr_types[idx] = *ty;
-              }
-            }
-          }
-        }
-        if flow_result.pat_types.len() == result.pat_types.len() {
-          for (idx, ty) in flow_result.pat_types.iter().enumerate() {
-            if *ty != prim.unknown {
-              let existing = result.pat_types[idx];
-              let narrower =
-                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              let flow_literal_on_primitive = matches!(
-                (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
-                (
-                  types_ts_interned::TypeKind::Number,
-                  types_ts_interned::TypeKind::NumberLiteral(_)
-                ) | (
-                  types_ts_interned::TypeKind::String,
-                  types_ts_interned::TypeKind::StringLiteral(_),
-                ) | (
-                  types_ts_interned::TypeKind::Boolean,
-                  types_ts_interned::TypeKind::BooleanLiteral(_),
-                ) | (
-                  types_ts_interned::TypeKind::BigInt,
-                  types_ts_interned::TypeKind::BigIntLiteral(_),
-                )
-              );
-              if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
-                result.pat_types[idx] = *ty;
-              }
-            }
-          }
-        }
-        let flow_return_types: Vec<_> = flow_result
-          .return_types
-          .into_iter()
-          .map(|ty| crate::check::widen::widen_literal(ctx.store.as_ref(), ty))
-          .collect();
-        if result.return_types.is_empty() && !flow_return_types.is_empty() {
-          result.return_types = flow_return_types;
-        } else if flow_return_types.len() == result.return_types.len() {
-          for (idx, ty) in flow_return_types.iter().enumerate() {
-            if *ty != prim.unknown {
-              let existing = result.return_types[idx];
-              let narrower =
-                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              if existing == prim.unknown || narrower {
-                result.return_types[idx] = *ty;
-              }
-            }
-          }
-        }
-        if !result.return_types.is_empty() {
-          result.return_types = result
-            .return_types
-            .iter()
-            .map(|ty| crate::check::widen::widen_literal(ctx.store.as_ref(), *ty))
-            .collect();
-        }
-        let mut flow_diagnostics = flow_result.diagnostics;
-        if !flow_diagnostics.is_empty() {
-          let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
-          let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
-            (
-              diag.code.as_str().to_string(),
-              diag.primary.file,
-              diag.primary.range,
-              diag.message.clone(),
-            )
-          };
-          for diag in result.diagnostics.iter() {
-            seen.insert(diag_key(diag));
-          }
-          flow_diagnostics.sort_by(|a, b| {
-            a.primary
-              .file
-              .cmp(&b.primary.file)
-              .then(a.primary.range.start.cmp(&b.primary.range.start))
-              .then(a.primary.range.end.cmp(&b.primary.range.end))
-              .then(a.code.cmp(&b.code))
-              .then(a.message.cmp(&b.message))
-          });
-          for diag in flow_diagnostics.into_iter() {
-            if seen.insert(diag_key(&diag)) {
-              result.diagnostics.push(diag);
-            }
-          }
-        }
-      }
-
-      let res = Arc::new(result);
-
-      if matches!(ctx.cache_mode, CacheMode::PerBody) {
-        let mut stats = caches.stats();
-        if stats.relation.evictions == 0 {
-          let max = ctx.cache_options.max_relation_cache_entries as u64;
-          if max > 0 && stats.relation.insertions > max {
-            stats.relation.evictions = stats.relation.insertions - max;
-          } else {
-            stats.relation.evictions = 1;
-          }
-        }
-        self.cache_stats.borrow_mut().merge(&stats);
-        ctx
-          .query_stats
-          .record_cache(crate::profile::CacheKind::Relation, &stats.relation);
-        ctx
-          .query_stats
-          .record_cache(crate::profile::CacheKind::Eval, &stats.eval);
-        ctx.query_stats.record_cache(
-          crate::profile::CacheKind::RefExpansion,
-          &stats.ref_expansion,
-        );
-        ctx.query_stats.record_cache(
-          crate::profile::CacheKind::Instantiation,
-          &stats.instantiation,
-        );
-      }
-      ctx
-        .query_stats
-        .record(QueryKind::CheckBody, false, started.elapsed());
-
-      res
-    }
-  }
-
-  pub fn check_body(db: &BodyCheckDb, body_id: BodyId) -> Arc<BodyCheckResult> {
-    db.check_body(body_id)
-  }
-
-  fn record_pat(
-    ctx: &BodyCheckContext,
-    pat_id: HirPatId,
-    body: &HirBody,
-    names: &NameInterner,
-    result: &BodyCheckResult,
-    bindings: &mut HashMap<String, TypeId>,
-    binding_defs: &mut HashMap<String, DefId>,
-    file: FileId,
-    unknown: TypeId,
-    seen: &mut HashSet<String>,
-  ) {
-    let Some(pat) = body.pats.get(pat_id.0 as usize) else {
-      return;
-    };
-    let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
-    match &pat.kind {
-      HirPatKind::Ident(name_id) => {
-        if let Some(name) = names.resolve(*name_id) {
-          let name = name.to_string();
-          if !seen.insert(name.clone()) {
-            return;
-          }
-          bindings.insert(name.clone(), ty);
-          if let Some(def_id) = ctx.def_spans.get(&(file, pat.span)).copied() {
-            binding_defs.insert(name, def_id);
-          }
-        }
-      }
-      HirPatKind::Array(arr) => {
-        for elem in arr.elements.iter().flatten() {
-          record_pat(
-            ctx,
-            elem.pat,
-            body,
-            names,
-            result,
-            bindings,
-            binding_defs,
-            file,
-            unknown,
-            seen,
-          );
-        }
-        if let Some(rest) = arr.rest {
-          record_pat(
-            ctx,
-            rest,
-            body,
-            names,
-            result,
-            bindings,
-            binding_defs,
-            file,
-            unknown,
-            seen,
-          );
-        }
-      }
-      HirPatKind::Object(obj) => {
-        for prop in obj.props.iter() {
-          record_pat(
-            ctx,
-            prop.value,
-            body,
-            names,
-            result,
-            bindings,
-            binding_defs,
-            file,
-            unknown,
-            seen,
-          );
-        }
-        if let Some(rest) = obj.rest {
-          record_pat(
-            ctx,
-            rest,
-            body,
-            names,
-            result,
-            bindings,
-            binding_defs,
-            file,
-            unknown,
-            seen,
-          );
-        }
-      }
-      HirPatKind::Rest(inner) => {
-        record_pat(
-          ctx,
-          **inner,
-          body,
-          names,
-          result,
-          bindings,
-          binding_defs,
-          file,
-          unknown,
-          seen,
-        );
-      }
-      HirPatKind::Assign { target, .. } => {
-        record_pat(
-          ctx,
-          *target,
-          body,
-          names,
-          result,
-          bindings,
-          binding_defs,
-          file,
-          unknown,
-          seen,
-        );
-      }
-      HirPatKind::AssignTarget(_) => {}
-    }
-  }
-
-  fn seed_bindings(
-    bindings: &mut HashMap<String, TypeId>,
-    binding_defs: &mut HashMap<String, DefId>,
-    source: &HashMap<String, SymbolBinding>,
-    map_def_ty: impl Fn(DefId) -> TypeId,
-    unknown: TypeId,
-  ) {
-    for (name, binding) in source.iter() {
-      let ty = if let Some(def) = binding.def {
-        map_def_ty(def)
-      } else if let Some(ty) = binding.type_id {
-        ty
-      } else {
-        unknown
-      };
-      bindings.insert(name.clone(), ty);
-      if let Some(def) = binding.def {
-        binding_defs.insert(name.clone(), def);
-      }
-    }
-  }
-
-  fn collect_parent_bindings(
-    db: &BodyCheckDb,
-    body_id: BodyId,
-    bindings: &mut HashMap<String, TypeId>,
-    binding_defs: &mut HashMap<String, DefId>,
-    unknown: TypeId,
-  ) {
-    let ctx = &db.context;
-    let mut visited = HashSet::new();
-    let mut seen_names = HashSet::new();
-    let mut current = ctx.body_parents.get(&body_id).copied();
-    while let Some(parent) = current {
-      if !visited.insert(parent) {
-        break;
-      }
-      let parent_result = db.check_body(parent);
-      let Some(meta) = db.bc_body_info(parent) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(hir_id) = meta.hir else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(lowered) = db.bc_lower_hir(meta.file) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(body) = lowered.body(hir_id) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      for idx in 0..body.pats.len() {
-        record_pat(
-          ctx,
-          HirPatId(idx as u32),
-          body,
-          &lowered.names,
-          &parent_result,
-          bindings,
-          binding_defs,
-          meta.file,
-          unknown,
-          &mut seen_names,
-        );
-      }
-      current = ctx.body_parents.get(&parent).copied();
-    }
-  }
-
-  fn function_expr_span(db: &BodyCheckDb, body_id: BodyId) -> Option<TextRange> {
-    let ctx = &db.context;
-    let mut visited = HashSet::new();
-    let mut current = ctx.body_parents.get(&body_id).copied();
-    while let Some(parent) = current {
-      if !visited.insert(parent) {
-        break;
-      }
-      let Some(meta) = db.bc_body_info(parent) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(hir_body_id) = meta.hir else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(lowered) = db.bc_lower_hir(meta.file) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      let Some(parent_body) = lowered.body(hir_body_id) else {
-        current = ctx.body_parents.get(&parent).copied();
-        continue;
-      };
-      for expr in parent_body.exprs.iter() {
-        if let hir_js::ExprKind::FunctionExpr { body, .. } = expr.kind {
-          if body == body_id {
-            return Some(expr.span);
-          }
-        }
-      }
-      current = ctx.body_parents.get(&parent).copied();
-    }
-    None
-  }
-
-  fn contextual_callable_for_body(
-    db: &BodyCheckDb,
-    body_id: BodyId,
-    func_span: TextRange,
-  ) -> Option<TypeId> {
-    let store = &db.context.store;
-    let mut visited = HashSet::new();
-    let mut current = db.context.body_parents.get(&body_id).copied();
-    while let Some(parent) = current {
-      if !visited.insert(parent) {
-        break;
-      }
-      let parent_result = db.check_body(parent);
-      for (idx, span) in parent_result.expr_spans.iter().enumerate() {
-        if *span != func_span {
-          continue;
-        }
-        if let Some(ty) = parent_result.expr_types.get(idx).copied() {
-          if store.contains_type_id(ty)
-            && matches!(
-              store.type_kind(ty),
-              types_ts_interned::TypeKind::Callable { .. }
-            )
-          {
-            return Some(ty);
-          }
-        }
-      }
-      current = db.context.body_parents.get(&parent).copied();
-    }
-    None
-  }
-}
+pub mod body_check;
 impl Eq for LowerResultWithDiagnostics {}
 
 pub fn parse_query_count() -> usize {
@@ -1562,7 +673,7 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
     FileKind::Dts => Dialect::Dts,
   };
   let cancel = cancelled(db);
-  match parse_with_options_cancellable(
+  match parse_with_options_cancellable_detailed(
     &source,
     ParseOptions {
       dialect,
@@ -1570,7 +681,17 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
     },
     Arc::clone(&cancel),
   ) {
-    Ok(ast) => parser::ParseResult::ok(ast),
+    Ok(parsed) => {
+      let diagnostics = parsed
+        .soft_errors
+        .into_iter()
+        .map(|err| err.to_diagnostic(file_id))
+        .collect();
+      parser::ParseResult {
+        ast: Some(Arc::new(parsed.ast)),
+        diagnostics,
+      }
+    }
     Err(err) => {
       if err.typ == SyntaxErrorType::Cancelled {
         panic_any(crate::FatalError::Cancelled);
@@ -1769,13 +890,17 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::Bind, false));
   let files = all_files_for(db);
+  // Deliberately no direct `lower_hir_for` reads here: parse/lower diagnostics
+  // are aggregated by `program_diagnostics_for` from the per-file queries, and
+  // `sem_hir_for` output is content-comparable (`HirFile: Eq`), so a body-only
+  // edit backdates at `sem_hir_for` and this binder query is not re-executed —
+  // keeping the `Arc<TsProgramSemantics>` identity stable for downstream
+  // pointer-equality checks (notably the body-check context).
   let mut diagnostics = Vec::new();
   let mut sem_hirs: AHashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = AHashMap::new();
   sem_hirs.reserve(files.len());
   for file in files.iter() {
     panic_if_cancelled(db);
-    let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
-    diagnostics.extend(lowered.diagnostics.iter().cloned());
     sem_hirs.insert(
       sem_ts::FileId(file.0),
       Arc::new(sem_hir_for(
@@ -1939,9 +1064,13 @@ fn flat_defs_for(db: &dyn Db) -> Arc<HashMap<(FileId, String), DefId>> {
       let Some(name) = lowered.names.resolve(def.name) else {
         continue;
       };
+      // Prefer `class`/`enum` over `interface`/`type` for same-name TYPE merges so
+      // class+interface declaration merging hosts the instance on the class DefId
+      // (and `value_defs` can attach the constructor). Pure interface merges are
+      // unchanged (no class competitor).
       let priority = match def.path.kind {
-        DefKind::TypeAlias | DefKind::Interface => 0,
-        DefKind::Class | DefKind::Enum => 1,
+        DefKind::Class | DefKind::Enum => 0,
+        DefKind::TypeAlias | DefKind::Interface => 1,
         DefKind::Namespace | DefKind::Module => 2,
         DefKind::ImportBinding | DefKind::ExportAlias => 3,
         _ => 4,
@@ -2045,32 +1174,30 @@ fn decl_types_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
     };
   };
 
-  struct DbHost {
-    db: *const dyn Db,
+  // Borrowed, thread-local host view over the database. `DeclHost` (unlike the
+  // public `Host` trait) has no `Send + Sync` bounds, so a plain reference
+  // suffices — the wrapper never leaves this query invocation.
+  struct DbHost<'a> {
+    db: &'a dyn Db,
   }
 
-  unsafe impl Send for DbHost {}
-  unsafe impl Sync for DbHost {}
-
-  impl Host for DbHost {
+  impl crate::program::check::decls::DeclHost for DbHost<'_> {
     fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-      let db = unsafe { &*self.db };
+      let db = self.db;
       db.file_input_by_key(file)
         .map(|input| input.text(db))
         .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
     }
 
     fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-      let db = unsafe { &*self.db };
+      let db = self.db;
       let from_id = db.file_input_by_key(from).map(|input| input.file_id(db))?;
       let target_id = module_resolve_ref(db, from_id, specifier)?;
       db.file_input(target_id).map(|input| input.key(db))
     }
   }
 
-  let host = DbHost {
-    db: db as *const dyn Db,
-  };
+  let host = DbHost { db };
   let key_to_id = |key: &FileKey| db.file_input_by_key(key).map(|input| input.file_id(db));
   let file_id = file.file_id(db);
   let file_key = Some(file.key(db));
@@ -2359,10 +1486,9 @@ pub fn expr_at(db: &dyn Db, file: FileId, offset: u32) -> Option<(BodyId, ExprId
   let index = file_span_index(db, file);
   let body = index.body_at(offset)?;
 
-  if let Some(result) = db.body_result(body) {
-    if let Some((expr, _)) = expr_at_from_spans(result.expr_spans(), offset) {
-      return Some((body, expr));
-    }
+  let result = body_check::check_body(db, body);
+  if let Some((expr, _)) = expr_at_from_spans(result.expr_spans(), offset) {
+    return Some((body, expr));
   }
 
   index
@@ -2373,10 +1499,9 @@ pub fn expr_at(db: &dyn Db, file: FileId, offset: u32) -> Option<(BodyId, ExprId
 /// Span for a specific expression within a body.
 pub fn span_of_expr(db: &dyn Db, body: BodyId, expr: ExprId) -> Option<Span> {
   let file = body_file(db, body)?;
-  if let Some(result) = db.body_result(body) {
-    if let Some(range) = result.expr_span(expr) {
-      return Some(Span::new(file, range));
-    }
+  let result = body_check::check_body(db, body);
+  if let Some(range) = result.expr_span(expr) {
+    return Some(Span::new(file, range));
   }
   file_span_index(db, file)
     .span_of_expr(body, expr)
@@ -2393,13 +1518,12 @@ pub fn span_of_def(db: &dyn Db, def: DefId) -> Option<Span> {
 
 /// Type of the innermost expression at the given offset, if available.
 ///
-/// This uses cached [`BodyCheckResult`]s stored in the database by
-/// [`Program::check_body`](crate::Program::check_body). When no cached result is
-/// available the query returns `None` to avoid triggering type checking from
-/// within salsa.
+/// Runs the tracked [`body_check::check_body`] query for the covering body
+/// (memoized; a no-op when the body was already checked in this revision).
+/// Returns `None` when no body-check context has been published yet.
 pub fn type_at(db: &dyn Db, file: FileId, offset: u32) -> Option<TypeId> {
   let (body, expr) = expr_at(db, file, offset)?;
-  let result = db.body_result(body)?;
+  let result = body_check::check_body(db, body);
   if let Some((_, ty)) = result.expr_at(offset) {
     return Some(ty);
   }
@@ -2797,6 +1921,29 @@ pub fn var_initializer(db: &dyn Db, def: DefId) -> Option<VarInit> {
   var_initializer_in_file(lowered, def, def_span, def_name)
 }
 
+fn class_field_initializer_in_file(
+  lowered: &LowerResult,
+  hir_def: &hir_js::DefData,
+) -> Option<VarInit> {
+  let body_id = hir_def.body?;
+  let body = lowered.body(body_id)?;
+  if !matches!(body.kind, hir_js::BodyKind::Initializer) {
+    return None;
+  }
+  let expr = body.stmts.iter().find_map(|stmt| match &stmt.kind {
+    StmtKind::Expr(expr) => Some(*expr),
+    _ => None,
+  })?;
+  Some(VarInit {
+    body: body_id,
+    expr,
+    // Instance/static fields widen like `let` (not const-literal retaining).
+    decl_kind: VarDeclKind::Let,
+    pat: None,
+    span: Some(hir_def.span),
+  })
+}
+
 pub(crate) fn var_initializer_in_file(
   lowered: &LowerResult,
   def: DefId,
@@ -2806,7 +1953,13 @@ pub(crate) fn var_initializer_in_file(
   let hir_def = lowered.def(def)?;
   match hir_def.path.kind {
     DefKind::Var | DefKind::VarDeclarator => {}
-    DefKind::Field | DefKind::Param => return None,
+    // Class fields are value defs with a synthesized Initializer body (root
+    // `Expr` stmt). Wire them here so `type_of_def` can infer from `prop = 1`
+    // under `--strict` / `--declaration` (avoids spurious TC3000).
+    DefKind::Field => {
+      return class_field_initializer_in_file(lowered, hir_def);
+    }
+    DefKind::Param => return None,
     _ if def_name != Some("default") => return None,
     _ => {}
   }
@@ -3524,10 +2677,35 @@ pub fn aggregate_program_diagnostics(
   semantic: impl IntoIterator<Item = Diagnostic>,
   bodies: impl IntoIterator<Item = Diagnostic>,
 ) -> Arc<[Diagnostic]> {
-  let mut diagnostics: Vec<_> = parse.into_iter().collect();
+  let parse: Vec<_> = parse.into_iter().collect();
+  // tsc `grammarErrorOnNode`: skip private-identifier grammar diagnostics when
+  // the source file already has parse diagnostics (e.g. TS1005 / PS0013).
+  let files_with_parse_errors: AHashSet<FileId> = parse
+    .iter()
+    .filter(|d| {
+      let c = d.code.as_str();
+      c.starts_with("PS") || c == "TS1005"
+    })
+    .map(|d| d.primary.file)
+    .collect();
+  let mut diagnostics = parse;
   diagnostics.extend(lower);
   diagnostics.extend(semantic);
   diagnostics.extend(bodies);
+  if !files_with_parse_errors.is_empty() {
+    diagnostics.retain(|d| {
+      if !files_with_parse_errors.contains(&d.primary.file) {
+        return true;
+      }
+      // tsc `grammarErrorOnNode` + same-position parse-error suppression:
+      // private-identifier grammar diagnostics are dropped when the file already
+      // has parse errors (e.g. `C[#bar]` → TS1005 then recovered `#bar` binding).
+      !matches!(
+        d.code.as_str(),
+        "TS1451" | "TS18016" | "TS18009" | "TS18029"
+      )
+    });
+  }
   aggregate_diagnostics(diagnostics)
 }
 
@@ -3539,9 +2717,8 @@ fn extra_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
 }
 
 fn body_diagnostics_from_results(db: &dyn Db, body: BodyId) -> Arc<[Diagnostic]> {
-  db.body_result(body)
-    .map(|result| Arc::from(result.diagnostics.clone().into_boxed_slice()))
-    .unwrap_or_else(|| Arc::from([]))
+  let result = body_check::check_body(db, body);
+  Arc::from(result.diagnostics.clone().into_boxed_slice())
 }
 
 #[salsa::tracked]

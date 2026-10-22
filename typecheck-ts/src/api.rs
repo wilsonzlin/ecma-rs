@@ -32,7 +32,7 @@ pub use types_ts_interned::TypeId as InternedTypeId;
 pub use types_ts_interned::TypeParamId;
 
 /// Stable identifiers produced by lowering to HIR.
-pub use hir_js::{BodyId, DefId, ExprId, PatId};
+pub use hir_js::{BodyId, DefId, ExprId, LocalId, PatId};
 
 /// Stable key chosen by the host to identify a file.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

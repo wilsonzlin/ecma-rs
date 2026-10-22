@@ -66,7 +66,9 @@ impl PromiseRejectionTracker {
       heap.remove_root(root);
       return;
     }
-    self.about_to_be_notified.push(AboutToBeNotifiedEntry { promise, root });
+    self
+      .about_to_be_notified
+      .push(AboutToBeNotifiedEntry { promise, root });
   }
 
   /// Called when the engine reports `HostPromiseRejectionTracker(promise, "handle")`.

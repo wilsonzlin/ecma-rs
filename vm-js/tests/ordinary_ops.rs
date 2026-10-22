@@ -23,7 +23,11 @@ fn getter(
   let expected = EXPECTED_THIS
     .with(|t| t.get())
     .expect("EXPECTED_THIS should be set by the test");
-  assert_eq!(this, Value::Object(expected), "`this` should be the receiver");
+  assert_eq!(
+    this,
+    Value::Object(expected),
+    "`this` should be the receiver"
+  );
 
   // Force a GC to ensure `Vm::get` + `Vm::call` root the receiver correctly while invoking the
   // getter.
@@ -192,7 +196,10 @@ fn to_string_and_to_number_cover_webidl_primitives() -> Result<(), VmError> {
     let s = scope.alloc_string("+Infinity")?;
     assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::INFINITY);
     let s = scope.alloc_string("-Infinity")?;
-    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::NEG_INFINITY);
+    assert_eq!(
+      scope.heap_mut().to_number(Value::String(s))?,
+      f64::NEG_INFINITY
+    );
     let s = scope.alloc_string("inf")?;
     assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
     let s = scope.alloc_string("infinity")?;

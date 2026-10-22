@@ -10,7 +10,10 @@ fn code_units_of_first_expr_statement(source: &str) -> Vec<u16> {
     panic!("expected expression statement, got {:?}", stmt.stx);
   };
   let Expr::LitStr(lit) = expr_stmt.stx.expr.stx.as_ref() else {
-    panic!("expected string literal expression, got {:?}", expr_stmt.stx.expr.stx);
+    panic!(
+      "expected string literal expression, got {:?}",
+      expr_stmt.stx.expr.stx
+    );
   };
   literal_string_code_units(&lit.assoc)
     .expect("expected LiteralStringCodeUnits assoc data")
@@ -48,4 +51,3 @@ fn preserves_braced_surrogate_code_point_escape_as_single_code_unit() {
     vec![0xD800]
   );
 }
-

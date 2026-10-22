@@ -209,7 +209,7 @@ fn hir_decl_lowering_lowers_empty_object_type_literal() {
     HashMap::new(),
     alias.path.module,
     None,
-    HashMap::new(),
+    Default::default(),
     &mut diagnostics,
     None,
     None,
@@ -403,6 +403,7 @@ fn eval_mapped_type_over_keyof() {
 
   let param = TypeParamId(0);
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param,
     source: store.intern_type(TypeKind::KeyOf(obj)),
     value: store.intern_type(TypeKind::IndexedAccess {
@@ -472,7 +473,7 @@ fn hir_decl_lowering_preserves_mapped_as_clause() {
     HashMap::new(),
     alias.path.module,
     None,
-    HashMap::new(),
+    Default::default(),
     &mut diagnostics,
     None,
     None,

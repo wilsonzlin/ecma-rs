@@ -35,7 +35,9 @@ pub fn set_function_name(
     },
   )?;
 
-  scope.heap_mut().set_function_name_metadata(func, computed)?;
+  scope
+    .heap_mut()
+    .set_function_name_metadata(func, computed)?;
   Ok(())
 }
 
@@ -68,7 +70,9 @@ pub fn set_function_length(
     },
   )?;
 
-  scope.heap_mut().set_function_length_metadata(func, length)?;
+  scope
+    .heap_mut()
+    .set_function_length_metadata(func, length)?;
   Ok(())
 }
 
@@ -78,11 +82,22 @@ pub fn set_function_length(
 /// This defines:
 /// - `F.prototype` as a writable, non-enumerable, non-configurable data property
 /// - `F.prototype.constructor` as a writable, non-enumerable, configurable data property
-pub fn make_constructor(scope: &mut Scope<'_>, func: GcObject) -> Result<GcObject, VmError> {
+///
+/// `object_prototype` is `%Object.prototype%` for `OrdinaryObjectCreate` (ECMA-262
+/// MakeConstructor). Pass `None` only during intrinsic bootstrap when the `.prototype`
+/// property will be replaced immediately.
+pub fn make_constructor(
+  scope: &mut Scope<'_>,
+  func: GcObject,
+  object_prototype: Option<GcObject>,
+) -> Result<GcObject, VmError> {
   let mut scope = scope.reborrow();
   scope.push_root(Value::Object(func))?;
+  if let Some(object_prototype) = object_prototype {
+    scope.push_root(Value::Object(object_prototype))?;
+  }
 
-  let prototype = scope.alloc_object()?;
+  let prototype = scope.alloc_object_with_prototype(object_prototype)?;
   scope.push_root(Value::Object(prototype))?;
 
   let constructor_key = scope.alloc_string("constructor")?;

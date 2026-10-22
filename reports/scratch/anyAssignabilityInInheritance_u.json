@@ -1,0 +1,125 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/anyAssignabilityInInheritance.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/anyAssignabilityInInheritance.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2705,
+      "rust_ms": 2085,
+      "tsc_ms": 619,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/anyAssignabilityInInheritance.ts",
+            "start": 1569,
+            "end": 1571,
+            "severity": "error",
+            "message": "unresolved type 'x'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/anyAssignabilityInInheritance.ts",
+            "start": 1585,
+            "end": 1587,
+            "severity": "error",
+            "message": "unresolved type 'x'"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": []
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 2 extra diagnostic(s); first extra: /anyAssignabilityInInheritance.ts:1569-1571 [TC2008]",
+        "rust": {
+          "engine": "rust",
+          "code": "TC2008",
+          "file": "/anyAssignabilityInInheritance.ts",
+          "start": 1569,
+          "end": 1571,
+          "severity": "error",
+          "message": "unresolved type 'x'"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_extra_diagnostics (shard 32/64) rust=[TC2008,TC2008,TC2008] tsc=[-]"
+      },
+      "mismatched": true
+    }
+  ]
+}

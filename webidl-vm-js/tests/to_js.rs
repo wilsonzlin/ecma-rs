@@ -1,5 +1,8 @@
 use vm_js::{Heap, HeapLimits, Value, Vm, VmOptions};
-use webidl::{record_to_js_object, sequence_to_js_array, InterfaceId, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits};
+use webidl::{
+  record_to_js_object, sequence_to_js_array, InterfaceId, JsRuntime, PropertyKey, WebIdlHooks,
+  WebIdlLimits,
+};
 use webidl_vm_js::VmJsWebIdlCx;
 
 struct NoHooks;
@@ -14,7 +17,10 @@ impl WebIdlHooks<Value> for NoHooks {
   }
 }
 
-fn prop_key_str(cx: &mut VmJsWebIdlCx<'_>, s: &str) -> PropertyKey<vm_js::GcString, vm_js::GcSymbol> {
+fn prop_key_str(
+  cx: &mut VmJsWebIdlCx<'_>,
+  s: &str,
+) -> PropertyKey<vm_js::GcString, vm_js::GcSymbol> {
   let units: Vec<u16> = s.encode_utf16().collect();
   let handle = cx
     .alloc_string_from_code_units(&units)
@@ -42,7 +48,10 @@ fn sequence_to_js_array_and_record_to_js_object_work_under_gc() {
     let Value::String(s) = v else {
       panic!("expected string element");
     };
-    assert_eq!(cx.scope.heap().get_string(s).unwrap().to_utf8_lossy(), *expected);
+    assert_eq!(
+      cx.scope.heap().get_string(s).unwrap().to_utf8_lossy(),
+      *expected
+    );
   }
 
   let length_key = prop_key_str(&mut cx, "length");
@@ -93,4 +102,3 @@ fn sequence_to_js_array_and_record_to_js_object_work_under_gc() {
     .collect::<Vec<_>>();
   assert_eq!(keys, vec!["b".to_string(), "a".to_string()]);
 }
-

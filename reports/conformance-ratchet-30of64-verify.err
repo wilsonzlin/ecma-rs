@@ -1,0 +1,46 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `release` profile [optimized] target(s) in 0.09s
+     Running `target/release/typecheck-ts-harness conformance --root parse-js/tests/TypeScript/tests/cases/conformance --shard 30/64 --shard-strategy hash --compare tsc --timeout-secs 20 --manifest typecheck-ts-harness/fixtures/conformance_manifest.toml --fail-on new --json`
+
+thread '<unnamed>' (2957223) panicked at typecheck-ts/src/db/queries/body_check.rs:477:5:
+Box<dyn Any>
+stack backtrace:
+   0:     0x64be5d7ef042 - <unknown>
+   1:     0x64be5d5525df - <unknown>
+   2:     0x64be5d7eea7f - <unknown>
+   3:     0x64be5d7eeea3 - <unknown>
+   4:     0x64be5d7ee4ae - <unknown>
+   5:     0x64be5d992f70 - <unknown>
+   6:     0x64be5d992f06 - <unknown>
+   7:     0x64be5d860906 - <unknown>
+   8:     0x64be5da10352 - <unknown>
+   9:     0x64be5da0a459 - <unknown>
+  10:     0x64be5da0a0e5 - <unknown>
+  11:     0x64be5da0024d - <unknown>
+  12:     0x64be5db618ad - <unknown>
+  13:     0x64be5db4c19f - <unknown>
+  14:     0x64be5db4a7c2 - <unknown>
+  15:     0x64be5dd27be9 - <unknown>
+  16:     0x64be5dd2353b - <unknown>
+  17:     0x64be5dd24ebd - <unknown>
+  18:     0x64be5dd2428d - <unknown>
+  19:     0x64be5dd24c78 - <unknown>
+  20:     0x64be5dd2428d - <unknown>
+  21:     0x64be5dd24ebd - <unknown>
+  22:     0x64be5dd2428d - <unknown>
+  23:     0x64be5dd24c78 - <unknown>
+  24:     0x64be5dd2428d - <unknown>
+  25:     0x64be5dd262f0 - <unknown>
+  26:     0x64be5d6ff4e1 - <unknown>
+  27:     0x64be5d6fec15 - <unknown>
+  28:     0x64be5d6fe811 - <unknown>
+  29:     0x64be5d820a7f - <unknown>
+  30:     0x7eb8beea40da - start_thread
+                               at ./nptl/pthread_create.c:454:8
+  31:     0x7eb8bef377ac - __GI___clone3
+                               at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+  32:                0x0 - <unknown>

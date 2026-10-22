@@ -131,6 +131,7 @@ fn assert_emit_stmt(stmt: Node<Stmt>, expected: &str) {
 fn emits_var_declarations() {
   let decl = node(Stmt::VarDecl(node(VarDecl {
     export: false,
+    declare: false,
     mode: VarDeclMode::Let,
     declarators: vec![VarDeclarator {
       pattern: pat_id("a"),
@@ -143,6 +144,7 @@ fn emits_var_declarations() {
 
   let decl = node(Stmt::VarDecl(node(VarDecl {
     export: false,
+    declare: false,
     mode: VarDeclMode::Const,
     declarators: vec![
       VarDeclarator {
@@ -188,6 +190,7 @@ fn emits_for_triple_statement() {
   let stmt = node(Stmt::ForTriple(node(ForTripleStmt {
     init: ForTripleStmtInit::Decl(node(VarDecl {
       export: false,
+      declare: false,
       mode: VarDeclMode::Let,
       declarators: vec![VarDeclarator {
         pattern: pat_id("i"),

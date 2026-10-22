@@ -1,0 +1,810 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembersAccessibility.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembersAccessibility.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2163,
+      "rust_ms": 1544,
+      "tsc_ms": 619,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 494,
+            "end": 495,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 506,
+            "end": 507,
+            "severity": "error",
+            "message": "i is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 518,
+            "end": 519,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 526,
+            "end": 527,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 530,
+            "end": 531,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 565,
+            "end": 566,
+            "severity": "error",
+            "message": "i is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 577,
+            "end": 578,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 585,
+            "end": 586,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 589,
+            "end": 590,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 636,
+            "end": 637,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 644,
+            "end": 645,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 648,
+            "end": 649,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 703,
+            "end": 704,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 707,
+            "end": 708,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 726,
+            "end": 727,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 748,
+            "end": 749,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 770,
+            "end": 771,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 792,
+            "end": 793,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2403",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 980,
+            "end": 981,
+            "severity": "error",
+            "message": "Subsequent variable declarations must have the same type.  Variable 'a' must be of type 'ref#13824171141611990284', but here has type '{ foo: string }'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2403",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1009,
+            "end": 1010,
+            "severity": "error",
+            "message": "Subsequent variable declarations must have the same type.  Variable 'b' must be of type 'ref#13824171141611990284', but here has type 'ref#13824171140718559766'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2403",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1027,
+            "end": 1028,
+            "severity": "error",
+            "message": "Subsequent variable declarations must have the same type.  Variable 'i' must be of type 'ref#13824171141611990284', but here has type 'ref#13824171138255655542'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1199,
+            "end": 1200,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1220,
+            "end": 1221,
+            "severity": "error",
+            "message": "i is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1241,
+            "end": 1242,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1249,
+            "end": 1250,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1253,
+            "end": 1254,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1297,
+            "end": 1298,
+            "severity": "error",
+            "message": "i is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1309,
+            "end": 1310,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1326,
+            "end": 1327,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1330,
+            "end": 1331,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1402,
+            "end": 1403,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1419,
+            "end": 1420,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1423,
+            "end": 1424,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1508,
+            "end": 1509,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1512,
+            "end": 1513,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1531,
+            "end": 1532,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1553,
+            "end": 1554,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1575,
+            "end": 1576,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1597,
+            "end": 1598,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 494,
+            "end": 495,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 506,
+            "end": 507,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 518,
+            "end": 519,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 526,
+            "end": 527,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 530,
+            "end": 531,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 565,
+            "end": 566,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 577,
+            "end": 578,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 585,
+            "end": 586,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 589,
+            "end": 590,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 636,
+            "end": 637,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 644,
+            "end": 645,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 648,
+            "end": 649,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 703,
+            "end": 704,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 707,
+            "end": 708,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 726,
+            "end": 727,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 748,
+            "end": 749,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 770,
+            "end": 771,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 792,
+            "end": 793,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1195,
+            "end": 1196,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1199,
+            "end": 1200,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1216,
+            "end": 1217,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1220,
+            "end": 1221,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1241,
+            "end": 1242,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1249,
+            "end": 1250,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1253,
+            "end": 1254,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1272,
+            "end": 1273,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1297,
+            "end": 1298,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1305,
+            "end": 1306,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1309,
+            "end": 1310,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1326,
+            "end": 1327,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1330,
+            "end": 1331,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1365,
+            "end": 1366,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1398,
+            "end": 1399,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1402,
+            "end": 1403,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1419,
+            "end": 1420,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1423,
+            "end": 1424,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1466,
+            "end": 1467,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1487,
+            "end": 1488,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1508,
+            "end": 1509,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1512,
+            "end": 1513,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1531,
+            "end": 1532,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1553,
+            "end": 1554,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1575,
+            "end": 1576,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+            "start": 1597,
+            "end": 1598,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 8 diagnostic(s); first missing: /assignmentCompatWithObjectMembersAccessibility.ts:1195-1196 [2322]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/assignmentCompatWithObjectMembersAccessibility.ts",
+          "start": 1195,
+          "end": 1196,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 13/64) rust=[TC2008,TC2008,TC2008,TC2008,TS2322,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TC2008,TC2008,TC2008,TC2008,TS2322,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454] tsc=[2454,2454,2454,2322,2454,2454,2454,2322,2454,2454,2322,2454,2322,2454,2322,2322,2322,2322,2322,2454,2322,2454,2454,2322,2454,2322,2454,2322,2454,2322,2454,2322,2322,2454,2322,2454,2322,2322,2322,2454,2322,2322,2322,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

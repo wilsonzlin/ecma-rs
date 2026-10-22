@@ -31,14 +31,18 @@ fn switch_matching_case_returns_last_statement_value() {
 #[test]
 fn switch_default_clause_executes_when_no_cases_match() {
   let mut rt = new_runtime();
-  let value = rt.exec_script("switch (0) { case 1: 1; default: 2; }").unwrap();
+  let value = rt
+    .exec_script("switch (0) { case 1: 1; default: 2; }")
+    .unwrap();
   assert_eq!(value, Value::Number(2.0));
 }
 
 #[test]
 fn switch_fallthrough_updates_value_with_last_executed_clause() {
   let mut rt = new_runtime();
-  let value = rt.exec_script("switch (0) { case 0: 1; case 1: 2; }").unwrap();
+  let value = rt
+    .exec_script("switch (0) { case 0: 1; case 1: 2; }")
+    .unwrap();
   assert_eq!(value, Value::Number(2.0));
 }
 
@@ -124,10 +128,49 @@ fn switch_let_is_not_visible_outside_case_block() {
 }
 
 #[test]
+fn switch_generator_decl_is_not_visible_outside_case_block() {
+  // ECMA-262 §14.12 CaseBlock + §14.2.3: GeneratorDeclaration is lexically scoped to the
+  // CaseBlock. Unlike ordinary FunctionDeclaration, Annex B.3.2 does not add a var binding.
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { switch (0) { default: function * x() {} } x } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "ReferenceError");
+}
+
+#[test]
+fn switch_async_function_decl_is_not_visible_outside_case_block() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { switch (0) { default: async function x() {} } x } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "ReferenceError");
+}
+
+#[test]
+fn switch_generator_decl_is_usable_inside_case_block() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        switch (0) {
+          default:
+            function * g() { yield 7; }
+            g().next().value;
+        }
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Number(7.0));
+}
+
+#[test]
 fn switch_let_tdz_applies_across_case_clauses() {
   let mut rt = new_runtime();
   let value = rt
-    .exec_script(r#"try { switch (0) { case 0: x; break; case 1: let x = 1; } } catch(e) { e.name }"#)
+    .exec_script(
+      r#"try { switch (0) { case 0: x; break; case 1: let x = 1; } } catch(e) { e.name }"#,
+    )
     .unwrap();
   assert_value_is_utf8(&rt, value, "ReferenceError");
 }
@@ -135,7 +178,9 @@ fn switch_let_tdz_applies_across_case_clauses() {
 #[test]
 fn switch_let_initialized_is_visible_in_same_clause() {
   let mut rt = new_runtime();
-  let value = rt.exec_script("switch (0) { case 0: let x = 1; x }").unwrap();
+  let value = rt
+    .exec_script("switch (0) { case 0: let x = 1; x }")
+    .unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
 

@@ -1,5 +1,8 @@
 use crate::source::format_stack_trace;
-use crate::{Budget, Heap, HeapLimits, JsRuntime, Realm, SourceText, Termination, Value, Vm, VmError, VmOptions};
+use crate::{
+  Budget, Heap, HeapLimits, JsRuntime, Realm, SourceText, Termination, Value, Vm, VmError,
+  VmOptions,
+};
 use std::sync::Arc;
 
 /// Host integration hooks for [`Agent`] script execution.
@@ -140,15 +143,21 @@ impl Agent {
 
   /// Convert a JavaScript value into a host-owned string for exception reporting.
   ///
-  /// This uses the VM's `ToString` implementation (via [`Heap::to_string`]).
+  /// Uses the full `ToString` abstract operation (including `ToPrimitive` for objects).
   pub fn value_to_error_string(&mut self, value: Value) -> String {
-    let s = match self.heap_mut().to_string(value) {
-      Ok(s) => s,
-      // If ToString itself throws, format the thrown value.
-      Err(VmError::Throw(v) | VmError::ThrowWithStack { value: v, .. }) => {
-        return self.value_to_error_string(v);
+    let s = {
+      // `vm` and `heap` are distinct fields; NLL allows simultaneous mutable borrows.
+      let runtime = &mut self.runtime;
+      let mut scope = runtime.heap.scope();
+      match crate::spec_ops::to_string(&mut runtime.vm, &mut scope, value) {
+        Ok(s) => s,
+        // If ToString itself throws, format the thrown value.
+        Err(VmError::Throw(v) | VmError::ThrowWithStack { value: v, .. }) => {
+          drop(scope);
+          return self.value_to_error_string(v);
+        }
+        Err(_) => return format!("{value:?}"),
       }
-      Err(_) => return format!("{value:?}"),
     };
 
     self

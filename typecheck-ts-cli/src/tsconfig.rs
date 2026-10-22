@@ -77,6 +77,8 @@ struct RawCompilerOptions {
   #[serde(default)]
   use_define_for_class_fields: Option<bool>,
   #[serde(default)]
+  strict_property_initialization: Option<bool>,
+  #[serde(default)]
   jsx: Option<String>,
   #[serde(default)]
   jsx_import_source: Option<String>,
@@ -375,6 +377,9 @@ fn merge_raw_compiler_options(
     use_define_for_class_fields: overlay
       .use_define_for_class_fields
       .or(base.use_define_for_class_fields),
+    strict_property_initialization: overlay
+      .strict_property_initialization
+      .or(base.strict_property_initialization),
     jsx: overlay.jsx.or(base.jsx),
     jsx_import_source: overlay.jsx_import_source.or(base.jsx_import_source),
     base_url: overlay.base_url.or(base.base_url),
@@ -444,6 +449,7 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
     options.strict_null_checks = strict;
     options.no_implicit_any = strict;
     options.strict_function_types = strict;
+    options.strict_property_initialization = strict;
   }
   if let Some(value) = raw.no_implicit_any {
     options.no_implicit_any = value;
@@ -467,6 +473,9 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
 
   if let Some(value) = raw.use_define_for_class_fields {
     options.use_define_for_class_fields = value;
+  }
+  if let Some(value) = raw.strict_property_initialization {
+    options.strict_property_initialization = value;
   }
 
   if let Some(raw) = raw.jsx.as_deref() {

@@ -3,8 +3,8 @@ use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, 
 use crate::string::JsString;
 use crate::{
   GcObject, Job, JobKind, PromiseCapability, PromiseHandle, PromiseReaction, PromiseReactionType,
-  PromiseRejectionOperation, PromiseState, RealmId, RootId, Scope, Value, Vm, VmError, VmHostHooks,
-  VmHost,
+  PromiseRejectionOperation, PromiseState, RealmId, RootId, Scope, Value, Vm, VmError, VmHost,
+  VmHostHooks,
 };
 
 fn data_desc(
@@ -24,6 +24,43 @@ fn require_intrinsics(vm: &Vm) -> Result<crate::Intrinsics, VmError> {
   vm.intrinsics().ok_or(VmError::Unimplemented(
     "native builtins require Vm::intrinsics to be set",
   ))
+}
+
+/// `%IntrinsicDefaultProto%` from GetFunctionRealm(newTarget), else the active realm.
+fn default_proto_from_new_target(
+  vm: &Vm,
+  scope: &Scope<'_>,
+  new_target: Value,
+  pick: impl FnOnce(&crate::Intrinsics) -> GcObject,
+) -> Result<GcObject, VmError> {
+  let active = require_intrinsics(vm)?;
+  let Value::Object(nt) = new_target else {
+    return Ok(pick(&active));
+  };
+  let Some(intr) = vm.intrinsics_for_function(scope.heap(), nt)? else {
+    return Ok(pick(&active));
+  };
+  Ok(pick(&intr))
+}
+
+/// `Get(newTarget, "prototype")` if Object; otherwise `default_proto`.
+fn prototype_from_new_target(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  new_target: Value,
+  default_proto: GcObject,
+) -> Result<GcObject, VmError> {
+  let Value::Object(nt) = new_target else {
+    return Ok(default_proto);
+  };
+  let mut s = scope.reborrow();
+  s.push_root(Value::Object(nt))?;
+  s.push_root(Value::Object(default_proto))?;
+  let key = string_key(&mut s, "prototype")?;
+  match vm.get(&mut s, nt, key)? {
+    Value::Object(p) => Ok(p),
+    _ => Ok(default_proto),
+  }
 }
 
 fn require_object(value: Value) -> Result<GcObject, VmError> {
@@ -131,6 +168,131 @@ fn get_own_data_property_value_by_name(
       "accessor properties are not yet supported",
     )),
   }
+}
+
+/// Minimal `ToPropertyDescriptor(Obj)` for own data fields on a descriptor object.
+///
+/// Matches the `Object.defineProperty` path: reads own data properties named
+/// `value`/`writable`/`enumerable`/`configurable`/`get`/`set`. Full `HasProperty`+`Get`
+/// (prototype-chain) ToPropertyDescriptor is deferred.
+fn to_property_descriptor_patch(
+  scope: &mut Scope<'_>,
+  desc_obj: GcObject,
+) -> Result<PropertyDescriptorPatch, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(Value::Object(desc_obj))?;
+
+  let value = get_own_data_property_value_by_name(&mut scope, desc_obj, "value")?;
+  let writable = get_own_data_property_value_by_name(&mut scope, desc_obj, "writable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let enumerable = get_own_data_property_value_by_name(&mut scope, desc_obj, "enumerable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let configurable = get_own_data_property_value_by_name(&mut scope, desc_obj, "configurable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let get = get_own_data_property_value_by_name(&mut scope, desc_obj, "get")?;
+  let set = get_own_data_property_value_by_name(&mut scope, desc_obj, "set")?;
+
+  if let Some(getter) = get {
+    if !matches!(getter, Value::Undefined) && !scope.heap().is_callable(getter)? {
+      return Err(VmError::TypeError(
+        "property descriptor 'get' must be callable or undefined",
+      ));
+    }
+  }
+  if let Some(setter) = set {
+    if !matches!(setter, Value::Undefined) && !scope.heap().is_callable(setter)? {
+      return Err(VmError::TypeError(
+        "property descriptor 'set' must be callable or undefined",
+      ));
+    }
+  }
+
+  let patch = PropertyDescriptorPatch {
+    enumerable,
+    configurable,
+    value,
+    writable,
+    get,
+    set,
+  };
+  patch.validate()?;
+  Ok(patch)
+}
+
+/// `ObjectDefineProperties(O, Properties)` (ECMA-262 §20.1.2.3.1).
+fn object_define_properties_on(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  o: GcObject,
+  properties: Value,
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(Value::Object(o))?;
+
+  // `ToObject(Properties)` — null/undefined throw; other primitives are not boxed yet.
+  let props = match properties {
+    Value::Undefined | Value::Null => {
+      return Err(VmError::TypeError(
+        "Object.defineProperties Properties is null or undefined",
+      ));
+    }
+    Value::Object(obj) => obj,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Object.defineProperties Properties ToObject boxing",
+      ));
+    }
+  };
+  scope.push_root(Value::Object(props))?;
+
+  // Spec: collect enumerable own keys + ToPropertyDescriptor first, then DefinePropertyOrThrow.
+  let keys = scope.heap().ordinary_own_property_keys(props)?;
+  let mut descriptors: Vec<(PropertyKey, PropertyDescriptorPatch)> = Vec::new();
+  descriptors
+    .try_reserve_exact(keys.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+
+  for key in keys {
+    root_property_key(&mut scope, key)?;
+    let Some(prop_desc) = scope.heap().object_get_own_property(props, &key)? else {
+      continue;
+    };
+    if !prop_desc.enumerable {
+      continue;
+    }
+
+    // `Get(props, nextKey)` (invokes getters on the properties bag).
+    let desc_val = vm.get(&mut scope, props, key)?;
+    let desc_obj = match desc_val {
+      Value::Object(obj) => obj,
+      _ => {
+        return Err(VmError::TypeError("Property description must be an object"));
+      }
+    };
+    scope.push_root(Value::Object(desc_obj))?;
+
+    let patch = to_property_descriptor_patch(&mut scope, desc_obj)?;
+    if let Some(v) = patch.value {
+      scope.push_root(v)?;
+    }
+    if let Some(v) = patch.get {
+      scope.push_root(v)?;
+    }
+    if let Some(v) = patch.set {
+      scope.push_root(v)?;
+    }
+    descriptors.push((key, patch));
+  }
+
+  for (key, patch) in descriptors {
+    root_property_key(&mut scope, key)?;
+    scope.define_property_or_throw(o, key, patch)?;
+  }
+
+  Ok(Value::Object(o))
 }
 
 pub fn function_prototype_call(
@@ -260,7 +422,7 @@ pub fn object_constructor_construct(
 }
 
 pub fn object_define_property(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -274,34 +436,13 @@ pub fn object_define_property(
   scope.push_root(Value::Object(target))?;
 
   let prop = args.get(1).copied().unwrap_or(Value::Undefined);
-  let key = scope.heap_mut().to_property_key(prop)?;
+  let key = crate::spec_ops::to_property_key(vm, &mut scope, prop)?;
   root_property_key(&mut scope, key)?;
 
   let desc_obj = require_object(args.get(2).copied().unwrap_or(Value::Undefined))?;
   scope.push_root(Value::Object(desc_obj))?;
 
-  let value = get_own_data_property_value_by_name(&mut scope, desc_obj, "value")?;
-  let writable = get_own_data_property_value_by_name(&mut scope, desc_obj, "writable")?
-    .map(|v| scope.heap().to_boolean(v))
-    .transpose()?;
-  let enumerable = get_own_data_property_value_by_name(&mut scope, desc_obj, "enumerable")?
-    .map(|v| scope.heap().to_boolean(v))
-    .transpose()?;
-  let configurable = get_own_data_property_value_by_name(&mut scope, desc_obj, "configurable")?
-    .map(|v| scope.heap().to_boolean(v))
-    .transpose()?;
-  let get = get_own_data_property_value_by_name(&mut scope, desc_obj, "get")?;
-  let set = get_own_data_property_value_by_name(&mut scope, desc_obj, "set")?;
-
-  let patch = PropertyDescriptorPatch {
-    enumerable,
-    configurable,
-    value,
-    writable,
-    get,
-    set,
-  };
-  patch.validate()?;
+  let patch = to_property_descriptor_patch(&mut scope, desc_obj)?;
 
   let ok = scope.define_own_property(target, key, patch)?;
   if !ok {
@@ -310,8 +451,9 @@ pub fn object_define_property(
   Ok(Value::Object(target))
 }
 
-pub fn object_create(
-  _vm: &mut Vm,
+/// `Object.defineProperties(O, Properties)` (ECMA-262 §20.1.2.3).
+pub fn object_define_properties(
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -319,6 +461,21 @@ pub fn object_create(
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
+  let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+  let properties = args.get(1).copied().unwrap_or(Value::Undefined);
+  object_define_properties_on(vm, scope, target, properties)
+}
+
+pub fn object_create(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
   let proto_val = args.get(0).copied().unwrap_or(Value::Undefined);
   let proto = match proto_val {
     Value::Object(o) => Some(o),
@@ -330,14 +487,17 @@ pub fn object_create(
     }
   };
 
-  if let Some(properties_object) = args.get(1).copied() {
-    if !matches!(properties_object, Value::Undefined) {
-      return Err(VmError::Unimplemented("Object.create propertiesObject"));
+  let obj = scope.alloc_object()?;
+  scope.heap_mut().object_set_prototype(obj, proto)?;
+  scope.push_root(Value::Object(obj))?;
+
+  // Spec: if Properties is not undefined, `Return ? ObjectDefineProperties(obj, Properties)`.
+  if let Some(properties) = args.get(1).copied() {
+    if !matches!(properties, Value::Undefined) {
+      return object_define_properties_on(vm, &mut scope, obj, properties);
     }
   }
 
-  let obj = scope.alloc_object()?;
-  scope.heap_mut().object_set_prototype(obj, proto)?;
   Ok(Value::Object(obj))
 }
 
@@ -466,8 +626,53 @@ pub fn object_set_prototype_of(
     }
   };
 
-  scope.heap_mut().object_set_prototype(obj, proto)?;
+  // OrdinarySetPrototypeOf: same value is always ok; otherwise require [[Extensible]].
+  let current = scope.heap().object_prototype(obj)?;
+  if current != proto {
+    if !scope.heap().object_is_extensible(obj)? {
+      return Err(VmError::TypeError(
+        "Object.setPrototypeOf called on a non-extensible object",
+      ));
+    }
+    scope.heap_mut().object_set_prototype(obj, proto)?;
+  }
   Ok(Value::Object(obj))
+}
+
+/// `Object.preventExtensions(O)` (ECMA-262 §20.1.2.19).
+pub fn object_prevent_extensions(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let o = args.first().copied().unwrap_or(Value::Undefined);
+  let Value::Object(obj) = o else {
+    // Non-objects are returned unchanged.
+    return Ok(o);
+  };
+  scope.object_prevent_extensions(obj)?;
+  Ok(Value::Object(obj))
+}
+
+/// `Object.isExtensible(O)` (ECMA-262 §20.1.2.13).
+pub fn object_is_extensible(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let o = args.first().copied().unwrap_or(Value::Undefined);
+  let Value::Object(obj) = o else {
+    return Ok(Value::Bool(false));
+  };
+  Ok(Value::Bool(scope.object_is_extensible(obj)?))
 }
 
 fn create_array_object(vm: &mut Vm, scope: &mut Scope<'_>, len: u32) -> Result<GcObject, VmError> {
@@ -539,27 +744,44 @@ pub fn array_constructor_construct(
 }
 
 pub fn function_constructor_call(
-  _vm: &mut Vm,
-  _scope: &mut Scope<'_>,
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
-  _hooks: &mut dyn VmHostHooks,
-  _callee: GcObject,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
   _this: Value,
-  _args: &[Value],
+  args: &[Value],
 ) -> Result<Value, VmError> {
-  Err(VmError::Unimplemented("Function constructor"))
+  // §20.2.1.1: NewTarget is undefined when called as a function.
+  crate::dynamic_function::create_dynamic_function(
+    vm,
+    scope,
+    hooks,
+    callee,
+    Value::Undefined,
+    crate::dynamic_function::DynamicFunctionKind::Normal,
+    args,
+  )
 }
 
 pub fn function_constructor_construct(
-  _vm: &mut Vm,
-  _scope: &mut Scope<'_>,
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
-  _hooks: &mut dyn VmHostHooks,
-  _callee: GcObject,
-  _args: &[Value],
-  _new_target: Value,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  args: &[Value],
+  new_target: Value,
 ) -> Result<Value, VmError> {
-  Err(VmError::Unimplemented("Function constructor"))
+  crate::dynamic_function::create_dynamic_function(
+    vm,
+    scope,
+    hooks,
+    callee,
+    new_target,
+    crate::dynamic_function::DynamicFunctionKind::Normal,
+    args,
+  )
 }
 
 pub fn error_constructor_call(
@@ -661,7 +883,7 @@ pub fn error_constructor_construct(
   Ok(Value::Object(obj))
 }
 
-fn create_type_error(
+pub(crate) fn create_type_error(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   host: &mut dyn VmHostHooks,
@@ -709,13 +931,22 @@ pub(crate) fn new_promise_capability(
   let intr = require_intrinsics(vm)?;
 
   let Value::Object(_) = constructor else {
-    let err = create_type_error(vm, scope, host, "Promise capability constructor must be an object")?;
+    let err = create_type_error(
+      vm,
+      scope,
+      host,
+      "Promise capability constructor must be an object",
+    )?;
     return Err(VmError::Throw(err));
   };
 
   if !scope.heap().is_constructor(constructor)? {
-    let err =
-      create_type_error(vm, scope, host, "Promise capability constructor is not a constructor")?;
+    let err = create_type_error(
+      vm,
+      scope,
+      host,
+      "Promise capability constructor is not a constructor",
+    )?;
     return Err(VmError::Throw(err));
   }
 
@@ -771,7 +1002,12 @@ pub(crate) fn new_promise_capability(
   // Per spec, `Construct` returns an Object. `vm-js` native constructors can return non-objects, so
   // validate this to preserve the PromiseCapability invariants used throughout the VM.
   if !matches!(promise, Value::Object(_)) {
-    let err = create_type_error(vm, scope, host, "Promise capability promise is not an object")?;
+    let err = create_type_error(
+      vm,
+      scope,
+      host,
+      "Promise capability promise is not an object",
+    )?;
     return Err(VmError::Throw(err));
   }
 
@@ -780,7 +1016,12 @@ pub(crate) fn new_promise_capability(
     .heap()
     .env_get_binding_value(resolving_env, "resolve", false)?;
   if !scope.heap().is_callable(resolve)? {
-    let err = create_type_error(vm, scope, host, "Promise capability resolve is not callable")?;
+    let err = create_type_error(
+      vm,
+      scope,
+      host,
+      "Promise capability resolve is not callable",
+    )?;
     return Err(VmError::Throw(err));
   }
 
@@ -846,14 +1087,8 @@ fn promise_resolve_abstract(
       let ctor_key_s = scope.alloc_string("constructor")?;
       scope.push_root(Value::String(ctor_key_s))?;
       let ctor_key = PropertyKey::from_string(ctor_key_s);
-      let x_ctor = get_property_value_with_host(
-        vm,
-        &mut scope,
-        host,
-        obj,
-        ctor_key,
-        Value::Object(obj),
-      )?;
+      let x_ctor =
+        get_property_value_with_host(vm, &mut scope, host, obj, ctor_key, Value::Object(obj))?;
       if x_ctor.same_value(constructor, scope.heap()) {
         return Ok(obj);
       }
@@ -895,9 +1130,11 @@ fn create_promise_resolving_functions(
   let already_resolved_env = scope.env_create(None)?;
   scope.push_env_root(already_resolved_env)?;
   scope.env_create_mutable_binding(already_resolved_env, "alreadyResolved")?;
-  scope
-    .heap_mut()
-    .env_initialize_binding(already_resolved_env, "alreadyResolved", Value::Bool(false))?;
+  scope.heap_mut().env_initialize_binding(
+    already_resolved_env,
+    "alreadyResolved",
+    Value::Bool(false),
+  )?;
 
   let resolve_name = scope.alloc_string("resolve")?;
   let resolve = scope.alloc_native_function(call_id, None, resolve_name, 1)?;
@@ -943,7 +1180,10 @@ fn enqueue_promise_reaction_job(
   argument: Value,
   current_realm: Option<RealmId>,
 ) -> Result<(), VmError> {
-  let handler_callback_object = reaction.handler.as_ref().map(|handler| handler.callback_object());
+  let handler_callback_object = reaction
+    .handler
+    .as_ref()
+    .map(|handler| handler.callback_object());
   let realm = reaction
     .handler
     .as_ref()
@@ -1094,7 +1334,7 @@ pub(crate) fn reject_promise(
   trigger_promise_reactions(host, scope, reject_reactions, reason, current_realm)
 }
 
-fn resolve_promise(
+pub(crate) fn resolve_promise(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   host: &mut dyn VmHostHooks,
@@ -1232,7 +1472,12 @@ pub fn promise_constructor_call(
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
-  throw_type_error(vm, scope, host, "Promise constructor must be called with new")
+  throw_type_error(
+    vm,
+    scope,
+    host,
+    "Promise constructor must be called with new",
+  )
 }
 
 pub fn promise_constructor_construct(
@@ -1328,7 +1573,12 @@ pub fn promise_capability_executor_call(
   let existing_resolve = scope.heap().env_get_binding_value(env, "resolve", false)?;
   let existing_reject = scope.heap().env_get_binding_value(env, "reject", false)?;
   if !matches!(existing_resolve, Value::Undefined) || !matches!(existing_reject, Value::Undefined) {
-    return throw_type_error(vm, scope, hooks, "Promise capability executor already called");
+    return throw_type_error(
+      vm,
+      scope,
+      hooks,
+      "Promise capability executor already called",
+    );
   }
 
   scope
@@ -1468,8 +1718,7 @@ pub(crate) fn perform_promise_then(
   };
 
   // Create the derived promise + capability.
-  let result_promise = scope
-    .alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
+  let result_promise = scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
   scope.push_root(Value::Object(result_promise))?;
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, result_promise)?;
   let capability = PromiseCapability {
@@ -1537,13 +1786,22 @@ fn invoke_then(
   let obj = match receiver {
     Value::Object(obj) => obj,
     Value::Null | Value::Undefined => {
-      return Err(crate::throw_type_error(&mut scope, intr, non_object_message));
+      return Err(crate::throw_type_error(
+        &mut scope,
+        intr,
+        non_object_message,
+      ));
     }
     primitive => {
       let object_ctor = Value::Object(intr.object_constructor());
       scope.push_root(object_ctor)?;
-      let value =
-        vm.call_with_host(&mut scope, host, object_ctor, Value::Undefined, &[primitive])?;
+      let value = vm.call_with_host(
+        &mut scope,
+        host,
+        object_ctor,
+        Value::Undefined,
+        &[primitive],
+      )?;
       let Value::Object(obj) = value else {
         return Err(VmError::InvariantViolation(
           "Object(..) conversion returned non-object",
@@ -1559,10 +1817,20 @@ fn invoke_then(
   let then_key = PropertyKey::from_string(then_key_s);
   let then = get_property_value_with_host(vm, &mut scope, host, obj, then_key, receiver)?;
   if !scope.heap().is_callable(then)? {
-    return Err(crate::throw_type_error(&mut scope, intr, "then is not callable"));
+    return Err(crate::throw_type_error(
+      &mut scope,
+      intr,
+      "then is not callable",
+    ));
   }
 
-  vm.call_with_host(&mut scope, host, then, receiver, &[on_fulfilled, on_rejected])
+  vm.call_with_host(
+    &mut scope,
+    host,
+    then,
+    receiver,
+    &[on_fulfilled, on_rejected],
+  )
 }
 
 pub fn promise_prototype_then(
@@ -1866,7 +2134,12 @@ fn get_promise_resolve(
   //
   // For now this is used by Promise combinator built-ins (Promise.all/race/allSettled/any).
   let Value::Object(c) = constructor else {
-    return throw_type_error(vm, scope, host, "Promise resolve constructor must be an object");
+    return throw_type_error(
+      vm,
+      scope,
+      host,
+      "Promise resolve constructor must be an object",
+    );
   };
 
   let mut key_scope = scope.reborrow();
@@ -1939,7 +2212,12 @@ fn invoke_thenable_then(
   invoke_scope.push_roots(&[next_promise, on_fulfilled, on_rejected])?;
 
   let Value::Object(obj) = next_promise else {
-    let err = create_type_error(vm, &mut invoke_scope, hooks, "Promise thenable is not an object")?;
+    let err = create_type_error(
+      vm,
+      &mut invoke_scope,
+      hooks,
+      "Promise thenable is not an object",
+    )?;
     return Err(VmError::Throw(err));
   };
 
@@ -1951,10 +2229,14 @@ fn invoke_thenable_then(
     return Err(VmError::Throw(err));
   }
 
-  let _ = vm.call_with_host_and_hooks(host, &mut invoke_scope, hooks, then, next_promise, &[
-    on_fulfilled,
-    on_rejected,
-  ])?;
+  let _ = vm.call_with_host_and_hooks(
+    host,
+    &mut invoke_scope,
+    hooks,
+    then,
+    next_promise,
+    &[on_fulfilled, on_rejected],
+  )?;
   Ok(())
 }
 
@@ -1971,7 +2253,14 @@ fn if_abrupt_reject_promise(
   let Some(reason) = completion.thrown_value() else {
     return Err(completion);
   };
-  let _ = vm.call_with_host_and_hooks(host, scope, hooks, capability.reject, Value::Undefined, &[reason])?;
+  let _ = vm.call_with_host_and_hooks(
+    host,
+    scope,
+    hooks,
+    capability.reject,
+    Value::Undefined,
+    &[reason],
+  )?;
   Ok(capability.promise)
 }
 
@@ -2042,8 +2331,14 @@ fn perform_promise_all(
     }
 
     // nextPromise = ? Call(promiseResolve, constructor, « nextValue »).
-    let next_promise =
-      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
+    let next_promise = vm.call_with_host_and_hooks(
+      host,
+      &mut step_scope,
+      hooks,
+      promise_resolve,
+      constructor,
+      &[next_value],
+    )?;
     step_scope.push_root(next_promise)?;
 
     // Create per-element alreadyCalled record.
@@ -2164,9 +2459,23 @@ fn perform_promise_race(
       return Ok(capability.promise);
     };
 
-    let next_promise =
-      vm.call_with_host_and_hooks(host, scope, hooks, promise_resolve, constructor, &[next_value])?;
-    invoke_thenable_then(vm, scope, host, hooks, next_promise, capability.resolve, capability.reject)?;
+    let next_promise = vm.call_with_host_and_hooks(
+      host,
+      scope,
+      hooks,
+      promise_resolve,
+      constructor,
+      &[next_value],
+    )?;
+    invoke_thenable_then(
+      vm,
+      scope,
+      host,
+      hooks,
+      next_promise,
+      capability.resolve,
+      capability.reject,
+    )?;
   }
 }
 
@@ -2282,8 +2591,14 @@ fn perform_promise_all_settled(
       idx_scope.create_data_property_or_throw(values, key, Value::Undefined)?;
     }
 
-    let next_promise =
-      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
+    let next_promise = vm.call_with_host_and_hooks(
+      host,
+      &mut step_scope,
+      hooks,
+      promise_resolve,
+      constructor,
+      &[next_value],
+    )?;
     step_scope.push_root(next_promise)?;
 
     // Shared alreadyCalled record for the pair of element functions.
@@ -2477,8 +2792,14 @@ fn perform_promise_any(
       idx_scope.create_data_property_or_throw(errors, key, Value::Undefined)?;
     }
 
-    let next_promise =
-      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
+    let next_promise = vm.call_with_host_and_hooks(
+      host,
+      &mut step_scope,
+      hooks,
+      promise_resolve,
+      constructor,
+      &[next_value],
+    )?;
     step_scope.push_root(next_promise)?;
 
     let already_called =
@@ -2887,7 +3208,9 @@ fn vec_try_push<T>(buf: &mut Vec<T>, value: T) -> Result<(), VmError> {
 }
 
 fn vec_try_extend_from_slice<T: Copy>(buf: &mut Vec<T>, slice: &[T]) -> Result<(), VmError> {
-  let needed = slice.len().saturating_sub(buf.capacity().saturating_sub(buf.len()));
+  let needed = slice
+    .len()
+    .saturating_sub(buf.capacity().saturating_sub(buf.len()));
   if needed > 0 {
     buf.try_reserve(needed).map_err(|_| VmError::OutOfMemory)?;
   }
@@ -2988,7 +3311,10 @@ pub fn function_prototype_bind(
     scope.heap_mut().set_function_realm(func, realm)?;
   }
 
-  let job_realm = scope.heap().get_function_job_realm(target).or(vm.current_realm());
+  let job_realm = scope
+    .heap()
+    .get_function_job_realm(target)
+    .or(vm.current_realm());
   if let Some(job_realm) = job_realm {
     scope.heap_mut().set_function_job_realm(func, job_realm)?;
   }
@@ -2996,9 +3322,34 @@ pub fn function_prototype_bind(
   Ok(Value::Object(func))
 }
 
+/// `Object.prototype.valueOf` (ECMA-262 §20.1.3.7): `Return ? ToObject(this value)`.
+pub fn object_prototype_value_of(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  match this {
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      Err(crate::error_object::throw_type_error(
+        scope,
+        intr,
+        "Cannot convert undefined or null to object",
+      ))
+    }
+    Value::Object(obj) => Ok(Value::Object(obj)),
+    // Reuse `Object(value)` boxing for other primitives (§7.1.18 ToObject).
+    other => object_constructor_impl(vm, scope, hooks, &[other]),
+  }
+}
+
 /// `Object.prototype.toString` (partial).
 pub fn object_prototype_to_string(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3006,6 +3357,8 @@ pub fn object_prototype_to_string(
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
+  // §20.1.3.6: prefer `@@toStringTag` for objects when present; otherwise use the builtin tag
+  // derived from the object's kind / wrapper data slots.
   let s = match this {
     Value::Undefined => "[object Undefined]",
     Value::Null => "[object Null]",
@@ -3015,14 +3368,161 @@ pub fn object_prototype_to_string(
     Value::String(_) => "[object String]",
     Value::Symbol(_) => "[object Symbol]",
     Value::Object(obj) => {
+      if let Some(tag) = object_to_string_tag(vm, scope, obj)? {
+        return Ok(Value::String(
+          scope.alloc_string(&format!("[object {tag}]"))?,
+        ));
+      }
       if scope.heap().is_callable(Value::Object(obj))? {
         "[object Function]"
+      } else if scope.heap().object_is_array(obj)? {
+        "[object Array]"
+      } else if object_has_number_data(scope, obj)? {
+        "[object Number]"
+      } else if object_has_boolean_data(scope, obj)? {
+        "[object Boolean]"
+      } else if object_has_string_data(scope, obj)? {
+        "[object String]"
       } else {
         "[object Object]"
       }
     }
   };
   Ok(Value::String(scope.alloc_string(s)?))
+}
+
+fn object_to_string_tag(
+  vm: &Vm,
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+) -> Result<Option<String>, VmError> {
+  let Some(intr) = vm.intrinsics() else {
+    return Ok(None);
+  };
+  let tag_key = PropertyKey::from_symbol(intr.well_known_symbols().to_string_tag);
+  match scope.heap().get(obj, &tag_key) {
+    Ok(Value::String(s)) => {
+      let units = scope.heap().get_string(s)?.as_code_units().to_vec();
+      Ok(Some(String::from_utf16_lossy(&units)))
+    }
+    _ => Ok(None),
+  }
+}
+
+fn internal_marker_key(scope: &mut Scope<'_>, name: &str) -> Result<PropertyKey, VmError> {
+  let marker = scope.alloc_string(name)?;
+  let marker_sym = scope.heap_mut().symbol_for(marker)?;
+  Ok(PropertyKey::from_symbol(marker_sym))
+}
+
+fn object_has_number_data(scope: &mut Scope<'_>, obj: GcObject) -> Result<bool, VmError> {
+  let key = internal_marker_key(scope, "vm-js.internal.NumberData")?;
+  Ok(matches!(
+    scope.heap().object_get_own_data_property_value(obj, &key)?,
+    Some(Value::Number(_))
+  ))
+}
+
+fn object_has_boolean_data(scope: &mut Scope<'_>, obj: GcObject) -> Result<bool, VmError> {
+  let key = internal_marker_key(scope, "vm-js.internal.BooleanData")?;
+  Ok(matches!(
+    scope.heap().object_get_own_data_property_value(obj, &key)?,
+    Some(Value::Bool(_))
+  ))
+}
+
+fn object_has_string_data(scope: &mut Scope<'_>, obj: GcObject) -> Result<bool, VmError> {
+  let key = internal_marker_key(scope, "vm-js.internal.StringData")?;
+  Ok(matches!(
+    scope.heap().object_get_own_data_property_value(obj, &key)?,
+    Some(Value::String(_))
+  ))
+}
+
+/// Install the synthetic `[[NumberData]]` / `[[BooleanData]]` slot used by wrapper methods onto a
+/// prototype object (`Number.prototype` → `+0`, `Boolean.prototype` → `false`).
+pub fn install_wrapper_prototype_data(
+  scope: &mut Scope<'_>,
+  prototype: GcObject,
+  data: Value,
+) -> Result<(), VmError> {
+  let marker_name = match data {
+    Value::Number(_) => "vm-js.internal.NumberData",
+    Value::Bool(_) => "vm-js.internal.BooleanData",
+    Value::String(_) => "vm-js.internal.StringData",
+    _ => {
+      return Err(VmError::InvariantViolation(
+        "install_wrapper_prototype_data: unexpected data kind",
+      ))
+    }
+  };
+  let key = internal_marker_key(scope, marker_name)?;
+  scope.define_property(prototype, key, data_desc(data, false, false, false))?;
+  Ok(())
+}
+
+/// `Array.isArray` (§23.1.2.2).
+pub fn array_is_array(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let arg = args.first().copied().unwrap_or(Value::Undefined);
+  let is = match arg {
+    Value::Object(obj) => scope.heap().object_is_array(obj)?,
+    _ => false,
+  };
+  Ok(Value::Bool(is))
+}
+
+/// Minimal `Array.from(items)` (§23.1.2.1) — iterable path only (no `mapfn` / array-like).
+/// Unlocks harness helpers like `Array.from(map.keys())` for Map.groupBy tests.
+pub fn array_from(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let items = args.first().copied().unwrap_or(Value::Undefined);
+  scope.push_root(items)?;
+
+  let intr = require_intrinsics(vm)?;
+  let array = scope.alloc_array(0)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(array, Some(intr.array_prototype()))?;
+  scope.push_root(Value::Object(array))?;
+
+  let mut iterator_record = crate::iterator::get_iterator(vm, host, hooks, scope, items)?;
+  scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
+
+  let mut k: u32 = 0;
+  loop {
+    vm.tick()?;
+    let next =
+      match crate::iterator::iterator_step_value(vm, host, hooks, scope, &mut iterator_record) {
+        Ok(v) => v,
+        Err(err) => {
+          let _ = crate::iterator::iterator_close(vm, host, hooks, scope, &iterator_record);
+          return Err(err);
+        }
+      };
+    let Some(value) = next else {
+      define_array_length(scope, array, k as usize)?;
+      return Ok(Value::Object(array));
+    };
+    scope.push_root(value)?;
+    let key = PropertyKey::from_string(scope.alloc_string(&k.to_string())?);
+    scope.define_property(array, key, data_desc(value, true, true, true))?;
+    k = k.saturating_add(1);
+  }
 }
 
 fn get_array_length(scope: &mut Scope<'_>, obj: GcObject) -> Result<usize, VmError> {
@@ -3040,6 +3540,244 @@ fn define_array_length(scope: &mut Scope<'_>, obj: GcObject, len: usize) -> Resu
     length_key,
     data_desc(Value::Number(len as f64), true, false, false),
   )
+}
+
+/// `Array.prototype.push` (minimal, §23.1.3.20).
+pub fn array_prototype_push(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => return Err(VmError::Unimplemented("Array.prototype.push on non-object")),
+  };
+
+  let mut s = scope.reborrow();
+  s.push_root(Value::Object(this_obj))?;
+  for arg in args {
+    s.push_root(*arg)?;
+  }
+
+  let mut len = get_array_length(&mut s, this_obj)?;
+  for arg in args {
+    vm.tick()?;
+    let key = PropertyKey::from_string(s.alloc_string(&len.to_string())?);
+    s.define_property(this_obj, key, data_desc(*arg, true, true, true))?;
+    len = len.saturating_add(1);
+  }
+  define_array_length(&mut s, this_obj, len)?;
+  Ok(Value::Number(len as f64))
+}
+
+/// `Array.prototype.pop` (minimal, §23.1.3.17) — needed by Map set/append order tests.
+pub fn array_prototype_pop(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => return Err(VmError::Unimplemented("Array.prototype.pop on non-object")),
+  };
+
+  let mut s = scope.reborrow();
+  s.push_root(Value::Object(this_obj))?;
+  let len = get_array_length(&mut s, this_obj)?;
+  if len == 0 {
+    define_array_length(&mut s, this_obj, 0)?;
+    return Ok(Value::Undefined);
+  }
+  let new_len = len - 1;
+  let key = PropertyKey::from_string(s.alloc_string(&new_len.to_string())?);
+  let value = get_data_property_value(&mut s, this_obj, &key)?.unwrap_or(Value::Undefined);
+  s.push_root(value)?;
+  let _ = s.ordinary_delete(this_obj, key)?;
+  define_array_length(&mut s, this_obj, new_len)?;
+  let _ = vm;
+  Ok(value)
+}
+
+/// `Array.prototype.shift` (minimal, §23.1.3.22) — needed by Set/Map forEach order tests.
+pub fn array_prototype_shift(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Array.prototype.shift on non-object",
+      ))
+    }
+  };
+
+  let mut s = scope.reborrow();
+  s.push_root(Value::Object(this_obj))?;
+  let len = get_array_length(&mut s, this_obj)?;
+  if len == 0 {
+    define_array_length(&mut s, this_obj, 0)?;
+    return Ok(Value::Undefined);
+  }
+
+  let first_key = PropertyKey::from_string(s.alloc_string("0")?);
+  let first = get_data_property_value(&mut s, this_obj, &first_key)?.unwrap_or(Value::Undefined);
+  s.push_root(first)?;
+
+  for k in 1..len {
+    vm.tick()?;
+    let from_key = PropertyKey::from_string(s.alloc_string(&k.to_string())?);
+    let to_key = PropertyKey::from_string(s.alloc_string(&(k - 1).to_string())?);
+    if let Some(val) = get_data_property_value(&mut s, this_obj, &from_key)? {
+      s.push_root(val)?;
+      s.define_property(this_obj, to_key, data_desc(val, true, true, true))?;
+    } else {
+      let _ = s.ordinary_delete(this_obj, to_key)?;
+    }
+  }
+
+  let last_key = PropertyKey::from_string(s.alloc_string(&(len - 1).to_string())?);
+  let _ = s.ordinary_delete(this_obj, last_key)?;
+  define_array_length(&mut s, this_obj, len - 1)?;
+  Ok(first)
+}
+
+/// Strict Equality Comparison for `Array.prototype.indexOf` (`===`).
+fn array_strict_equal(scope: &Scope<'_>, a: Value, b: Value) -> Result<bool, VmError> {
+  match (a, b) {
+    (Value::Number(x), Value::Number(y)) => Ok(x == y),
+    _ => Ok(a.same_value(b, scope.heap())),
+  }
+}
+
+fn array_index_from_arg(
+  scope: &mut Scope<'_>,
+  args: &[Value],
+  len: usize,
+) -> Result<usize, VmError> {
+  let n = match args.get(1).copied() {
+    None | Some(Value::Undefined) => 0.0,
+    Some(v) => to_integer_or_infinity(scope.heap_mut().to_number(v)?),
+  };
+  if n >= len as f64 {
+    return Ok(len);
+  }
+  if n >= 0.0 {
+    return Ok(n as usize);
+  }
+  let k = (len as f64) + n;
+  Ok(if k > 0.0 { k as usize } else { 0 })
+}
+
+/// `Array.prototype.indexOf` (minimal, §23.1.3.14) — Strict Equality; used by Set composition
+/// set-like order tests.
+pub fn array_prototype_index_of(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Array.prototype.indexOf on non-object",
+      ))
+    }
+  };
+  scope.push_root(Value::Object(this_obj))?;
+  let len = get_array_length(scope, this_obj)?;
+  if len == 0 {
+    return Ok(Value::Number(-1.0));
+  }
+  let search = args.first().copied().unwrap_or(Value::Undefined);
+  scope.push_root(search)?;
+  let mut k = array_index_from_arg(scope, args, len)?;
+  while k < len {
+    vm.tick()?;
+    let key = PropertyKey::from_string(scope.alloc_string(&k.to_string())?);
+    // Spec: skip holes (`HasProperty` false). Dense array literals used by Set tests are fine
+    // with own-data presence.
+    if get_data_property_value(scope, this_obj, &key)?.is_none() {
+      k = k.saturating_add(1);
+      continue;
+    }
+    let element = scope.ordinary_get_with_host_and_hooks(
+      vm,
+      host,
+      hooks,
+      this_obj,
+      key,
+      Value::Object(this_obj),
+    )?;
+    if array_strict_equal(scope, search, element)? {
+      return Ok(Value::Number(k as f64));
+    }
+    k = k.saturating_add(1);
+  }
+  Ok(Value::Number(-1.0))
+}
+
+/// `Array.prototype.includes` (minimal, §23.1.3.13) — SameValueZero; used by Set composition
+/// set-like mutation tests.
+pub fn array_prototype_includes(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Array.prototype.includes on non-object",
+      ))
+    }
+  };
+  scope.push_root(Value::Object(this_obj))?;
+  let len = get_array_length(scope, this_obj)?;
+  if len == 0 {
+    return Ok(Value::Bool(false));
+  }
+  let search = args.first().copied().unwrap_or(Value::Undefined);
+  scope.push_root(search)?;
+  let mut k = array_index_from_arg(scope, args, len)?;
+  while k < len {
+    vm.tick()?;
+    let key = PropertyKey::from_string(scope.alloc_string(&k.to_string())?);
+    let element = scope.ordinary_get_with_host_and_hooks(
+      vm,
+      host,
+      hooks,
+      this_obj,
+      key,
+      Value::Object(this_obj),
+    )?;
+    if search.same_value_zero(element, scope.heap()) {
+      return Ok(Value::Bool(true));
+    }
+    k = k.saturating_add(1);
+  }
+  Ok(Value::Bool(false))
 }
 
 /// `Array.prototype.map` (minimal).
@@ -3087,6 +3825,49 @@ pub fn array_prototype_map(
   Ok(Value::Object(out))
 }
 
+/// `Array.prototype.toString` (§23.1.3.36) — `join` when callable, else `Object.prototype.toString`.
+pub fn array_prototype_to_string(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_type_error(
+        scope,
+        intr,
+        "Array.prototype.toString called on null or undefined",
+      ));
+    }
+    // Primitives: box via Object() so `join`/`toString` see an object `this`.
+    other => match object_constructor_impl(vm, scope, hooks, &[other])? {
+      Value::Object(o) => o,
+      _ => {
+        return Err(VmError::Unimplemented(
+          "Array.prototype.toString ToObject boxing",
+        ))
+      }
+    },
+  };
+  scope.push_root(Value::Object(this_obj))?;
+  let join_s = scope.alloc_string("join")?;
+  scope.push_root(Value::String(join_s))?;
+  let join_key = PropertyKey::from_string(join_s);
+  let func = vm.get(scope, this_obj, join_key)?;
+  if scope.heap().is_callable(func)? {
+    scope.push_root(func)?;
+    return vm.call_with_host_and_hooks(host, scope, hooks, func, Value::Object(this_obj), &[]);
+  }
+  // Fall back to `%Object.prototype.toString%`.
+  object_prototype_to_string(vm, scope, host, hooks, callee, Value::Object(this_obj), &[])
+}
+
 /// `Array.prototype.join` (minimal).
 pub fn array_prototype_join(
   vm: &mut Vm,
@@ -3106,7 +3887,7 @@ pub fn array_prototype_join(
 
   let sep = match args.first().copied() {
     None | Some(Value::Undefined) => scope.alloc_string(",")?,
-    Some(v) => scope.heap_mut().to_string(v)?,
+    Some(v) => crate::spec_ops::to_string(vm, scope, v)?,
   };
   scope.push_root(Value::String(sep))?;
   let sep_slice = scope.heap().get_string(sep)?.as_code_units();
@@ -3138,7 +3919,7 @@ pub fn array_prototype_join(
     let value = get_data_property_value(scope, this_obj, &key)?.unwrap_or(Value::Undefined);
     let part = match value {
       Value::Undefined | Value::Null => empty,
-      other => scope.heap_mut().to_string(other)?,
+      other => crate::spec_ops::to_string(vm, scope, other)?,
     };
 
     let units = scope.heap().get_string(part)?.as_code_units();
@@ -3152,9 +3933,12 @@ pub fn array_prototype_join(
   Ok(Value::String(s))
 }
 
-/// `String` constructor called as a function.
+/// `String` constructor called as a function (ECMA-262 §22.1.1.1).
+///
+/// Special case: when `NewTarget` is undefined and the argument is a Symbol,
+/// return `SymbolDescriptiveString(sym)` (does **not** throw — unlike `ToString`).
 pub fn string_constructor_call(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3164,7 +3948,17 @@ pub fn string_constructor_call(
 ) -> Result<Value, VmError> {
   let s = match args.first().copied() {
     None => scope.alloc_string("")?,
-    Some(v) => scope.heap_mut().to_string(v)?,
+    Some(Value::Symbol(sym)) => {
+      // SymbolDescriptiveString(sym) — `Symbol(${description})`
+      let mut units: Vec<u16> = Vec::new();
+      units.extend("Symbol(".encode_utf16());
+      if let Some(d) = scope.heap().get_symbol_description(sym)? {
+        units.extend_from_slice(scope.heap().get_string(d)?.as_code_units());
+      }
+      units.extend(")".encode_utf16());
+      scope.alloc_string_from_u16_vec(units)?
+    }
+    Some(v) => crate::spec_ops::to_string(vm, scope, v)?,
   };
   Ok(Value::String(s))
 }
@@ -3182,7 +3976,7 @@ pub fn string_constructor_construct(
   let intr = require_intrinsics(vm)?;
   let prim = match args.first().copied() {
     None => scope.alloc_string("")?,
-    Some(v) => scope.heap_mut().to_string(v)?,
+    Some(v) => crate::spec_ops::to_string(vm, scope, v)?,
   };
   scope.push_root(Value::String(prim))?;
 
@@ -3229,18 +4023,1044 @@ pub fn string_prototype_to_string(
       let marker = scope.alloc_string("vm-js.internal.StringData")?;
       let marker_sym = scope.heap_mut().symbol_for(marker)?;
       let marker_key = PropertyKey::from_symbol(marker_sym);
-      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
         Some(Value::String(s)) => Ok(Value::String(s)),
-        _ => Err(VmError::Unimplemented("String.prototype.toString on non-String object")),
+        _ => Err(VmError::Unimplemented(
+          "String.prototype.toString on non-String object",
+        )),
       }
     }
-    _ => Err(VmError::Unimplemented("String.prototype.toString on non-string")),
+    _ => Err(VmError::Unimplemented(
+      "String.prototype.toString on non-string",
+    )),
+  }
+}
+
+// --- Primitive-wrapper prototype methods (autoboxing surface, ECMA-262 §22.1.3 / §21.1.3) ---
+
+/// ECMAScript `ToIntegerOrInfinity` (§7.1.5) as an `f64` (NaN → 0, ±∞ preserved, else truncated).
+fn to_integer_or_infinity(n: f64) -> f64 {
+  if n.is_nan() {
+    0.0
+  } else if n.is_infinite() {
+    n
+  } else {
+    n.trunc()
+  }
+}
+
+/// `RequireObjectCoercible(this)` + `ToString(this)`, returning the code units of the resulting
+/// string. Used by `String.prototype` methods, which coerce `this` per §22.1.3.
+fn this_string_units(vm: &mut Vm, scope: &mut Scope<'_>, this: Value) -> Result<Vec<u16>, VmError> {
+  if matches!(this, Value::Undefined | Value::Null) {
+    let intr = require_intrinsics(vm)?;
+    return Err(crate::error_object::throw_type_error(
+      scope,
+      intr,
+      "String.prototype method called on null or undefined",
+    ));
+  }
+  let s = crate::spec_ops::to_string(vm, scope, this)?;
+  Ok(scope.heap().get_string(s)?.as_code_units().to_vec())
+}
+
+fn number_arg(scope: &mut Scope<'_>, args: &[Value], idx: usize) -> Result<f64, VmError> {
+  let v = args.get(idx).copied().unwrap_or(Value::Undefined);
+  scope.heap_mut().to_number(v)
+}
+
+/// `thisNumberValue(this)` (§21.1.3): the primitive number, recovered from a wrapper object if
+/// necessary.
+fn this_number_value(vm: &mut Vm, scope: &mut Scope<'_>, this: Value) -> Result<f64, VmError> {
+  match this {
+    Value::Number(n) => Ok(n),
+    Value::Object(obj) => {
+      let marker = scope.alloc_string("vm-js.internal.NumberData")?;
+      let marker_sym = scope.heap_mut().symbol_for(marker)?;
+      let marker_key = PropertyKey::from_symbol(marker_sym);
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
+        Some(Value::Number(n)) => Ok(n),
+        _ => {
+          let intr = require_intrinsics(vm)?;
+          Err(crate::error_object::throw_type_error(
+            scope,
+            intr,
+            "Number.prototype method called on incompatible receiver",
+          ))
+        }
+      }
+    }
+    _ => {
+      let intr = require_intrinsics(vm)?;
+      Err(crate::error_object::throw_type_error(
+        scope,
+        intr,
+        "Number.prototype method called on incompatible receiver",
+      ))
+    }
+  }
+}
+
+/// `thisBooleanValue(this)` (§20.3.3): the primitive boolean, recovered from a wrapper object's
+/// `[[BooleanData]]` slot if necessary. Throws a **catchable** `TypeError` on an incompatible
+/// receiver (matching the spec, rather than a non-catchable engine error).
+fn this_boolean_value(vm: &mut Vm, scope: &mut Scope<'_>, this: Value) -> Result<bool, VmError> {
+  match this {
+    Value::Bool(b) => Ok(b),
+    Value::Object(obj) => {
+      let marker = scope.alloc_string("vm-js.internal.BooleanData")?;
+      let marker_sym = scope.heap_mut().symbol_for(marker)?;
+      let marker_key = PropertyKey::from_symbol(marker_sym);
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
+        Some(Value::Bool(b)) => Ok(b),
+        _ => {
+          let intr = require_intrinsics(vm)?;
+          Err(crate::error_object::throw_type_error(
+            scope,
+            intr,
+            "Boolean.prototype method called on incompatible receiver",
+          ))
+        }
+      }
+    }
+    _ => {
+      let intr = require_intrinsics(vm)?;
+      Err(crate::error_object::throw_type_error(
+        scope,
+        intr,
+        "Boolean.prototype method called on incompatible receiver",
+      ))
+    }
+  }
+}
+
+/// `String.prototype.valueOf` (§22.1.3.32): returns the primitive string.
+pub fn string_prototype_value_of(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  string_prototype_to_string(vm, scope, host, hooks, callee, this, args)
+}
+
+/// `String.prototype.charAt` (§22.1.3.1).
+pub fn string_prototype_char_at(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let pos = to_integer_or_infinity(number_arg(scope, args, 0)?);
+  if pos < 0.0 || pos >= units.len() as f64 {
+    return Ok(Value::String(scope.alloc_string("")?));
+  }
+  let unit = units[pos as usize];
+  Ok(Value::String(scope.alloc_string_from_u16_vec(vec![unit])?))
+}
+
+/// `String.prototype.charCodeAt` (§22.1.3.2).
+pub fn string_prototype_char_code_at(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let pos = to_integer_or_infinity(number_arg(scope, args, 0)?);
+  if pos < 0.0 || pos >= units.len() as f64 {
+    return Ok(Value::Number(f64::NAN));
+  }
+  Ok(Value::Number(units[pos as usize] as f64))
+}
+
+/// `String.prototype.indexOf` (§22.1.3.9).
+pub fn string_prototype_index_of(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let search_val = args.first().copied().unwrap_or(Value::Undefined);
+  let search_s = scope.heap_mut().to_string(search_val)?;
+  let search: Vec<u16> = scope.heap().get_string(search_s)?.as_code_units().to_vec();
+  let pos = to_integer_or_infinity(number_arg(scope, args, 1)?);
+  let start = pos.clamp(0.0, units.len() as f64) as usize;
+
+  if search.is_empty() {
+    return Ok(Value::Number(start.min(units.len()) as f64));
+  }
+  if search.len() <= units.len() {
+    for i in start..=(units.len() - search.len()) {
+      if units[i..i + search.len()] == search[..] {
+        return Ok(Value::Number(i as f64));
+      }
+    }
+  }
+  Ok(Value::Number(-1.0))
+}
+
+/// `String.prototype.slice` (§22.1.3.22).
+pub fn string_prototype_slice(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let len = units.len() as f64;
+  let clamp_rel = |n: f64| -> usize {
+    let idx = if n < 0.0 {
+      (len + n).max(0.0)
+    } else {
+      n.min(len)
+    };
+    idx as usize
+  };
+  let start = clamp_rel(to_integer_or_infinity(number_arg(scope, args, 0)?));
+  let end = match args.get(1).copied() {
+    None | Some(Value::Undefined) => len as usize,
+    Some(v) => {
+      let n = scope.heap_mut().to_number(v)?;
+      clamp_rel(to_integer_or_infinity(n))
+    }
+  };
+  let slice = if start < end {
+    units[start..end].to_vec()
+  } else {
+    Vec::new()
+  };
+  Ok(Value::String(scope.alloc_string_from_u16_vec(slice)?))
+}
+
+/// `String.prototype.substring` (§22.1.3.24).
+pub fn string_prototype_substring(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let len = units.len() as f64;
+  let clamp = |n: f64| -> usize { n.clamp(0.0, len) as usize };
+  let a = clamp(to_integer_or_infinity(number_arg(scope, args, 0)?));
+  let b = match args.get(1).copied() {
+    None | Some(Value::Undefined) => len as usize,
+    Some(v) => {
+      let n = scope.heap_mut().to_number(v)?;
+      clamp(to_integer_or_infinity(n))
+    }
+  };
+  let (from, to) = if a < b { (a, b) } else { (b, a) };
+  Ok(Value::String(
+    scope.alloc_string_from_u16_vec(units[from..to].to_vec())?,
+  ))
+}
+
+/// `String.prototype.toUpperCase` (§22.1.3.28).
+pub fn string_prototype_to_upper_case(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let upper: Vec<u16> = String::from_utf16_lossy(&units)
+    .to_uppercase()
+    .encode_utf16()
+    .collect();
+  Ok(Value::String(scope.alloc_string_from_u16_vec(upper)?))
+}
+
+/// `String.prototype.toLowerCase` (§22.1.3.26).
+pub fn string_prototype_to_lower_case(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let lower: Vec<u16> = String::from_utf16_lossy(&units)
+    .to_lowercase()
+    .encode_utf16()
+    .collect();
+  Ok(Value::String(scope.alloc_string_from_u16_vec(lower)?))
+}
+
+/// `String.prototype.includes` (§22.1.3.8).
+pub fn string_prototype_includes(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let search_val = args.first().copied().unwrap_or(Value::Undefined);
+  let search_s = scope.heap_mut().to_string(search_val)?;
+  let search: Vec<u16> = scope.heap().get_string(search_s)?.as_code_units().to_vec();
+  let pos = to_integer_or_infinity(number_arg(scope, args, 1)?);
+  let start = pos.clamp(0.0, units.len() as f64) as usize;
+  if search.is_empty() {
+    return Ok(Value::Bool(true));
+  }
+  if search.len() <= units.len() {
+    for i in start..=(units.len() - search.len()) {
+      if units[i..i + search.len()] == search[..] {
+        return Ok(Value::Bool(true));
+      }
+    }
+  }
+  Ok(Value::Bool(false))
+}
+
+/// `String.prototype.concat` (§22.1.3.5).
+pub fn string_prototype_concat(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut units = this_string_units(vm, scope, this)?;
+  for arg in args {
+    let s = scope.heap_mut().to_string(*arg)?;
+    let more = scope.heap().get_string(s)?.as_code_units().to_vec();
+    vec_try_extend_from_slice(&mut units, &more)?;
+  }
+  Ok(Value::String(scope.alloc_string_from_u16_vec(units)?))
+}
+
+/// `Number.prototype.toString` (§21.1.3.6): decimal by default, with radix 2–36 support.
+pub fn number_prototype_to_string(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let n = this_number_value(vm, scope, this)?;
+  // Spec: `ToIntegerOrInfinity(radix)` via full `ToNumber` so object `valueOf`/`toString`
+  // abrupt completions (e.g. poisoned radix) surface as the thrown error, not TypeError.
+  let radix = match args.first().copied() {
+    None | Some(Value::Undefined) => 10.0,
+    Some(v) => to_integer_or_infinity(crate::spec_ops::to_number(vm, scope, v)?),
+  };
+  if radix < 2.0 || radix > 36.0 {
+    let intr = require_intrinsics(vm)?;
+    return Err(crate::error_object::throw_range_error(
+      scope,
+      intr,
+      "Number.prototype.toString radix must be between 2 and 36",
+    ));
+  }
+  if radix == 10.0 {
+    // Reuse the spec-shaped decimal `Number::toString`.
+    let s = scope.heap_mut().to_string(Value::Number(n))?;
+    return Ok(Value::String(s));
+  }
+  let s = number_to_radix_string(n, radix as u32);
+  Ok(Value::String(scope.alloc_string(&s)?))
+}
+
+/// `Number.prototype.toLocaleString` (§21.1.3.4) — locale-independent fallback (= `toString`).
+///
+/// Full `Intl.NumberFormat` is out of scope; ECMA-262 permits an implementation-defined locale,
+/// and the language-core suite only asserts the method's property descriptor / callable shape.
+pub fn number_prototype_to_locale_string(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  number_prototype_to_string(vm, scope, host, hooks, callee, this, &[])
+}
+
+/// `Number.prototype.toFixed` (§21.1.3.3).
+pub fn number_prototype_to_fixed(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let n = this_number_value(vm, scope, this)?;
+  let digits_arg = args.first().copied().unwrap_or(Value::Undefined);
+  let digits = to_integer_or_infinity(crate::spec_ops::to_number(vm, scope, digits_arg)?);
+  if !(0.0..=100.0).contains(&digits) {
+    let intr = require_intrinsics(vm)?;
+    return Err(crate::error_object::throw_range_error(
+      scope,
+      intr,
+      "toFixed() digits argument must be between 0 and 100",
+    ));
+  }
+  let s = if n.is_nan() {
+    "NaN".to_string()
+  } else if !n.is_finite() {
+    if n < 0.0 {
+      "-Infinity".to_string()
+    } else {
+      "Infinity".to_string()
+    }
+  } else if n.abs() >= 1e21 {
+    let g = scope.heap_mut().to_string(Value::Number(n))?;
+    return Ok(Value::String(g));
+  } else {
+    format!("{:.*}", digits as usize, n)
+  };
+  Ok(Value::String(scope.alloc_string(&s)?))
+}
+
+/// `Number.prototype.toExponential` (§21.1.3.2).
+pub fn number_prototype_to_exponential(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let n = this_number_value(vm, scope, this)?;
+  let fraction_digits = args.first().copied();
+  // Spec: `ToInteger(fractionDigits)` (via `ToNumber`) runs even when `x` is non-finite, so
+  // abrupt completions from `valueOf`/`toString` must surface. Use the full object-aware
+  // `ToNumber`, not the heap placeholder that stubs `ToPrimitive` as `"[object Object]"`.
+  let f_opt = match fraction_digits {
+    None | Some(Value::Undefined) => None,
+    Some(v) => Some(to_integer_or_infinity(crate::spec_ops::to_number(
+      vm, scope, v,
+    )?)),
+  };
+  // §21.1.3.2: non-finite `x` returns `Number::toString` *before* the `f` range check
+  // (so `NaN.toExponential(Infinity)` is `"NaN"`, not a `RangeError`).
+  if !n.is_finite() {
+    let s = scope.heap_mut().to_string(Value::Number(n))?;
+    return Ok(Value::String(s));
+  }
+  if let Some(f) = f_opt {
+    if !(0.0..=100.0).contains(&f) {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_range_error(
+        scope,
+        intr,
+        "toExponential() argument must be between 0 and 100",
+      ));
+    }
+  }
+  let s = number_to_exponential_string(n, f_opt.map(|f| f as i32));
+  Ok(Value::String(scope.alloc_string(&s)?))
+}
+
+/// `Number.prototype.toPrecision` (§21.1.3.5).
+pub fn number_prototype_to_precision(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let n = this_number_value(vm, scope, this)?;
+  let precision = args.first().copied();
+  if matches!(precision, None | Some(Value::Undefined)) {
+    let s = scope.heap_mut().to_string(Value::Number(n))?;
+    return Ok(Value::String(s));
+  }
+  // Same as `toExponential`: `ToInteger(precision)` must observe object `valueOf`/`toString`.
+  let p = to_integer_or_infinity(crate::spec_ops::to_number(vm, scope, precision.unwrap())?);
+  // §21.1.3.5: non-finite `x` returns `Number::toString` before the precision range check.
+  if !n.is_finite() {
+    let s = scope.heap_mut().to_string(Value::Number(n))?;
+    return Ok(Value::String(s));
+  }
+  if !(1.0..=100.0).contains(&p) {
+    let intr = require_intrinsics(vm)?;
+    return Err(crate::error_object::throw_range_error(
+      scope,
+      intr,
+      "toPrecision() argument must be between 1 and 100",
+    ));
+  }
+  let s = number_to_precision_string(n, p as i32);
+  Ok(Value::String(scope.alloc_string(&s)?))
+}
+
+/// `String.prototype.split` (§22.1.3.21) — string separator path (RegExp/`@@split` deferred).
+pub fn string_prototype_split(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let units = this_string_units(vm, scope, this)?;
+  let separator = args.first().copied().unwrap_or(Value::Undefined);
+  let lim = match args.get(1).copied() {
+    None | Some(Value::Undefined) => u32::MAX,
+    Some(v) => {
+      let n = scope.heap_mut().to_number(v)?;
+      if n.is_nan() || n <= 0.0 {
+        0
+      } else if n.is_infinite() {
+        u32::MAX
+      } else {
+        n.min(u32::MAX as f64) as u32
+      }
+    }
+  };
+  if lim == 0 {
+    return Ok(Value::Object(create_array_object(vm, scope, 0)?));
+  }
+  if matches!(separator, Value::Undefined) {
+    let array = create_array_object(vm, scope, 1)?;
+    let s = scope.alloc_string_from_u16_vec(units)?;
+    let key = PropertyKey::from_string(scope.alloc_string("0")?);
+    scope.define_property(array, key, data_desc(Value::String(s), true, true, true))?;
+    return Ok(Value::Object(array));
+  }
+  if matches!(separator, Value::Object(_)) {
+    // RegExp / @@split objects are not implemented yet.
+    return Err(VmError::Unimplemented(
+      "String.prototype.split with object separator",
+    ));
+  }
+  let sep_s = scope.heap_mut().to_string(separator)?;
+  let sep: Vec<u16> = scope.heap().get_string(sep_s)?.as_code_units().to_vec();
+
+  let mut parts: Vec<Vec<u16>> = Vec::new();
+  if sep.is_empty() {
+    for u in units {
+      parts.push(vec![u]);
+      if parts.len() as u32 == lim {
+        break;
+      }
+    }
+  } else {
+    let mut start = 0usize;
+    while start <= units.len() {
+      if parts.len() as u32 == lim {
+        break;
+      }
+      if let Some(rel) = find_subslice(&units[start..], &sep) {
+        let end = start + rel;
+        parts.push(units[start..end].to_vec());
+        start = end + sep.len();
+      } else {
+        parts.push(units[start..].to_vec());
+        break;
+      }
+    }
+  }
+
+  let len = u32::try_from(parts.len()).map_err(|_| VmError::OutOfMemory)?;
+  let array = create_array_object(vm, scope, len)?;
+  for (i, part) in parts.into_iter().enumerate() {
+    let mut s = scope.reborrow();
+    s.push_root(Value::Object(array))?;
+    let str_v = s.alloc_string_from_u16_vec(part)?;
+    s.push_root(Value::String(str_v))?;
+    let key = PropertyKey::from_string(s.alloc_string(&i.to_string())?);
+    s.define_property(
+      array,
+      key,
+      data_desc(Value::String(str_v), true, true, true),
+    )?;
+  }
+  Ok(Value::Object(array))
+}
+
+fn find_subslice(haystack: &[u16], needle: &[u16]) -> Option<usize> {
+  if needle.is_empty() {
+    return Some(0);
+  }
+  haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Format `n` in exponential notation. `fraction_digits = None` means undefined (shortest).
+fn number_to_exponential_string(n: f64, fraction_digits: Option<i32>) -> String {
+  if n.is_nan() {
+    return "NaN".to_string();
+  }
+  if !n.is_finite() {
+    return if n < 0.0 {
+      "-Infinity".to_string()
+    } else {
+      "Infinity".to_string()
+    };
+  }
+
+  // `-0` is treated as `+0` for the zero branch (test262 expects no leading '-').
+  if n == 0.0 {
+    let f = fraction_digits.unwrap_or(0) as usize;
+    let mut m = "0".to_string();
+    if f > 0 {
+      m.push('.');
+      m.extend(std::iter::repeat('0').take(f));
+    }
+    return format!("{m}e+0");
+  }
+
+  let sign = if n < 0.0 { "-" } else { "" };
+  let abs = n.abs();
+  // Leading-digit exponent from a short ryu decomposition (stable for powers of ten).
+  let (mut digits_src, mut exp) = ryu_significant_digits(abs);
+  // For `fractionDigits === undefined`, prefer the shortest digit string (n not divisible by 10).
+  if fraction_digits.is_none() {
+    while digits_src.len() > 1 && digits_src.ends_with('0') {
+      digits_src.pop();
+      exp += 1;
+    }
+  }
+  let mut e = exp + digits_src.len() as i32 - 1;
+  let want = match fraction_digits {
+    None => digits_src.len(),
+    Some(f) => f as usize + 1,
+  };
+
+  // When more digits than ryu's shortest form are requested, re-derive from the float by
+  // scaling/rounding so padded digits match IEEE-754 (test262 `return-values.js`).
+  let digits = if fraction_digits.is_some() && want > digits_src.len() {
+    exponential_digits_from_float(abs, want, &mut e)
+  } else {
+    round_digit_string(&digits_src, want, &mut e)
+  };
+  debug_assert!(digits.len() >= want);
+  let mut m = String::with_capacity(want + 1);
+  m.push(digits.as_bytes()[0] as char);
+  if want > 1 {
+    m.push('.');
+    m.push_str(&digits[1..want]);
+  }
+  let exp_sign = if e >= 0 { "+" } else { "-" };
+  format!("{sign}{m}e{exp_sign}{}", e.abs())
+}
+
+/// Produce `want` significant decimal digits for `abs` in exponential form, updating `e`
+/// (leading-digit exponent) when rounding carries.
+///
+/// Uses the exact IEEE-754 significand (`mant × 2^exp2`) with [`num_bigint`] so requests past
+/// the `f64` integer precision (e.g. `toExponential(17)`) still match ECMA-262 / test262.
+/// Exact compare: `mant × 2^exp2 >= 10^e` (all as mathematical integers / rationals).
+fn mant_pow2_ge_pow10(mant: u64, exp2: i32, e: i32) -> bool {
+  use num_bigint::BigUint;
+  use num_traits::One;
+
+  // mant × 2^exp2 >= 2^e × 5^e  ⇒  mant × 2^(exp2 - e) >= 5^e
+  let five_e = BigUint::from(5u32).pow(e.unsigned_abs());
+  if e >= 0 {
+    let shift = exp2 - e;
+    let mut left = BigUint::from(mant);
+    if shift >= 0 {
+      left <<= shift as u32;
+      left >= five_e
+    } else {
+      // mant >= 5^e × 2^(-shift)
+      let right = five_e << ((-shift) as u32);
+      BigUint::from(mant) >= right
+    }
+  } else {
+    // mant × 2^exp2 >= 10^e = 1/10^(-e)  ⇒ mant × 2^exp2 × 10^(-e) >= 1
+    // ⇒ mant × 2^exp2 × 2^(-e) × 5^(-e) >= 1  ⇒ mant × 2^(exp2 - e) >= 5^(-e)
+    // Here e < 0, so -e > 0; five_e = 5^(-e).
+    let shift = exp2 - e; // exp2 - (negative) = exp2 + |e|
+    let mut left = BigUint::from(mant);
+    if shift >= 0 {
+      left <<= shift as u32;
+      left >= five_e
+    } else {
+      let right = five_e << ((-shift) as u32);
+      BigUint::from(mant) >= right
+    }
+  }
+}
+
+fn exponential_digits_from_float(abs: f64, want: usize, e: &mut i32) -> String {
+  use num_bigint::BigUint;
+  use num_traits::{One, Zero};
+
+  debug_assert!(want >= 1);
+  debug_assert!(abs > 0.0 && abs.is_finite());
+
+  let bits = abs.to_bits();
+  let bias_exp = ((bits >> 52) & 0x7ff) as i32;
+  let frac = bits & ((1u64 << 52) - 1);
+  let (mant, exp2) = if bias_exp == 0 {
+    // Subnormal: abs = frac × 2^-1074.
+    (frac, -1074)
+  } else {
+    // Normal: abs = (2^52 + frac) × 2^(bias_exp - 1075).
+    (frac | (1u64 << 52), bias_exp - 1075)
+  };
+
+  // Correct the ryu-based leading-exponent guess with an exact `floor(log10(abs))`:
+  // largest `e` such that `10^e <= abs`. Critical near powers of ten (e.g. the f64 for
+  // `1e-21` is slightly smaller than 10^-21, so e must be -22).
+  {
+    let mut guess = *e;
+    for _ in 0..4 {
+      if mant_pow2_ge_pow10(mant, exp2, guess + 1) {
+        guess += 1;
+        continue;
+      }
+      if !mant_pow2_ge_pow10(mant, exp2, guess) {
+        guess -= 1;
+        continue;
+      }
+      break;
+    }
+    *e = guess;
+  }
+
+  // Renormalize until `round(abs × 10^((want-1)-e))` yields exactly `want` digits.
+  for _ in 0..8 {
+    let scale = (want as i32 - 1) - *e;
+    let mut num = BigUint::from(mant);
+    let mut den = BigUint::one();
+    if exp2 >= 0 {
+      num <<= exp2 as u32;
+    } else {
+      den <<= (-exp2) as u32;
+    }
+    if scale >= 0 {
+      num *= BigUint::from(10u32).pow(scale as u32);
+    } else {
+      den *= BigUint::from(10u32).pow((-scale) as u32);
+    }
+
+    // Round half away from zero (num/den > 0): q = floor((num + den/2) / den).
+    let q = if den.is_zero() {
+      num
+    } else {
+      (&num + &den / 2u32) / &den
+    };
+
+    let digits = q.to_string();
+    if digits == "0" {
+      *e -= 1;
+      continue;
+    }
+    if digits.len() == want {
+      return digits;
+    }
+    if digits.len() == want + 1 {
+      // Carry into an extra digit (e.g. 999… → 1000…).
+      *e += 1;
+      return format!("1{}", "0".repeat(want - 1));
+    }
+    if digits.len() > want + 1 {
+      *e += (digits.len() - want) as i32;
+      continue;
+    }
+    // Fewer than `want` digits ⇒ assumed leading exponent was too large.
+    *e -= 1;
+  }
+
+  // Last-resort pad (should be unreachable for finite non-zero floats).
+  let mut fallback = "1".to_string();
+  fallback.extend(std::iter::repeat('0').take(want - 1));
+  fallback
+}
+
+/// Format `n` with `p` significant digits (§21.1.3.5).
+fn number_to_precision_string(n: f64, p: i32) -> String {
+  if n.is_nan() {
+    return "NaN".to_string();
+  }
+  if !n.is_finite() {
+    return if n < 0.0 {
+      "-Infinity".to_string()
+    } else {
+      "Infinity".to_string()
+    };
+  }
+  if n == 0.0 {
+    let mut m = "0".to_string();
+    if p > 1 {
+      m.push('.');
+      m.extend(std::iter::repeat('0').take((p - 1) as usize));
+    }
+    return m;
+  }
+
+  let sign = if n < 0.0 { "-" } else { "" };
+  let abs = n.abs();
+  // Leading-digit exponent from a short ryu decomposition, then re-derive the `p`
+  // significant digits from the exact IEEE significand (same path as `toExponential`).
+  // Ryu's shortest form alone mis-rounds values like `1.2345e+27` (stored slightly below
+  // the decimal literal) when truncating to fewer significant digits.
+  let (digits_src, exp) = ryu_significant_digits(abs);
+  let mut e = exp + digits_src.len() as i32 - 1;
+  let m = exponential_digits_from_float(abs, p as usize, &mut e);
+
+  // Exponential when e <= -7 or e >= p.
+  if e < -6 || e >= p {
+    let mut out = String::new();
+    out.push_str(sign);
+    out.push(m.as_bytes()[0] as char);
+    if p > 1 {
+      out.push('.');
+      out.push_str(&m[1..]);
+    }
+    let exp_sign = if e >= 0 { "+" } else { "-" };
+    out.push('e');
+    out.push_str(exp_sign);
+    out.push_str(&e.abs().to_string());
+    return out;
+  }
+
+  let mut out = String::new();
+  out.push_str(sign);
+  if e >= 0 {
+    let k = (e + 1) as usize;
+    if k >= m.len() {
+      out.push_str(&m);
+      out.extend(std::iter::repeat('0').take(k - m.len()));
+      let frac = p as usize - k;
+      if frac > 0 {
+        out.push('.');
+        out.extend(std::iter::repeat('0').take(frac));
+      }
+    } else {
+      out.push_str(&m[..k]);
+      out.push('.');
+      out.push_str(&m[k..]);
+    }
+  } else {
+    out.push('0');
+    out.push('.');
+    out.extend(std::iter::repeat('0').take((-(e + 1)) as usize));
+    out.push_str(&m);
+  }
+  out
+}
+
+/// Round/pad a digit string to `want` significant digits. On carry past the leading digit,
+/// increments `e` (the decimal exponent of the leading digit).
+fn round_digit_string(digits: &str, want: usize, e: &mut i32) -> String {
+  debug_assert!(want >= 1);
+  let mut buf: Vec<u8> = digits.as_bytes().to_vec();
+  while buf.len() < want {
+    buf.push(b'0');
+  }
+  if buf.len() > want {
+    let round_up = buf[want] >= b'5';
+    buf.truncate(want);
+    if round_up {
+      let mut i = want;
+      loop {
+        if i == 0 {
+          // 999… → 1000… with exponent bump.
+          buf = vec![b'1'];
+          buf.extend(std::iter::repeat(b'0').take(want - 1));
+          *e += 1;
+          break;
+        }
+        i -= 1;
+        if buf[i] < b'9' {
+          buf[i] += 1;
+          break;
+        }
+        buf[i] = b'0';
+      }
+    }
+  }
+  String::from_utf8(buf).unwrap_or_else(|_| "0".to_string())
+}
+
+fn ryu_significant_digits(abs: f64) -> (String, i32) {
+  let mut buffer = ryu::Buffer::new();
+  let raw = buffer.format_finite(abs);
+  let raw = raw.strip_suffix(".0").unwrap_or(raw);
+  // Same parse as `property::parse_ryu_to_decimal`: digits × 10^exp = abs.
+  let (mantissa, exp_part) = match raw.split_once('e') {
+    Some((mantissa, exp)) => (mantissa, Some(exp)),
+    None => (raw, None),
+  };
+  let mut exp: i32 = exp_part.map_or(0, |e| e.parse().unwrap_or(0));
+  let mut digits = String::with_capacity(mantissa.len());
+  if let Some((int_part, frac_part)) = mantissa.split_once('.') {
+    digits.push_str(int_part);
+    digits.push_str(frac_part);
+    exp -= frac_part.len() as i32;
+  } else {
+    digits.push_str(mantissa);
+  }
+  let trimmed = digits.trim_start_matches('0');
+  (trimmed.to_string(), exp)
+}
+
+/// `Boolean.prototype.toString` (§20.3.3.3).
+pub fn boolean_prototype_to_string(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let b = match this {
+    Value::Bool(b) => b,
+    Value::Object(obj) => {
+      let marker = scope.alloc_string("vm-js.internal.BooleanData")?;
+      let marker_sym = scope.heap_mut().symbol_for(marker)?;
+      let marker_key = PropertyKey::from_symbol(marker_sym);
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
+        Some(Value::Bool(b)) => b,
+        _ => {
+          let intr = require_intrinsics(vm)?;
+          return Err(crate::error_object::throw_type_error(
+            scope,
+            intr,
+            "Boolean.prototype.toString called on incompatible receiver",
+          ));
+        }
+      }
+    }
+    _ => {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_type_error(
+        scope,
+        intr,
+        "Boolean.prototype.toString called on incompatible receiver",
+      ));
+    }
+  };
+  Ok(Value::String(scope.alloc_string(if b {
+    "true"
+  } else {
+    "false"
+  })?))
+}
+
+/// Formats a finite/`NaN`/`Infinity` number in an arbitrary radix (2–36), matching
+/// `Number::toString` for non-decimal radices closely enough for the common integer cases.
+fn number_to_radix_string(n: f64, radix: u32) -> String {
+  if n.is_nan() {
+    return "NaN".to_string();
+  }
+  if n == 0.0 {
+    return "0".to_string();
+  }
+  if n.is_infinite() {
+    return if n < 0.0 {
+      "-Infinity".to_string()
+    } else {
+      "Infinity".to_string()
+    };
+  }
+  let neg = n < 0.0;
+  let mut x = n.abs();
+  let mut int_part = x.trunc();
+  let mut frac = x - int_part;
+
+  let digit = |d: u32| -> char { std::char::from_digit(d, radix).unwrap_or('0') };
+
+  let mut int_digits = Vec::new();
+  if int_part == 0.0 {
+    int_digits.push('0');
+  } else {
+    while int_part > 0.0 {
+      let rem = (int_part % radix as f64) as u32;
+      int_digits.push(digit(rem));
+      int_part = (int_part / radix as f64).trunc();
+    }
+    int_digits.reverse();
+  }
+  let mut out: String = int_digits.into_iter().collect();
+
+  if frac > 0.0 {
+    out.push('.');
+    // Bounded fractional expansion.
+    let mut count = 0;
+    while frac > 0.0 && count < 52 {
+      frac *= radix as f64;
+      let d = frac.trunc() as u32;
+      out.push(digit(d));
+      frac -= d as f64;
+      count += 1;
+    }
+  }
+  let _ = &mut x;
+  if neg {
+    format!("-{out}")
+  } else {
+    out
+  }
+}
+
+/// `Number` / `ToNumeric` then BigInt→Number when needed (§21.1.1.1).
+fn number_from_value(vm: &mut Vm, scope: &mut Scope<'_>, value: Value) -> Result<f64, VmError> {
+  // Number(value) uses ToNumeric, then converts BigInt via ℝ(n) → Number (not ToNumber,
+  // which throws on BigInt).
+  let mut s = scope.reborrow();
+  s.push_root(value)?;
+  let prim =
+    crate::spec_ops::to_primitive(vm, &mut s, value, crate::spec_ops::ToPrimitiveHint::Number)?;
+  s.push_root(prim)?;
+  match prim {
+    Value::BigInt(b) => Ok(b.to_f64()),
+    other => crate::spec_ops::to_number(vm, &mut s, other),
   }
 }
 
 /// `Number` constructor called as a function.
 pub fn number_constructor_call(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3250,7 +5070,7 @@ pub fn number_constructor_call(
 ) -> Result<Value, VmError> {
   let n = match args.first().copied() {
     None => 0.0,
-    Some(v) => scope.heap_mut().to_number(v)?,
+    Some(v) => number_from_value(vm, scope, v)?,
   };
   Ok(Value::Number(n))
 }
@@ -3265,17 +5085,21 @@ pub fn number_constructor_construct(
   args: &[Value],
   new_target: Value,
 ) -> Result<Value, VmError> {
-  let intr = require_intrinsics(vm)?;
   let prim = match args.first().copied() {
     None => 0.0,
-    Some(v) => scope.heap_mut().to_number(v)?,
+    Some(v) => number_from_value(vm, scope, v)?,
   };
+
+  // GetPrototypeFromConstructor(newTarget, "%Number.prototype%"): when `.prototype` is not an
+  // object, use GetFunctionRealm(newTarget)'s %Number.prototype%.
+  let default_proto =
+    default_proto_from_new_target(vm, scope, new_target, |intr| intr.number_prototype())?;
+  let proto = prototype_from_new_target(vm, scope, new_target, default_proto)?;
 
   let obj = scope.alloc_object()?;
   scope.push_root(Value::Object(obj))?;
-  scope
-    .heap_mut()
-    .object_set_prototype(obj, Some(intr.number_prototype()))?;
+  scope.push_root(Value::Object(proto))?;
+  scope.heap_mut().object_set_prototype(obj, Some(proto))?;
 
   // Store the primitive value on an internal symbol so `Number.prototype.valueOf` can recover it.
   let marker = scope.alloc_string("vm-js.internal.NumberData")?;
@@ -3287,20 +5111,12 @@ pub fn number_constructor_construct(
     data_desc(Value::Number(prim), true, false, false),
   )?;
 
-  // Best-effort: if `new_target.prototype` is an object, use it.
-  if let Value::Object(nt) = new_target {
-    let proto_key = string_key(scope, "prototype")?;
-    if let Ok(Value::Object(p)) = scope.heap().get(nt, &proto_key) {
-      scope.heap_mut().object_set_prototype(obj, Some(p))?;
-    }
-  }
-
   Ok(Value::Object(obj))
 }
 
-/// `Number.prototype.valueOf` (minimal).
+/// `Number.prototype.valueOf` (§21.1.3.7).
 pub fn number_prototype_value_of(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3308,19 +5124,8 @@ pub fn number_prototype_value_of(
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
-  match this {
-    Value::Number(n) => Ok(Value::Number(n)),
-    Value::Object(obj) => {
-      let marker = scope.alloc_string("vm-js.internal.NumberData")?;
-      let marker_sym = scope.heap_mut().symbol_for(marker)?;
-      let marker_key = PropertyKey::from_symbol(marker_sym);
-      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
-        Some(Value::Number(n)) => Ok(Value::Number(n)),
-        _ => Err(VmError::Unimplemented("Number.prototype.valueOf on non-Number object")),
-      }
-    }
-    _ => Err(VmError::Unimplemented("Number.prototype.valueOf on non-number")),
-  }
+  // §21.1.3.7: `thisNumberValue(this)` throws a catchable `TypeError` on an incompatible receiver.
+  Ok(Value::Number(this_number_value(vm, scope, this)?))
 }
 
 /// `Boolean` constructor called as a function.
@@ -3350,17 +5155,20 @@ pub fn boolean_constructor_construct(
   args: &[Value],
   new_target: Value,
 ) -> Result<Value, VmError> {
-  let intr = require_intrinsics(vm)?;
   let prim = match args.first().copied() {
     None => false,
     Some(v) => scope.heap().to_boolean(v)?,
   };
 
+  // GetPrototypeFromConstructor(newTarget, "%Boolean.prototype%").
+  let default_proto =
+    default_proto_from_new_target(vm, scope, new_target, |intr| intr.boolean_prototype())?;
+  let proto = prototype_from_new_target(vm, scope, new_target, default_proto)?;
+
   let obj = scope.alloc_object()?;
   scope.push_root(Value::Object(obj))?;
-  scope
-    .heap_mut()
-    .object_set_prototype(obj, Some(intr.boolean_prototype()))?;
+  scope.push_root(Value::Object(proto))?;
+  scope.heap_mut().object_set_prototype(obj, Some(proto))?;
 
   // Store the primitive value on an internal symbol so `Boolean.prototype.valueOf` can recover it.
   let marker = scope.alloc_string("vm-js.internal.BooleanData")?;
@@ -3372,20 +5180,12 @@ pub fn boolean_constructor_construct(
     data_desc(Value::Bool(prim), true, false, false),
   )?;
 
-  // Best-effort: if `new_target.prototype` is an object, use it.
-  if let Value::Object(nt) = new_target {
-    let proto_key = string_key(scope, "prototype")?;
-    if let Ok(Value::Object(p)) = scope.heap().get(nt, &proto_key) {
-      scope.heap_mut().object_set_prototype(obj, Some(p))?;
-    }
-  }
-
   Ok(Value::Object(obj))
 }
 
-/// `Boolean.prototype.valueOf` (minimal).
+/// `Boolean.prototype.valueOf` (§20.3.3.3).
 pub fn boolean_prototype_value_of(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3393,19 +5193,8 @@ pub fn boolean_prototype_value_of(
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
-  match this {
-    Value::Bool(b) => Ok(Value::Bool(b)),
-    Value::Object(obj) => {
-      let marker = scope.alloc_string("vm-js.internal.BooleanData")?;
-      let marker_sym = scope.heap_mut().symbol_for(marker)?;
-      let marker_key = PropertyKey::from_symbol(marker_sym);
-      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
-        Some(Value::Bool(b)) => Ok(Value::Bool(b)),
-        _ => Err(VmError::Unimplemented("Boolean.prototype.valueOf on non-Boolean object")),
-      }
-    }
-    _ => Err(VmError::Unimplemented("Boolean.prototype.valueOf on non-boolean")),
-  }
+  // §20.3.3.3: `thisBooleanValue(this)` throws a catchable `TypeError` on an incompatible receiver.
+  Ok(Value::Bool(this_boolean_value(vm, scope, this)?))
 }
 
 /// `BigInt.prototype.valueOf` (minimal).
@@ -3424,14 +5213,19 @@ pub fn bigint_prototype_value_of(
       let marker = scope.alloc_string("vm-js.internal.BigIntData")?;
       let marker_sym = scope.heap_mut().symbol_for(marker)?;
       let marker_key = PropertyKey::from_symbol(marker_sym);
-      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
         Some(Value::BigInt(b)) => Ok(Value::BigInt(b)),
         _ => Err(VmError::Unimplemented(
           "BigInt.prototype.valueOf on non-BigInt object",
         )),
       }
     }
-    _ => Err(VmError::Unimplemented("BigInt.prototype.valueOf on non-bigint")),
+    _ => Err(VmError::Unimplemented(
+      "BigInt.prototype.valueOf on non-bigint",
+    )),
   }
 }
 
@@ -3451,14 +5245,19 @@ pub fn symbol_prototype_value_of(
       let marker = scope.alloc_string("vm-js.internal.SymbolData")?;
       let marker_sym = scope.heap_mut().symbol_for(marker)?;
       let marker_key = PropertyKey::from_symbol(marker_sym);
-      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
+      match scope
+        .heap()
+        .object_get_own_data_property_value(obj, &marker_key)?
+      {
         Some(Value::Symbol(s)) => Ok(Value::Symbol(s)),
         _ => Err(VmError::Unimplemented(
           "Symbol.prototype.valueOf on non-Symbol object",
         )),
       }
     }
-    _ => Err(VmError::Unimplemented("Symbol.prototype.valueOf on non-symbol")),
+    _ => Err(VmError::Unimplemented(
+      "Symbol.prototype.valueOf on non-symbol",
+    )),
   }
 }
 
@@ -3560,14 +5359,21 @@ pub fn date_prototype_value_of(
   _args: &[Value],
 ) -> Result<Value, VmError> {
   let Value::Object(obj) = this else {
-    return Err(VmError::TypeError("Date.prototype.valueOf called on non-object"));
+    return Err(VmError::TypeError(
+      "Date.prototype.valueOf called on non-object",
+    ));
   };
   let marker = scope.alloc_string("vm-js.internal.DateData")?;
   let marker_sym = scope.heap_mut().symbol_for(marker)?;
   let marker_key = PropertyKey::from_symbol(marker_sym);
-  match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
+  match scope
+    .heap()
+    .object_get_own_data_property_value(obj, &marker_key)?
+  {
     Some(Value::Number(n)) => Ok(Value::Number(n)),
-    _ => Err(VmError::TypeError("Date.prototype.valueOf called on non-Date object")),
+    _ => Err(VmError::TypeError(
+      "Date.prototype.valueOf called on non-Date object",
+    )),
   }
 }
 
@@ -3593,6 +5399,219 @@ pub fn date_prototype_to_primitive(
   }
 }
 
+/// `Reflect.construct(target, argumentsList [, newTarget])` (ECMA-262 §28.1.2).
+pub fn reflect_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let target = args.first().copied().unwrap_or(Value::Undefined);
+  if !scope.heap().is_constructor(target)? {
+    return Err(VmError::TypeError(
+      "Reflect.construct target is not a constructor",
+    ));
+  }
+  let args_list = match args.get(1).copied().unwrap_or(Value::Undefined) {
+    Value::Object(o) => get_array_like_args(scope, o)?,
+    Value::Undefined => Vec::new(),
+    _ => {
+      return Err(VmError::TypeError(
+        "Reflect.construct argumentsList must be an object",
+      ))
+    }
+  };
+  let new_target = match args.get(2).copied() {
+    None | Some(Value::Undefined) => target,
+    Some(nt) => {
+      if !scope.heap().is_constructor(nt)? {
+        return Err(VmError::TypeError(
+          "Reflect.construct newTarget is not a constructor",
+        ));
+      }
+      nt
+    }
+  };
+  scope.push_root(target)?;
+  scope.push_root(new_target)?;
+  for a in &args_list {
+    scope.push_root(*a)?;
+  }
+  vm.construct_with_host_and_hooks(host, scope, hooks, target, &args_list, new_target)
+}
+
+/// `RegExp.prototype.exec(string)` (minimal stub — always `null`; no matching engine).
+pub fn regexp_prototype_exec(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Null)
+}
+
+/// `RegExp.prototype.test(string)` — best-effort via the Rust `regex` crate.
+///
+/// Not a full ECMA-262 RegExp engine (lookbehind / unicode sets / sticky, etc. are incomplete),
+/// but covers common literal patterns used by language-core suites (e.g. `/[a-z]/`).
+pub fn regexp_prototype_test(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let Value::Object(re) = this else {
+    return throw_type_error(
+      vm,
+      scope,
+      _hooks,
+      "RegExp.prototype.test called on incompatible receiver",
+    );
+  };
+  let mut s = scope.reborrow();
+  s.push_root(Value::Object(re))?;
+  let source_key = string_key(&mut s, "source")?;
+  let flags_key = string_key(&mut s, "flags")?;
+  let source_v = s.ordinary_get(vm, re, source_key, Value::Object(re))?;
+  let flags_v = s.ordinary_get(vm, re, flags_key, Value::Object(re))?;
+  let source = match source_v {
+    Value::String(str_h) => s.heap().get_string(str_h)?.to_utf8_lossy(),
+    _ => return Ok(Value::Bool(false)),
+  };
+  let flags = match flags_v {
+    Value::String(str_h) => s.heap().get_string(str_h)?.to_utf8_lossy(),
+    _ => String::new(),
+  };
+  let arg = args.first().copied().unwrap_or(Value::Undefined);
+  s.push_root(arg)?;
+  let input_s = s.heap_mut().to_string(arg)?;
+  let input = s.heap().get_string(input_s)?.to_utf8_lossy();
+
+  let mut builder = regex::RegexBuilder::new(&source);
+  if flags.contains('i') {
+    builder.case_insensitive(true);
+  }
+  if flags.contains('m') {
+    builder.multi_line(true);
+  }
+  if flags.contains('s') {
+    builder.dot_matches_new_line(true);
+  }
+  match builder.build() {
+    Ok(re) => Ok(Value::Bool(re.is_match(&input))),
+    // Unsupported JS syntax relative to Rust regex: treat as non-match rather than ICE.
+    Err(_) => Ok(Value::Bool(false)),
+  }
+}
+
+/// `%ThrowTypeError%` (§10.2.4.1) — used by restricted `caller`/`arguments` accessors.
+pub fn throw_type_error_restricted(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  throw_type_error(
+    vm,
+    scope,
+    hooks,
+    "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them",
+  )
+}
+
+/// `RegExp(pattern, flags)` / `new RegExp(...)` (minimal stub — no matching engine).
+///
+/// Sufficient for typeof/identity and constructing inert RegExp objects. Pattern/flags are
+/// stored as own data properties when provided; `exec` returns `null` (no matching engine).
+pub fn regexp_constructor_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  // Spec: `RegExp(...)` without `new` is equivalent to `new RegExp(...)` for ordinary use.
+  regexp_constructor_construct(vm, scope, host, hooks, callee, args, Value::Object(callee))
+}
+
+/// `new RegExp(pattern, flags)` (minimal wrapper object).
+pub fn regexp_constructor_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  args: &[Value],
+  new_target: Value,
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj))?;
+  scope
+    .heap_mut()
+    .object_set_prototype(obj, Some(intr.regexp_prototype()))?;
+
+  let marker = scope.alloc_string("vm-js.internal.RegExpData")?;
+  let marker_sym = scope.heap_mut().symbol_for(marker)?;
+  let marker_key = PropertyKey::from_symbol(marker_sym);
+  scope.define_property(
+    obj,
+    marker_key,
+    data_desc(Value::Bool(true), false, false, false),
+  )?;
+
+  // Best-effort own `source` / `flags` for smoke tests (not a full RegExpInitialize).
+  let source = match args.first().copied() {
+    None | Some(Value::Undefined) => Value::String(scope.alloc_string("(?:)")?),
+    Some(v) => {
+      let s = scope.heap_mut().to_string(v)?;
+      Value::String(s)
+    }
+  };
+  scope.push_root(source)?;
+  let flags = match args.get(1).copied() {
+    None | Some(Value::Undefined) => Value::String(scope.alloc_string("")?),
+    Some(v) => {
+      let s = scope.heap_mut().to_string(v)?;
+      Value::String(s)
+    }
+  };
+  scope.push_root(flags)?;
+  let source_key = string_key(scope, "source")?;
+  let flags_key = string_key(scope, "flags")?;
+  let last_index_key = string_key(scope, "lastIndex")?;
+  scope.define_property(obj, source_key, data_desc(source, false, false, true))?;
+  scope.define_property(obj, flags_key, data_desc(flags, false, false, true))?;
+  scope.define_property(
+    obj,
+    last_index_key,
+    data_desc(Value::Number(0.0), true, false, false),
+  )?;
+
+  if let Value::Object(nt) = new_target {
+    let proto_key = string_key(scope, "prototype")?;
+    if let Ok(Value::Object(p)) = scope.heap().get(nt, &proto_key) {
+      scope.heap_mut().object_set_prototype(obj, Some(p))?;
+    }
+  }
+
+  Ok(Value::Object(obj))
+}
+
 /// `Symbol(description)`.
 pub fn symbol_constructor_call(
   _vm: &mut Vm,
@@ -3611,6 +5630,42 @@ pub fn symbol_constructor_call(
   Ok(Value::Symbol(sym))
 }
 
+/// `Symbol.for(key)` (ECMA-262 §20.4.2.2).
+pub fn symbol_for(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let key_val = args.first().copied().unwrap_or(Value::Undefined);
+  let key = scope.heap_mut().to_string(key_val)?;
+  scope.push_root(Value::String(key))?;
+  let sym = scope.heap_mut().symbol_for(key)?;
+  Ok(Value::Symbol(sym))
+}
+
+/// `Symbol.keyFor(sym)` (ECMA-262 §20.4.2.6).
+pub fn symbol_key_for(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let Some(Value::Symbol(sym)) = args.first().copied() else {
+    return Err(VmError::TypeError("Symbol.keyFor requires a symbol"));
+  };
+  match scope.heap().symbol_key_for(sym)? {
+    Some(key) => Ok(Value::String(key)),
+    None => Ok(Value::Undefined),
+  }
+}
+
 fn concat_with_colon_space(name: &[u16], message: &[u16]) -> Result<Vec<u16>, VmError> {
   let mut out: Vec<u16> = Vec::new();
   out
@@ -3625,7 +5680,7 @@ fn concat_with_colon_space(name: &[u16], message: &[u16]) -> Result<Vec<u16>, Vm
 
 /// `Error.prototype.toString` (minimal).
 pub fn error_prototype_to_string(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _host: &mut dyn VmHost,
   _hooks: &mut dyn VmHostHooks,
@@ -3635,7 +5690,11 @@ pub fn error_prototype_to_string(
 ) -> Result<Value, VmError> {
   let this_obj = match this {
     Value::Object(o) => o,
-    _ => return Err(VmError::Unimplemented("Error.prototype.toString on non-object")),
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Error.prototype.toString on non-object",
+      ))
+    }
   };
 
   let name_key = string_key(scope, "name")?;
@@ -3647,13 +5706,13 @@ pub fn error_prototype_to_string(
 
   let name = match name_value {
     Value::Undefined => scope.alloc_string("Error")?,
-    other => scope.heap_mut().to_string(other)?,
+    other => crate::spec_ops::to_string(vm, scope, other)?,
   };
   scope.push_root(Value::String(name))?;
 
   let message = match message_value {
     Value::Undefined => scope.alloc_string("")?,
-    other => scope.heap_mut().to_string(other)?,
+    other => crate::spec_ops::to_string(vm, scope, other)?,
   };
   scope.push_root(Value::String(message))?;
 
@@ -3764,4 +5823,1045 @@ pub fn json_stringify(
   }
   let out = scope.alloc_string_from_u16_vec(buf)?;
   Ok(Value::String(out))
+}
+
+// ---------------------------------------------------------------------------
+// Object.prototype and Object statics for property introspection
+// ---------------------------------------------------------------------------
+
+/// `Object.prototype.hasOwnProperty(V)` (ECMA-262 §20.1.3.2).
+pub fn object_prototype_has_own_property(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(this)?;
+  let key = crate::spec_ops::to_property_key(
+    vm,
+    &mut scope,
+    args.first().copied().unwrap_or(Value::Undefined),
+  )?;
+  root_property_key(&mut scope, key)?;
+  match this {
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      Err(crate::error_object::throw_type_error(
+        &mut scope,
+        intr,
+        "Object.prototype.hasOwnProperty called on null or undefined",
+      ))
+    }
+    Value::Object(obj) => Ok(Value::Bool(
+      scope.heap().object_get_own_property(obj, &key)?.is_some(),
+    )),
+    // Per §7.1.18 ToObject: a String primitive has own "length" and canonical index properties.
+    Value::String(s) => {
+      let len = scope.heap().get_string(s)?.len_code_units();
+      let is_own = match key {
+        PropertyKey::String(ks) => {
+          let ku = scope.heap().get_string(ks)?;
+          let text = String::from_utf16_lossy(ku.as_code_units());
+          if text == "length" {
+            true
+          } else if let Ok(idx) = text.parse::<usize>() {
+            // Canonical numeric index only (no leading zeros / signs).
+            text == idx.to_string() && idx < len
+          } else {
+            false
+          }
+        }
+        PropertyKey::Symbol(_) => false,
+      };
+      Ok(Value::Bool(is_own))
+    }
+    // Other primitives box to wrappers whose own properties are none (their data is on the
+    // prototype), so `hasOwnProperty` is always false.
+    _ => Ok(Value::Bool(false)),
+  }
+}
+
+/// Builds a plain object with `%Object.prototype%` as its prototype.
+fn new_ordinary_object(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let obj = scope.alloc_object()?;
+  scope
+    .heap_mut()
+    .object_set_prototype(obj, Some(intr.object_prototype()))?;
+  Ok(obj)
+}
+
+/// `FromPropertyDescriptor(Desc)` (ECMA-262 §6.2.6.4): materializes a descriptor as a plain object.
+fn from_property_descriptor(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  desc: PropertyDescriptor,
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  let obj = new_ordinary_object(vm, &mut scope)?;
+  scope.push_root(Value::Object(obj))?;
+
+  let put = |scope: &mut Scope<'_>, name: &str, value: Value| -> Result<(), VmError> {
+    let key = string_key(scope, name)?;
+    root_property_key(scope, key)?;
+    scope.define_property(obj, key, data_desc(value, true, true, true))
+  };
+
+  match desc.kind {
+    PropertyKind::Data { value, writable } => {
+      put(&mut scope, "value", value)?;
+      put(&mut scope, "writable", Value::Bool(writable))?;
+    }
+    PropertyKind::Accessor { get, set } => {
+      put(&mut scope, "get", get)?;
+      put(&mut scope, "set", set)?;
+    }
+  }
+  put(&mut scope, "enumerable", Value::Bool(desc.enumerable))?;
+  put(&mut scope, "configurable", Value::Bool(desc.configurable))?;
+  Ok(Value::Object(obj))
+}
+
+/// `Object.getOwnPropertyDescriptor(O, P)` (ECMA-262 §20.1.2.8).
+pub fn object_get_own_property_descriptor(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  // Spec: `ToObject(O)`. Null/undefined throw; other primitives are not yet boxed here.
+  let obj = match args.first().copied().unwrap_or(Value::Undefined) {
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_type_error(
+        &mut scope,
+        intr,
+        "Object.getOwnPropertyDescriptor called on null or undefined",
+      ));
+    }
+    Value::Object(o) => o,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Object.getOwnPropertyDescriptor on primitive (ToObject boxing)",
+      ))
+    }
+  };
+  scope.push_root(Value::Object(obj))?;
+  let key = crate::spec_ops::to_property_key(
+    vm,
+    &mut scope,
+    args.get(1).copied().unwrap_or(Value::Undefined),
+  )?;
+  root_property_key(&mut scope, key)?;
+  match scope.heap().object_get_own_property(obj, &key)? {
+    Some(desc) => from_property_descriptor(vm, &mut scope, desc),
+    None => Ok(Value::Undefined),
+  }
+}
+
+/// `Object.prototype.isPrototypeOf(V)` (ECMA-262 §20.1.3.3).
+pub fn object_prototype_is_prototype_of(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(this)?;
+  let v = args.first().copied().unwrap_or(Value::Undefined);
+  scope.push_root(v)?;
+  let Value::Object(mut current) = v else {
+    return Ok(Value::Bool(false));
+  };
+
+  let o = match this {
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_type_error(
+        &mut scope,
+        intr,
+        "Object.prototype.isPrototypeOf called on null or undefined",
+      ));
+    }
+    Value::Object(obj) => obj,
+    // Minimal ToObject for primitives: compare against the matching intrinsic prototype.
+    // (A temporary wrapper would never appear on another object's [[Prototype]] chain.)
+    Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::BigInt(_) | Value::Symbol(_) => {
+      return Ok(Value::Bool(false));
+    }
+  };
+  scope.push_root(Value::Object(o))?;
+
+  // Bound the walk so a corrupted prototype cycle cannot hang the host.
+  for _ in 0..10_000 {
+    let Some(proto) = scope.heap().object_prototype(current)? else {
+      return Ok(Value::Bool(false));
+    };
+    if proto == o {
+      return Ok(Value::Bool(true));
+    }
+    current = proto;
+    scope.push_root(Value::Object(current))?;
+  }
+  Err(VmError::PrototypeChainTooDeep)
+}
+
+/// `Object.prototype.propertyIsEnumerable(V)` (ECMA-262 §20.1.3.5).
+pub fn object_prototype_property_is_enumerable(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(this)?;
+  let key = crate::spec_ops::to_property_key(
+    vm,
+    &mut scope,
+    args.first().copied().unwrap_or(Value::Undefined),
+  )?;
+  root_property_key(&mut scope, key)?;
+
+  let obj = match this {
+    Value::Undefined | Value::Null => {
+      let intr = require_intrinsics(vm)?;
+      return Err(crate::error_object::throw_type_error(
+        &mut scope,
+        intr,
+        "Object.prototype.propertyIsEnumerable called on null or undefined",
+      ));
+    }
+    Value::Object(o) => o,
+    // Minimal ToObject for primitives used as `this` via `.call`: treat as having no own
+    // enumerable properties except String index/length (handled like hasOwnProperty).
+    Value::String(s) => {
+      let len = scope.heap().get_string(s)?.len_code_units();
+      let enumerable = match key {
+        PropertyKey::String(ks) => {
+          let text = String::from_utf16_lossy(scope.heap().get_string(ks)?.as_code_units());
+          if text == "length" {
+            false
+          } else if let Ok(idx) = text.parse::<usize>() {
+            text == idx.to_string() && idx < len
+          } else {
+            false
+          }
+        }
+        PropertyKey::Symbol(_) => false,
+      };
+      return Ok(Value::Bool(enumerable));
+    }
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Object.prototype.propertyIsEnumerable on non-object this",
+      ))
+    }
+  };
+
+  match scope.heap().object_get_own_property(obj, &key)? {
+    Some(desc) => Ok(Value::Bool(desc.enumerable)),
+    None => Ok(Value::Bool(false)),
+  }
+}
+
+/// `Object.getOwnPropertyNames(O)` (ECMA-262 §20.1.2.10): the object's own String-keyed property
+/// names (enumerable or not), in ordinary ownkeys order.
+pub fn object_get_own_property_names(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let obj = require_object(args.first().copied().unwrap_or(Value::Undefined))?;
+
+  let own_keys = scope.heap().ordinary_own_property_keys(obj)?;
+  let mut names: Vec<crate::GcString> = Vec::new();
+  names
+    .try_reserve(own_keys.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+  for key in own_keys {
+    if let PropertyKey::String(key_str) = key {
+      names.push(key_str);
+    }
+  }
+
+  let len = u32::try_from(names.len()).map_err(|_| VmError::OutOfMemory)?;
+  let array = create_array_object(vm, scope, len)?;
+  for (i, name) in names.iter().copied().enumerate() {
+    let mut idx_scope = scope.reborrow();
+    idx_scope.push_root(Value::Object(array))?;
+    idx_scope.push_root(Value::String(name))?;
+    let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
+    idx_scope.define_property(array, key, data_desc(Value::String(name), true, true, true))?;
+  }
+  Ok(Value::Object(array))
+}
+
+// ---------------------------------------------------------------------------
+// Math (ECMA-262 §21.3)
+// ---------------------------------------------------------------------------
+
+/// Shared body for the single-argument `Math` functions: `ToNumber(args[0])` then apply `f`.
+fn math_unary(scope: &mut Scope<'_>, args: &[Value], f: fn(f64) -> f64) -> Result<Value, VmError> {
+  let x = match args.first().copied() {
+    None => f64::NAN,
+    Some(v) => scope.heap_mut().to_number(v)?,
+  };
+  Ok(Value::Number(f(x)))
+}
+
+macro_rules! math_unary_fn {
+  ($name:ident, $f:expr) => {
+    pub fn $name(
+      _vm: &mut Vm,
+      scope: &mut Scope<'_>,
+      _host: &mut dyn VmHost,
+      _hooks: &mut dyn VmHostHooks,
+      _callee: GcObject,
+      _this: Value,
+      args: &[Value],
+    ) -> Result<Value, VmError> {
+      math_unary(scope, args, $f)
+    }
+  };
+}
+
+// §21.3.2: elementary functions. `f64` intrinsics match IEEE-754 / the spec's required results for
+// the common finite domain; NaN/Infinity edges follow Rust's libm, which matches the spec here.
+math_unary_fn!(math_abs, f64::abs);
+math_unary_fn!(math_floor, f64::floor);
+math_unary_fn!(math_ceil, f64::ceil);
+math_unary_fn!(math_trunc, f64::trunc);
+math_unary_fn!(math_sqrt, f64::sqrt);
+math_unary_fn!(math_cbrt, f64::cbrt);
+math_unary_fn!(math_exp, f64::exp);
+math_unary_fn!(math_expm1, f64::exp_m1);
+math_unary_fn!(math_log, f64::ln);
+math_unary_fn!(math_log2, f64::log2);
+math_unary_fn!(math_log10, f64::log10);
+math_unary_fn!(math_log1p, f64::ln_1p);
+math_unary_fn!(math_sin, f64::sin);
+math_unary_fn!(math_cos, f64::cos);
+math_unary_fn!(math_tan, f64::tan);
+math_unary_fn!(math_asin, f64::asin);
+math_unary_fn!(math_acos, f64::acos);
+math_unary_fn!(math_atan, f64::atan);
+math_unary_fn!(math_sinh, f64::sinh);
+math_unary_fn!(math_cosh, f64::cosh);
+math_unary_fn!(math_tanh, f64::tanh);
+math_unary_fn!(math_asinh, f64::asinh);
+math_unary_fn!(math_acosh, f64::acosh);
+math_unary_fn!(math_atanh, f64::atanh);
+// §21.3.2.29 `Math.sign`: preserves signed zeros and NaN.
+math_unary_fn!(math_sign, |x: f64| {
+  if x.is_nan() || x == 0.0 {
+    x
+  } else if x > 0.0 {
+    1.0
+  } else {
+    -1.0
+  }
+});
+// §21.3.2.28 `Math.round`: round half toward +Infinity (not Rust's round-half-away-from-zero).
+math_unary_fn!(math_round, |x: f64| {
+  if !x.is_finite() || x == 0.0 {
+    x
+  } else {
+    let r = (x + 0.5).floor();
+    // `(-0.5 + 0.5).floor() == 0`, but the spec requires -0 for inputs in (-0.5, 0].
+    if r == 0.0 && x < 0.0 {
+      -0.0
+    } else {
+      r
+    }
+  }
+});
+// §21.3.2.18 `Math.fround`: round to the nearest single-precision float.
+math_unary_fn!(math_fround, |x: f64| x as f32 as f64);
+// §21.3.2.11 `Math.clz32`: count leading zeros of ToUint32(x).
+math_unary_fn!(math_clz32, |x: f64| {
+  let u = crate::exec::number_to_uint32(x);
+  u.leading_zeros() as f64
+});
+
+/// `Math.pow(base, exponent)` (§21.3.2.26) via `Number::exponentiate` (§6.1.6.1.3).
+pub fn math_pow(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let base = number_arg(scope, args, 0)?;
+  let exp = number_arg(scope, args, 1)?;
+  Ok(Value::Number(crate::exec::number_exponentiate(base, exp)))
+}
+
+/// `Math.atan2(y, x)` (§21.3.2.8).
+pub fn math_atan2(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let y = number_arg(scope, args, 0)?;
+  let x = number_arg(scope, args, 1)?;
+  Ok(Value::Number(y.atan2(x)))
+}
+
+/// `Math.hypot(...values)` (§21.3.2.19).
+pub fn math_hypot(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut sum = 0.0f64;
+  let mut any_inf = false;
+  let mut any_nan = false;
+  for v in args.iter().copied() {
+    let n = scope.heap_mut().to_number(v)?;
+    if n.is_infinite() {
+      any_inf = true;
+    } else if n.is_nan() {
+      any_nan = true;
+    }
+    sum += n * n;
+  }
+  if any_inf {
+    return Ok(Value::Number(f64::INFINITY));
+  }
+  if any_nan {
+    return Ok(Value::Number(f64::NAN));
+  }
+  Ok(Value::Number(sum.sqrt()))
+}
+
+/// `Math.max(...values)` (§21.3.2.24).
+pub fn math_max(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut highest = f64::NEG_INFINITY;
+  for v in args.iter().copied() {
+    let n = scope.heap_mut().to_number(v)?;
+    if n.is_nan() {
+      return Ok(Value::Number(f64::NAN));
+    }
+    // §21.3.2.24: +0 is considered larger than -0.
+    if n > highest || (n == 0.0 && highest == 0.0 && n.is_sign_positive()) {
+      highest = n;
+    }
+  }
+  Ok(Value::Number(highest))
+}
+
+/// `Math.min(...values)` (§21.3.2.25).
+pub fn math_min(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut lowest = f64::INFINITY;
+  for v in args.iter().copied() {
+    let n = scope.heap_mut().to_number(v)?;
+    if n.is_nan() {
+      return Ok(Value::Number(f64::NAN));
+    }
+    // §21.3.2.25: -0 is considered smaller than +0.
+    if n < lowest || (n == 0.0 && lowest == 0.0 && n.is_sign_negative()) {
+      lowest = n;
+    }
+  }
+  Ok(Value::Number(lowest))
+}
+
+/// `Math.random()` (§21.3.2.27): a pseudo-random value in `[0, 1)`.
+///
+/// Determinism note: this VM is otherwise deterministic, but `Math.random` is defined to be
+/// non-deterministic. We seed a small xorshift PRNG from the current time so test262 randomness
+/// tests observe varying output without pulling in an RNG dependency.
+pub fn math_random(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  use std::cell::Cell;
+  use std::time::{SystemTime, UNIX_EPOCH};
+  thread_local! {
+    static STATE: Cell<u64> = Cell::new(0);
+  }
+  let mut x = STATE.with(|s| {
+    let mut v = s.get();
+    if v == 0 {
+      v = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        | 1;
+    }
+    v
+  });
+  x ^= x << 13;
+  x ^= x >> 7;
+  x ^= x << 17;
+  STATE.with(|s| s.set(x));
+  // Take 53 bits for a double in [0, 1).
+  let mantissa = x >> 11;
+  Ok(Value::Number(mantissa as f64 / (1u64 << 53) as f64))
+}
+
+// ---------------------------------------------------------------------------
+// Global / Number numeric functions (ECMA-262 §19.2, §21.1.2)
+// ---------------------------------------------------------------------------
+
+/// Returns the ToString code units of `value` as a Rust `String` (number syntax is ASCII, so a
+/// lossy UTF-16 decode is exact for the parsing done by `parseInt`/`parseFloat`).
+fn to_string_lossy(vm: &mut Vm, scope: &mut Scope<'_>, value: Value) -> Result<String, VmError> {
+  let s = crate::spec_ops::to_string(vm, scope, value)?;
+  let units = scope.heap().get_string(s)?.as_code_units().to_vec();
+  Ok(String::from_utf16_lossy(&units))
+}
+
+/// ECMA-262 `StrWhiteSpace` / whitespace trimming used by `parseInt`/`parseFloat` (§19.2).
+fn is_js_whitespace(c: char) -> bool {
+  matches!(
+    c,
+    '\u{0009}'
+      | '\u{000A}'
+      | '\u{000B}'
+      | '\u{000C}'
+      | '\u{000D}'
+      | '\u{0020}'
+      | '\u{00A0}'
+      | '\u{1680}'
+      | '\u{2000}'
+      ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+  )
+}
+
+/// `parseInt(string, radix)` (ECMA-262 §19.2.5 / §21.1.2.13).
+pub fn global_parse_int(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let input = to_string_lossy(vm, scope, args.first().copied().unwrap_or(Value::Undefined))?;
+  let radix_arg = match args.get(1).copied() {
+    None | Some(Value::Undefined) => 0.0,
+    Some(v) => scope.heap_mut().to_number(v)?,
+  };
+
+  let s: &str = input.trim_start_matches(is_js_whitespace);
+  let mut chars = s.chars().peekable();
+
+  let mut sign = 1.0f64;
+  match chars.peek() {
+    Some('+') => {
+      chars.next();
+    }
+    Some('-') => {
+      sign = -1.0;
+      chars.next();
+    }
+    _ => {}
+  }
+
+  let mut radix = crate::exec::number_to_int32(radix_arg);
+  let mut strip_prefix = true;
+  if radix != 0 {
+    if !(2..=36).contains(&radix) {
+      return Ok(Value::Number(f64::NAN));
+    }
+    if radix != 16 {
+      strip_prefix = false;
+    }
+  } else {
+    radix = 10;
+  }
+
+  if strip_prefix {
+    let rest: String = chars.clone().collect();
+    if rest.starts_with("0x") || rest.starts_with("0X") {
+      chars.next();
+      chars.next();
+      radix = 16;
+    }
+  }
+
+  let radix_u = radix as u32;
+  let mut value = 0.0f64;
+  let mut any = false;
+  for c in chars {
+    match c.to_digit(radix_u) {
+      Some(d) => {
+        value = value * radix as f64 + d as f64;
+        any = true;
+      }
+      None => break,
+    }
+  }
+  if !any {
+    return Ok(Value::Number(f64::NAN));
+  }
+  Ok(Value::Number(sign * value))
+}
+
+/// `parseFloat(string)` (ECMA-262 §19.2.4 / §21.1.2.12).
+pub fn global_parse_float(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let input = to_string_lossy(vm, scope, args.first().copied().unwrap_or(Value::Undefined))?;
+  let s: &str = input.trim_start_matches(is_js_whitespace);
+
+  // `Infinity` with an optional leading sign.
+  let after_sign = s.strip_prefix(['+', '-']).unwrap_or(s);
+  if after_sign.starts_with("Infinity") {
+    return Ok(Value::Number(if s.starts_with('-') {
+      f64::NEG_INFINITY
+    } else {
+      f64::INFINITY
+    }));
+  }
+
+  // Scan the longest prefix matching StrDecimalLiteral, then parse it with `f64::from_str`.
+  let bytes = s.as_bytes();
+  let mut i = 0usize;
+  if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+    i += 1;
+  }
+  let int_start = i;
+  while i < bytes.len() && bytes[i].is_ascii_digit() {
+    i += 1;
+  }
+  let mut frac_digits = 0usize;
+  if i < bytes.len() && bytes[i] == b'.' {
+    i += 1;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+      i += 1;
+      frac_digits += 1;
+    }
+  }
+  let int_digits = if bytes[int_start..].is_empty() {
+    0
+  } else {
+    bytes[int_start..i.min(bytes.len())]
+      .iter()
+      .take_while(|b| b.is_ascii_digit())
+      .count()
+  };
+  // Require at least one digit in the mantissa.
+  if int_digits == 0 && frac_digits == 0 {
+    return Ok(Value::Number(f64::NAN));
+  }
+  // Optional exponent part.
+  if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+    let mut j = i + 1;
+    if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+      j += 1;
+    }
+    let exp_start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+      j += 1;
+    }
+    if j > exp_start {
+      i = j;
+    }
+  }
+  match s[..i].parse::<f64>() {
+    Ok(n) => Ok(Value::Number(n)),
+    Err(_) => Ok(Value::Number(f64::NAN)),
+  }
+}
+
+/// `isFinite(number)` (ECMA-262 §19.2.2).
+pub fn global_is_finite(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let n = scope
+    .heap_mut()
+    .to_number(args.first().copied().unwrap_or(Value::Undefined))?;
+  Ok(Value::Bool(n.is_finite()))
+}
+
+/// `Number.isNaN(x)` (ECMA-262 §21.1.2.4): no coercion; non-Number arguments are `false`.
+pub fn number_is_nan(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Bool(matches!(
+    args.first().copied(),
+    Some(Value::Number(n)) if n.is_nan()
+  )))
+}
+
+/// `Number.isFinite(x)` (ECMA-262 §21.1.2.2): no coercion.
+pub fn number_is_finite(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Bool(matches!(
+    args.first().copied(),
+    Some(Value::Number(n)) if n.is_finite()
+  )))
+}
+
+/// `Number.isInteger(x)` (ECMA-262 §21.1.2.3): no coercion.
+pub fn number_is_integer(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let is_int = matches!(
+    args.first().copied(),
+    Some(Value::Number(n)) if n.is_finite() && n.trunc() == n
+  );
+  Ok(Value::Bool(is_int))
+}
+
+/// `Number.isSafeInteger(x)` (ECMA-262 §21.1.2.5): no coercion.
+pub fn number_is_safe_integer(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  const MAX_SAFE: f64 = 9007199254740991.0; // 2^53 - 1
+  let is_safe = matches!(
+    args.first().copied(),
+    Some(Value::Number(n)) if n.is_finite() && n.trunc() == n && n.abs() <= MAX_SAFE
+  );
+  Ok(Value::Bool(is_safe))
+}
+
+// ---------------------------------------------------------------------------
+// String.fromCharCode (ECMA-262 §22.1.2.1)
+// ---------------------------------------------------------------------------
+
+/// `String.fromCharCode(...codeUnits)` (ECMA-262 §22.1.2.1).
+pub fn string_from_char_code(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut units: Vec<u16> = Vec::new();
+  units
+    .try_reserve(args.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+  for v in args.iter().copied() {
+    let n = scope.heap_mut().to_number(v)?;
+    // ToUint16 (§7.1.6): truncate toward zero, modulo 2^16.
+    let unit = to_uint16(n);
+    units.push(unit);
+  }
+  Ok(Value::String(scope.alloc_string_from_u16_vec(units)?))
+}
+
+/// ECMA-262 `ToUint16` (§7.1.6).
+fn to_uint16(n: f64) -> u16 {
+  if !n.is_finite() || n == 0.0 {
+    return 0;
+  }
+  let int = n.trunc();
+  let m = int.rem_euclid(65536.0);
+  m as u16
+}
+
+/// `%eval%` native fallback (ECMA-262 §19.2.1).
+///
+/// Ordinary Evaluator call sites intercept `%eval%` and run `PerformEval` with the
+/// correct direct/indirect mode. This native exists so `typeof eval === "function"`
+/// and property lookups succeed; exotic `apply`/`bound` routes are not yet fully
+/// wired to realm lexical state.
+pub fn global_eval_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let _ = (vm, scope);
+  match args.first().copied().unwrap_or(Value::Undefined) {
+    Value::String(_) => Err(VmError::Unimplemented(
+      "eval via Function.prototype.apply/call not yet routed through PerformEval",
+    )),
+    other => Ok(other),
+  }
+}
+
+/// `BigInt(value)` (ECMA-262 §21.2.1.1). Not constructable.
+pub fn bigint_constructor_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  use crate::JsBigInt;
+  let arg0 = args.first().copied().unwrap_or(Value::Undefined);
+  let prim =
+    crate::spec_ops::to_primitive(vm, scope, arg0, crate::spec_ops::ToPrimitiveHint::Number)?;
+  match prim {
+    Value::BigInt(b) => Ok(Value::BigInt(b)),
+    Value::Bool(b) => Ok(Value::BigInt(if b {
+      JsBigInt::from_u128(1)
+    } else {
+      JsBigInt::zero()
+    })),
+    Value::Number(n) => {
+      if !n.is_finite() || n.fract() != 0.0 {
+        return throw_type_error(vm, scope, host, "Cannot convert number to a BigInt");
+      }
+      if n.abs() <= (u128::MAX as f64) && n.trunc() == n {
+        let mag = n.abs() as u128;
+        let bi = JsBigInt::from_u128(mag);
+        return Ok(Value::BigInt(if n < 0.0 { bi.negate() } else { bi }));
+      }
+      let s = format!("{n:.0}");
+      let Some(bi) = JsBigInt::from_decimal_str(&s) else {
+        return throw_type_error(vm, scope, host, "Cannot convert number to a BigInt");
+      };
+      Ok(Value::BigInt(bi))
+    }
+    Value::String(s) => {
+      let text = scope.heap().get_string(s)?.to_utf8_lossy();
+      let Some(bi) = JsBigInt::from_string_integer_literal(&text) else {
+        let intr = require_intrinsics(vm)?;
+        let err = crate::error_object::new_syntax_error_object(
+          scope,
+          &intr,
+          "Cannot convert string to a BigInt",
+        )?;
+        return Err(VmError::Throw(err));
+      };
+      Ok(Value::BigInt(bi))
+    }
+    Value::Undefined | Value::Null | Value::Symbol(_) | Value::Object(_) => {
+      throw_type_error(vm, scope, host, "Cannot convert value to a BigInt")
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mapped arguments MakeArgGetter / MakeArgSetter (ECMA-262 §10.4.4.7.1–2)
+// ---------------------------------------------------------------------------
+
+/// Getter installed on mapped `arguments` integer indices.
+///
+/// Captures:
+/// - `[[ClosureEnv]]`: the function's parameter Environment Record
+/// - `native_slots[0]`: binding name (`String`)
+pub fn arguments_arg_getter_call(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let Some(env) = scope.heap().get_function_closure_env(callee)? else {
+    return Err(VmError::InvariantViolation(
+      "arguments arg getter missing closure env",
+    ));
+  };
+  let slots = scope.heap().get_function_native_slots(callee)?;
+  let Some(Value::String(name_s)) = slots.first().copied() else {
+    return Err(VmError::InvariantViolation(
+      "arguments arg getter missing binding name slot",
+    ));
+  };
+  let name = scope.heap().get_string(name_s)?.to_utf8_lossy();
+  scope.heap().env_get_binding_value(env, &name, false)
+}
+
+/// Setter installed on mapped `arguments` integer indices.
+///
+/// Captures the same slots as [`arguments_arg_getter_call`].
+pub fn arguments_arg_setter_call(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let Some(env) = scope.heap().get_function_closure_env(callee)? else {
+    return Err(VmError::InvariantViolation(
+      "arguments arg setter missing closure env",
+    ));
+  };
+  let slots = scope.heap().get_function_native_slots(callee)?;
+  let Some(Value::String(name_s)) = slots.first().copied() else {
+    return Err(VmError::InvariantViolation(
+      "arguments arg setter missing binding name slot",
+    ));
+  };
+  let name = scope.heap().get_string(name_s)?.to_utf8_lossy();
+  let value = args.first().copied().unwrap_or(Value::Undefined);
+  scope
+    .heap_mut()
+    .env_set_mutable_binding(env, &name, value, false)?;
+  Ok(Value::Undefined)
+}
+
+/// `[[Call]]` for class constructors (`MakeClassConstructor`): always throws TypeError.
+pub fn class_constructor_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  throw_type_error(
+    vm,
+    scope,
+    hooks,
+    "Class constructor cannot be invoked without 'new'",
+  )
+}
+
+/// Default class constructor body (`constructor() {}` for base classes).
+pub fn class_default_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  _args: &[Value],
+  new_target: Value,
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let obj = crate::spec_ops::ordinary_create_from_constructor(
+    vm,
+    scope,
+    new_target,
+    intr.object_prototype(),
+    &[],
+    |scope| scope.alloc_object(),
+  )?;
+  scope.push_root(Value::Object(obj))?;
+  scope.push_root(Value::Object(callee))?;
+  // InitializeInstanceElements(O, constructor) for private fields/methods/accessors.
+  scope
+    .heap_mut()
+    .initialize_instance_private_elements(obj, callee)?;
+  Ok(Value::Object(obj))
+}
+
+/// Default derived-class constructor (`constructor(...args) { super(...args); }`).
+///
+/// Uses `callee.[[GetPrototypeOf]]` as the super constructor (ECMA-262 default ctor
+/// abstract closure / GetSuperConstructor), then `Construct(super, args, newTarget)`.
+pub fn class_default_derived_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  args: &[Value],
+  new_target: Value,
+) -> Result<Value, VmError> {
+  let super_ctor = scope.heap().object_prototype(callee)?;
+  let Some(super_ctor) = super_ctor else {
+    return throw_type_error(vm, scope, hooks, "Super constructor is nullish");
+  };
+  if !scope.heap().is_constructor(Value::Object(super_ctor))? {
+    return throw_type_error(
+      vm,
+      scope,
+      hooks,
+      "Super expression must evaluate to a constructor",
+    );
+  }
+  vm.construct_with_host_and_hooks(
+    host,
+    scope,
+    hooks,
+    Value::Object(super_ctor),
+    args,
+    new_target,
+  )
 }

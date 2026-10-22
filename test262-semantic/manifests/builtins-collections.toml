@@ -1,0 +1,11 @@
+# Expectation manifest: known gaps for builtins-collections (Map/Set/WeakMap/WeakSet).
+#
+# Cleared 2026-07-25: Map/valid-keys + Set/valid-values XPASS after minimal
+# TypedArray (Int32/Uint32/BigInt64/BigUint64) + WeakRef globals.
+# Cleared 2026-07-25: Map.groupBy + Map/WeakMap getOrInsert / getOrInsertComputed
+# (plus Array.from iterable path, String @@iterator, for-of let per-iteration).
+# Residue (not in this suite's include): true weak GC, full
+# ArrayBuffer/DataView/TypedArray exotic surface.
+# Rerun: see wiki/crates/vm-js.md#test262-status.
+
+expectations = []

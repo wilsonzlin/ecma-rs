@@ -987,7 +987,7 @@ fn project_mode_resolves_types_and_type_roots() {
     .expect("diagnostics array");
   assert!(
     diagnostics.iter().any(|d| {
-      d.get("code").and_then(|c| c.as_str()) == Some("TC0005")
+      d.get("code").and_then(|c| c.as_str()) == Some("TS2304")
         && d
           .get("message")
           .and_then(|m| m.as_str())

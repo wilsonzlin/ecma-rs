@@ -1,0 +1,913 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 1,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    }
+  },
+  "compare_mode": "none",
+  "results": [
+    {
+      "id": "types/typeRelationships/subtypesAndSuperTypes/subtypingWithConstructSignatures2.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/subtypesAndSuperTypes/subtypingWithConstructSignatures2.ts",
+      "outcome": "match",
+      "duration_ms": 1003,
+      "rust_ms": 1003,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 335,
+            "end": 344,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 440,
+            "end": 449,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 541,
+            "end": 550,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 655,
+            "end": 664,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 779,
+            "end": 788,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 900,
+            "end": 909,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1041,
+            "end": 1050,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1214,
+            "end": 1223,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1387,
+            "end": 1396,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1498,
+            "end": 1507,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1643,
+            "end": 1652,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1781,
+            "end": 1790,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 1918,
+            "end": 1927,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2041,
+            "end": 2050,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2191,
+            "end": 2200,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2364,
+            "end": 2373,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2542,
+            "end": 2551,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2011",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2822,
+            "end": 2831,
+            "severity": "error",
+            "message": "cannot resolve typeof a"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 2964,
+            "end": 2970,
+            "severity": "error",
+            "message": "r1arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3040,
+            "end": 3046,
+            "severity": "error",
+            "message": "r1arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3048,
+            "end": 3054,
+            "severity": "error",
+            "message": "r1arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3118,
+            "end": 3124,
+            "severity": "error",
+            "message": "r1arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3126,
+            "end": 3132,
+            "severity": "error",
+            "message": "r1arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3283,
+            "end": 3289,
+            "severity": "error",
+            "message": "r2arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3304,
+            "end": 3310,
+            "severity": "error",
+            "message": "r2arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3312,
+            "end": 3318,
+            "severity": "error",
+            "message": "r2arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3333,
+            "end": 3339,
+            "severity": "error",
+            "message": "r2arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3341,
+            "end": 3347,
+            "severity": "error",
+            "message": "r2arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3438,
+            "end": 3444,
+            "severity": "error",
+            "message": "r3arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3459,
+            "end": 3465,
+            "severity": "error",
+            "message": "r3arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3467,
+            "end": 3473,
+            "severity": "error",
+            "message": "r3arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3488,
+            "end": 3494,
+            "severity": "error",
+            "message": "r3arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3496,
+            "end": 3502,
+            "severity": "error",
+            "message": "r3arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3615,
+            "end": 3621,
+            "severity": "error",
+            "message": "r4arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3643,
+            "end": 3649,
+            "severity": "error",
+            "message": "r4arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3651,
+            "end": 3657,
+            "severity": "error",
+            "message": "r4arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3672,
+            "end": 3678,
+            "severity": "error",
+            "message": "r4arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3680,
+            "end": 3686,
+            "severity": "error",
+            "message": "r4arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3819,
+            "end": 3825,
+            "severity": "error",
+            "message": "r5arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3847,
+            "end": 3853,
+            "severity": "error",
+            "message": "r5arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3855,
+            "end": 3861,
+            "severity": "error",
+            "message": "r5arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3876,
+            "end": 3882,
+            "severity": "error",
+            "message": "r5arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 3884,
+            "end": 3890,
+            "severity": "error",
+            "message": "r5arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4049,
+            "end": 4055,
+            "severity": "error",
+            "message": "r6arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4077,
+            "end": 4083,
+            "severity": "error",
+            "message": "r6arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4085,
+            "end": 4091,
+            "severity": "error",
+            "message": "r6arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4106,
+            "end": 4112,
+            "severity": "error",
+            "message": "r6arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4114,
+            "end": 4120,
+            "severity": "error",
+            "message": "r6arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4313,
+            "end": 4319,
+            "severity": "error",
+            "message": "r7arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4341,
+            "end": 4347,
+            "severity": "error",
+            "message": "r7arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4349,
+            "end": 4355,
+            "severity": "error",
+            "message": "r7arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4370,
+            "end": 4376,
+            "severity": "error",
+            "message": "r7arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4378,
+            "end": 4384,
+            "severity": "error",
+            "message": "r7arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4632,
+            "end": 4638,
+            "severity": "error",
+            "message": "r8arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4660,
+            "end": 4666,
+            "severity": "error",
+            "message": "r8arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4668,
+            "end": 4674,
+            "severity": "error",
+            "message": "r8arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4689,
+            "end": 4695,
+            "severity": "error",
+            "message": "r8arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4697,
+            "end": 4703,
+            "severity": "error",
+            "message": "r8arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 4975,
+            "end": 4981,
+            "severity": "error",
+            "message": "r9arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5003,
+            "end": 5009,
+            "severity": "error",
+            "message": "r9arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5011,
+            "end": 5017,
+            "severity": "error",
+            "message": "r9arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5032,
+            "end": 5038,
+            "severity": "error",
+            "message": "r9arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5040,
+            "end": 5046,
+            "severity": "error",
+            "message": "r9arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5171,
+            "end": 5178,
+            "severity": "error",
+            "message": "r10arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5201,
+            "end": 5208,
+            "severity": "error",
+            "message": "r10arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5210,
+            "end": 5217,
+            "severity": "error",
+            "message": "r10arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5233,
+            "end": 5240,
+            "severity": "error",
+            "message": "r10arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5242,
+            "end": 5249,
+            "severity": "error",
+            "message": "r10arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5405,
+            "end": 5412,
+            "severity": "error",
+            "message": "r11arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5435,
+            "end": 5442,
+            "severity": "error",
+            "message": "r11arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5444,
+            "end": 5451,
+            "severity": "error",
+            "message": "r11arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5467,
+            "end": 5474,
+            "severity": "error",
+            "message": "r11arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5476,
+            "end": 5483,
+            "severity": "error",
+            "message": "r11arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5662,
+            "end": 5669,
+            "severity": "error",
+            "message": "r12arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5692,
+            "end": 5699,
+            "severity": "error",
+            "message": "r12arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5701,
+            "end": 5708,
+            "severity": "error",
+            "message": "r12arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5724,
+            "end": 5731,
+            "severity": "error",
+            "message": "r12arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5733,
+            "end": 5740,
+            "severity": "error",
+            "message": "r12arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5908,
+            "end": 5915,
+            "severity": "error",
+            "message": "r13arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5938,
+            "end": 5945,
+            "severity": "error",
+            "message": "r13arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5947,
+            "end": 5954,
+            "severity": "error",
+            "message": "r13arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5970,
+            "end": 5977,
+            "severity": "error",
+            "message": "r13arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 5979,
+            "end": 5986,
+            "severity": "error",
+            "message": "r13arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6114,
+            "end": 6121,
+            "severity": "error",
+            "message": "r14arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6144,
+            "end": 6151,
+            "severity": "error",
+            "message": "r14arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6153,
+            "end": 6160,
+            "severity": "error",
+            "message": "r14arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6176,
+            "end": 6183,
+            "severity": "error",
+            "message": "r14arg2 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6185,
+            "end": 6192,
+            "severity": "error",
+            "message": "r14arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6250,
+            "end": 6257,
+            "severity": "error",
+            "message": "r15arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6338,
+            "end": 6345,
+            "severity": "error",
+            "message": "r16arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6411,
+            "end": 6418,
+            "severity": "error",
+            "message": "r17arg1 is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/subtypingWithConstructSignatures2.ts",
+            "start": 6491,
+            "end": 6498,
+            "severity": "error",
+            "message": "r18arg1 is used before being assigned"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "skipped",
+        "diagnostics": [],
+        "error": "comparison disabled"
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "mismatched": false
+    }
+  ]
+}

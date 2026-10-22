@@ -1,7 +1,7 @@
+use anyhow as _;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
-use anyhow as _;
 use diagnostics as _;
 use globset as _;
 use rayon as _;
@@ -13,7 +13,6 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 use thiserror as _;
-use toml as _;
 use tracing as _;
 use tracing_subscriber as _;
 use typecheck_ts as _;
@@ -21,13 +20,13 @@ use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::difftsc::CommandStatus;
 use typecheck_ts_harness::difftsc::DifftscArgs;
 use typecheck_ts_harness::difftsc::{self};
+use typecheck_ts_harness::parse_shard;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::triage;
 use typecheck_ts_harness::verify_snapshots;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::FailOn;
-use typecheck_ts_harness::Shard;
 use typecheck_ts_harness::ShardStrategy;
 use typecheck_ts_harness::VerifySnapshotsOptions;
 use walkdir as _;
@@ -251,7 +250,7 @@ fn main() -> ExitCode {
         Err(err) => return print_error(err),
       };
       let shard = match shard {
-        Some(raw) => match Shard::parse(&raw) {
+        Some(raw) => match parse_shard(&raw) {
           Ok(shard) => Some(shard),
           Err(err) => return print_error(err),
         },
@@ -412,7 +411,7 @@ fn main() -> ExitCode {
         Err(err) => return print_error(err),
       };
       let shard = match shard {
-        Some(raw) => match Shard::parse(&raw) {
+        Some(raw) => match parse_shard(&raw) {
           Ok(shard) => Some(shard),
           Err(err) => return print_error(err),
         },

@@ -184,12 +184,14 @@ impl Program {
         &state.interned_type_param_decls,
         &state.interned_intrinsics,
         &state.interned_class_instances,
+        &state.interned_enum_defs,
         caches.eval.clone(),
       );
       let hooks = relate_hooks();
       let hooks = tti::RelateHooks {
         expander: Some(&expander),
         is_same_origin_private_member: hooks.is_same_origin_private_member,
+        should_stop: None,
       };
       // Use a fresh relation cache so explanation trees contain full structure
       // instead of "cached" sentinel nodes from prior checker passes.

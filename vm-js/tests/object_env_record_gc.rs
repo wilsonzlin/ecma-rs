@@ -53,7 +53,8 @@ fn object_env_record_collected_when_unrooted() -> Result<(), VmError> {
 }
 
 #[test]
-fn alloc_object_env_record_roots_outer_even_if_root_stack_growth_triggers_gc() -> Result<(), VmError> {
+fn alloc_object_env_record_roots_outer_even_if_root_stack_growth_triggers_gc() -> Result<(), VmError>
+{
   // Determine a GC threshold that is high enough to allow allocating the inputs, but low enough
   // that growing the root stacks will trigger a GC cycle.
   let gc_threshold = {

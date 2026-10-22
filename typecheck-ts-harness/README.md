@@ -84,6 +84,11 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   --filter "*/es2020/**" \
   --shard 3/16
 
+# JSDoc typedef / checkJs slice (optional smoke)
+cargo run -p typecheck-ts-harness --release -- conformance \
+  --filter "*/jsdoc/checkJsdocTypedef*" \
+  --extensions "ts,js"
+
 # Larger timeout per test (seconds)
 cargo run -p typecheck-ts-harness --release -- conformance --timeout-secs 30
 

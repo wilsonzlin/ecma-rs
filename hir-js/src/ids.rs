@@ -22,10 +22,9 @@ use serde::{Deserialize, Serialize};
 /// packing makes cross-file collisions impossible while keeping the local part
 /// stable-ish across edits.
 ///
-/// `hir-js` currently assigns `DefId`s to body-local bindings (parameters and
-/// local variables) for short-term compatibility. These defs are always scoped
-/// under their owning definition via [`DefPath::parent`], so their
-/// disambiguators do not interfere with module-level `DefId` stability.
+/// Body-local parameters and variables use [`LocalId`] only (no
+/// `DefKind::Param` / body-local `DefKind::Var` DefIds). Module-level and
+/// namespace/module member bindings still allocate `DefKind::Var` DefIds.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DefId(pub u64);
@@ -137,6 +136,16 @@ pub struct ExprId(pub u32);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PatId(pub u32);
+
+/// Identifier for a local binding within a single [`crate::hir::Body`].
+///
+/// Dense arena index (like [`ExprId`] / [`PatId`] / [`StmtId`]): deterministic for
+/// a given body snapshot, but *not* stable across edits to that body. Module-level
+/// [`DefId`]s must remain stable when only body-local bindings change — that is
+/// the point of migrating locals out of the `DefId` space.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct LocalId(pub u32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

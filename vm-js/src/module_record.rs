@@ -9,13 +9,13 @@ use diagnostics::{Diagnostic, FileId};
 use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
-use parse_js::ast::expr::Expr;
-use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::lit::{LitArrElem, LitTemplatePart};
+use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
 use parse_js::operator::OperatorName;
@@ -167,7 +167,9 @@ impl SourceTextModuleRecord {
           match (&export_stmt.stx.names, from) {
             (ExportNames::All(None), Some(req)) => {
               // `export * from "module"`
-              record.star_export_entries.push(StarExportEntry { module_request: req });
+              record.star_export_entries.push(StarExportEntry {
+                module_request: req,
+              });
             }
             (ExportNames::All(Some(alias)), Some(req)) => {
               // `export * as name from "module"`
@@ -299,10 +301,9 @@ impl SourceTextModuleRecord {
         continue;
       };
       // b. Let starNames be requestedModule.GetExportedNames(exportStarSet).
-      let star_names =
-        graph
-          .module(requested_module)
-          .get_exported_names_with_star_set(graph, requested_module, export_star_set);
+      let star_names = graph
+        .module(requested_module)
+        .get_exported_names_with_star_set(graph, requested_module, export_star_set);
 
       // c. For each element n of starNames, do
       for name in star_names {
@@ -392,9 +393,12 @@ impl SourceTextModuleRecord {
             return ResolveExportResult::NotFound;
           }
         };
-        return graph
-          .module(imported_module)
-          .resolve_export_with_set(graph, imported_module, import_name, resolve_set);
+        return graph.module(imported_module).resolve_export_with_set(
+          graph,
+          imported_module,
+          import_name,
+          resolve_set,
+        );
       }
     }
 
@@ -414,9 +418,12 @@ impl SourceTextModuleRecord {
         continue;
       };
       // b. Let resolution be importedModule.ResolveExport(exportName, resolveSet).
-      let resolution = graph
-        .module(imported_module)
-        .resolve_export_with_set(graph, imported_module, export_name, resolve_set);
+      let resolution = graph.module(imported_module).resolve_export_with_set(
+        graph,
+        imported_module,
+        export_name,
+        resolve_set,
+      );
 
       // c. If resolution is ambiguous, return ambiguous.
       if resolution == ResolveExportResult::Ambiguous {
@@ -464,7 +471,8 @@ fn stmt_contains_top_level_await(stmt: &Node<Stmt>) -> bool {
     Stmt::Expr(expr_stmt) => expr_contains_top_level_await(&expr_stmt.stx.expr),
     Stmt::Block(block) => stmt_list_contains_top_level_await(&block.stx.body),
     Stmt::DoWhile(stmt) => {
-      expr_contains_top_level_await(&stmt.stx.condition) || stmt_contains_top_level_await(&stmt.stx.body)
+      expr_contains_top_level_await(&stmt.stx.condition)
+        || stmt_contains_top_level_await(&stmt.stx.body)
     }
     Stmt::If(stmt) => {
       expr_contains_top_level_await(&stmt.stx.test)
@@ -476,15 +484,26 @@ fn stmt_contains_top_level_await(stmt: &Node<Stmt>) -> bool {
           .is_some_and(stmt_contains_top_level_await)
     }
     Stmt::While(stmt) => {
-      expr_contains_top_level_await(&stmt.stx.condition) || stmt_contains_top_level_await(&stmt.stx.body)
+      expr_contains_top_level_await(&stmt.stx.condition)
+        || stmt_contains_top_level_await(&stmt.stx.body)
     }
     Stmt::ForTriple(stmt) => {
       (match &stmt.stx.init {
         parse_js::ast::stmt::ForTripleStmtInit::None => false,
         parse_js::ast::stmt::ForTripleStmtInit::Expr(expr) => expr_contains_top_level_await(expr),
-        parse_js::ast::stmt::ForTripleStmtInit::Decl(decl) => var_decl_contains_top_level_await(&decl.stx),
-      }) || stmt.stx.cond.as_ref().is_some_and(expr_contains_top_level_await)
-        || stmt.stx.post.as_ref().is_some_and(expr_contains_top_level_await)
+        parse_js::ast::stmt::ForTripleStmtInit::Decl(decl) => {
+          var_decl_contains_top_level_await(&decl.stx)
+        }
+      }) || stmt
+        .stx
+        .cond
+        .as_ref()
+        .is_some_and(expr_contains_top_level_await)
+        || stmt
+          .stx
+          .post
+          .as_ref()
+          .is_some_and(expr_contains_top_level_await)
         || stmt_list_contains_top_level_await(&stmt.stx.body.stx.body)
     }
     Stmt::ForIn(stmt) => {
@@ -503,14 +522,14 @@ fn stmt_contains_top_level_await(stmt: &Node<Stmt>) -> bool {
     Stmt::Label(stmt) => stmt_contains_top_level_await(&stmt.stx.statement),
     Stmt::Switch(stmt) => {
       expr_contains_top_level_await(&stmt.stx.test)
-        || stmt
-          .stx
-          .branches
-          .iter()
-          .any(|branch| {
-            branch.stx.case.as_ref().is_some_and(expr_contains_top_level_await)
-              || stmt_list_contains_top_level_await(&branch.stx.body)
-          })
+        || stmt.stx.branches.iter().any(|branch| {
+          branch
+            .stx
+            .case
+            .as_ref()
+            .is_some_and(expr_contains_top_level_await)
+            || stmt_list_contains_top_level_await(&branch.stx.body)
+        })
     }
     Stmt::Throw(stmt) => expr_contains_top_level_await(&stmt.stx.value),
     Stmt::Try(stmt) => {
@@ -527,7 +546,8 @@ fn stmt_contains_top_level_await(stmt: &Node<Stmt>) -> bool {
           .is_some_and(|finally| stmt_list_contains_top_level_await(&finally.stx.body))
     }
     Stmt::With(stmt) => {
-      expr_contains_top_level_await(&stmt.stx.object) || stmt_contains_top_level_await(&stmt.stx.body)
+      expr_contains_top_level_await(&stmt.stx.object)
+        || stmt_contains_top_level_await(&stmt.stx.body)
     }
 
     // Import/export statements.
@@ -693,10 +713,7 @@ fn class_decl_contains_top_level_await(class: &parse_js::ast::stmt::decl::ClassD
       .extends
       .as_ref()
       .is_some_and(expr_contains_top_level_await)
-    || class
-      .implements
-      .iter()
-      .any(expr_contains_top_level_await)
+    || class.implements.iter().any(expr_contains_top_level_await)
     || class
       .members
       .iter()
@@ -731,7 +748,8 @@ fn class_member_contains_top_level_await(member: &Node<ClassMember>) -> bool {
 fn obj_member_contains_top_level_await(member: &Node<ObjMember>) -> bool {
   match &member.stx.typ {
     ObjMemberType::Valued { key, val } => {
-      class_or_obj_key_contains_top_level_await(key) || class_or_obj_val_contains_top_level_await(val)
+      class_or_obj_key_contains_top_level_await(key)
+        || class_or_obj_val_contains_top_level_await(val)
     }
     ObjMemberType::Shorthand { .. } => false,
     ObjMemberType::Rest { val } => expr_contains_top_level_await(val),
@@ -773,7 +791,9 @@ fn push_requested_module(out: &mut Vec<ModuleRequest>, request: ModuleRequest) {
 }
 
 /// Implements `WithClauseToAttributes` (ECMA-262) for static import/export declarations.
-fn with_clause_to_attributes(attributes: Option<&Node<Expr>>) -> Result<Vec<ImportAttribute>, VmError> {
+fn with_clause_to_attributes(
+  attributes: Option<&Node<Expr>>,
+) -> Result<Vec<ImportAttribute>, VmError> {
   let Some(attributes) = attributes else {
     return Ok(Vec::new());
   };

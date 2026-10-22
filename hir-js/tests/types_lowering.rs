@@ -1941,9 +1941,405 @@ fn lowers_enum_type_info() {
   };
   assert_eq!(members.len(), 3);
   assert_eq!(result.names.resolve(members[0].name).unwrap(), "A");
-  assert_eq!(members[0].value, EnumMemberValue::Number);
+  assert_eq!(members[0].value, EnumMemberValue::Number(0.0));
   assert_eq!(result.names.resolve(members[1].name).unwrap(), "B");
-  assert_eq!(members[1].value, EnumMemberValue::Number);
+  assert_eq!(members[1].value, EnumMemberValue::Number(2.0));
   assert_eq!(result.names.resolve(members[2].name).unwrap(), "C");
-  assert_eq!(members[2].value, EnumMemberValue::String);
+  assert_eq!(members[2].value, EnumMemberValue::String("c".to_string()));
+}
+
+#[test]
+fn lowers_private_class_field_annotations() {
+  // Regression for privateNameField.ts-style false TC3000: private fields must
+  // keep their type annotations on both the class ClassMemberSig *and* the
+  // field def's `declared_type` / type arenas (same path as public fields).
+  let src = "class C { #name: string; readonly #x = 1; static #y: number; #m(): void { } get #g(): boolean { return true } }";
+  let result = lower_from_source(src).expect("lower");
+
+  let class = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "C")
+    .expect("class definition");
+  let class_arenas = result
+    .type_arenas(class.id)
+    .expect("type arenas present for class");
+  let members = match class.type_info.as_ref().expect("class type info") {
+    DefTypeInfo::Class { members, .. } => members,
+    other => panic!("expected class type info, got {other:?}"),
+  };
+
+  let field_sig = |name: &str| {
+    members
+      .iter()
+      .find(|member| match &member.kind {
+        ClassMemberSigKind::Field {
+          name: PropertyName::Ident(id),
+          ..
+        } => result.names.resolve(*id) == Some(name),
+        _ => false,
+      })
+      .unwrap_or_else(|| panic!("missing class field sig {name}"))
+  };
+
+  // Annotated instance private field.
+  match &field_sig("#name").kind {
+    ClassMemberSigKind::Field {
+      type_annotation, ..
+    } => {
+      let ty = type_annotation.expect("#name class sig annotation");
+      assert!(matches!(
+        class_arenas.type_exprs[ty.0 as usize].kind,
+        TypeExprKind::String
+      ));
+    }
+    other => panic!("unexpected kind {other:?}"),
+  }
+
+  // Initializer only — no annotation.
+  let x_sig = field_sig("#x");
+  assert!(x_sig.readonly);
+  match &x_sig.kind {
+    ClassMemberSigKind::Field {
+      type_annotation, ..
+    } => assert!(type_annotation.is_none()),
+    other => panic!("unexpected kind {other:?}"),
+  }
+
+  // Annotated static private field.
+  let y_sig = field_sig("#y");
+  assert!(y_sig.static_);
+  match &y_sig.kind {
+    ClassMemberSigKind::Field {
+      type_annotation, ..
+    } => {
+      let ty = type_annotation.expect("#y class sig annotation");
+      assert!(matches!(
+        class_arenas.type_exprs[ty.0 as usize].kind,
+        TypeExprKind::Number
+      ));
+    }
+    other => panic!("unexpected kind {other:?}"),
+  }
+
+  // Private method return type on the class sig.
+  let method_sig = members
+    .iter()
+    .find(|member| match &member.kind {
+      ClassMemberSigKind::Method {
+        name: PropertyName::Ident(id),
+        ..
+      } => result.names.resolve(*id) == Some("#m"),
+      _ => false,
+    })
+    .expect("#m method sig");
+  match &method_sig.kind {
+    ClassMemberSigKind::Method { signature, .. } => {
+      let ret = signature.return_type.expect("#m return type");
+      assert!(matches!(
+        class_arenas.type_exprs[ret.0 as usize].kind,
+        TypeExprKind::Void
+      ));
+    }
+    other => panic!("unexpected kind {other:?}"),
+  }
+
+  // Private getter return type on the class sig.
+  let getter_sig = members
+    .iter()
+    .find(|member| match &member.kind {
+      ClassMemberSigKind::Getter {
+        name: PropertyName::Ident(id),
+        ..
+      } => result.names.resolve(*id) == Some("#g"),
+      _ => false,
+    })
+    .expect("#g getter sig");
+  match &getter_sig.kind {
+    ClassMemberSigKind::Getter { return_type, .. } => {
+      let ret = return_type.expect("#g return type");
+      assert!(matches!(
+        class_arenas.type_exprs[ret.0 as usize].kind,
+        TypeExprKind::Boolean
+      ));
+    }
+    other => panic!("unexpected kind {other:?}"),
+  }
+
+  let field_def = |name: &str| {
+    result
+      .defs
+      .iter()
+      .find(|def| {
+        def.path.kind == hir_js::DefKind::Field && result.names.resolve(def.name) == Some(name)
+      })
+      .unwrap_or_else(|| panic!("missing field def {name}"))
+  };
+
+  // Per-field declared_type + type arenas (value-side), including SpanMap.
+  let name_def = field_def("#name");
+  let name_ty = name_def.declared_type.expect("#name declared_type present");
+  let name_arenas = result.type_arenas(name_def.id).expect("#name type arenas");
+  assert!(matches!(
+    name_arenas.type_exprs[name_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+  // Field-owned annotation is registered in SpanMap (class-owned duplicate from
+  // ClassMemberSig lowering may also cover the same range).
+  assert!(
+    result
+      .hir
+      .span_map
+      .type_expr_span(name_def.id, name_ty)
+      .is_some(),
+    "SpanMap missing field-owned type expr for #name"
+  );
+  let name_ann_offset = src.find("#name: string").expect("span") as u32 + "#name: ".len() as u32;
+  assert!(
+    result
+      .hir
+      .span_map
+      .type_expr_span_at_offset(name_ann_offset)
+      .is_some(),
+    "SpanMap offset query should find #name annotation"
+  );
+
+  let y_def = field_def("#y");
+  assert!(y_def.is_static);
+  let y_ty = y_def.declared_type.expect("#y declared_type present");
+  let y_arenas = result.type_arenas(y_def.id).expect("#y type arenas");
+  assert!(matches!(
+    y_arenas.type_exprs[y_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+
+  // Initializer-only private field correctly has no declared_type.
+  let x_def = field_def("#x");
+  assert!(x_def.declared_type.is_none());
+  assert!(x_def.body.is_some());
+
+  // Private method return type is also on the method body's FunctionData.
+  let method_def = result
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == hir_js::DefKind::Method && result.names.resolve(def.name) == Some("#m")
+    })
+    .expect("#m method def");
+  let method_body = result
+    .body(method_def.body.expect("#m body"))
+    .expect("#m body present");
+  let ret = method_body
+    .function
+    .as_ref()
+    .and_then(|func| func.return_type)
+    .expect("#m FunctionData return_type");
+  let method_arenas = result.type_arenas(method_def.id).expect("#m type arenas");
+  assert!(matches!(
+    method_arenas.type_exprs[ret.0 as usize].kind,
+    TypeExprKind::Void
+  ));
+}
+
+#[test]
+fn lowers_constructor_parameter_properties_as_field_sigs() {
+  // Parameter properties must appear as ClassMemberSig::Field so class typing
+  // can consume HIR only (no AST re-walk of constructor params).
+  let src = "class C { constructor(public x: string, readonly y: number) {} }";
+  let result = lower_from_source(src).expect("lower");
+  let class = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name) == Some("C"))
+    .expect("class C");
+  let members = match class.type_info.as_ref().expect("type info") {
+    DefTypeInfo::Class { members, .. } => members,
+    other => panic!("expected class type info, got {other:?}"),
+  };
+  let arenas = result.type_arenas(class.id).expect("class arenas");
+
+  let x = members
+    .iter()
+    .find(|m| {
+      matches!(
+        &m.kind,
+        ClassMemberSigKind::Field { name: PropertyName::Ident(id), .. }
+          if result.names.resolve(*id) == Some("x")
+      )
+    })
+    .expect("param property x");
+  assert!(!x.static_);
+  assert_eq!(
+    x.accessibility,
+    Some(hir_js::ClassMemberAccessibility::Public)
+  );
+  let x_ty = x.field_type_annotation().expect("x annotation");
+  assert!(matches!(
+    arenas.type_exprs[x_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+
+  let y = members
+    .iter()
+    .find(|m| {
+      matches!(
+        &m.kind,
+        ClassMemberSigKind::Field { name: PropertyName::Ident(id), .. }
+          if result.names.resolve(*id) == Some("y")
+      )
+    })
+    .expect("param property y");
+  assert!(y.readonly);
+  let y_ty = y.field_type_annotation().expect("y annotation");
+  assert!(matches!(
+    arenas.type_exprs[y_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+
+  assert!(
+    members
+      .iter()
+      .any(|m| matches!(m.kind, ClassMemberSigKind::Constructor(_))),
+    "constructor signature must remain present"
+  );
+}
+
+#[test]
+fn lowers_ambient_class_property_annotations() {
+  // Ambient classes lower members via TypeMember → ClassMemberSig so the
+  // checker can resolve field annotations without an AST class-body walk.
+  // (TypeMember currently has no `static_` flag — ambient statics are a
+  // separate parse-js gap.)
+  let src = "declare class D { prop: boolean; readonly q?: number }";
+  let result = lower_from_source(src).expect("lower");
+  let class = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name) == Some("D"))
+    .expect("class D");
+  let members = match class.type_info.as_ref().expect("type info") {
+    DefTypeInfo::Class { members, .. } => members,
+    other => panic!("expected class type info, got {other:?}"),
+  };
+  let arenas = result.type_arenas(class.id).expect("class arenas");
+
+  let prop = members
+    .iter()
+    .find(|m| {
+      matches!(
+        &m.kind,
+        ClassMemberSigKind::Field { name: PropertyName::Ident(id), .. }
+          if result.names.resolve(*id) == Some("prop")
+      )
+    })
+    .expect("prop");
+  let prop_ty = prop.field_type_annotation().expect("prop annotation");
+  assert!(matches!(
+    arenas.type_exprs[prop_ty.0 as usize].kind,
+    TypeExprKind::Boolean
+  ));
+
+  let q = members
+    .iter()
+    .find(|m| {
+      matches!(
+        &m.kind,
+        ClassMemberSigKind::Field { name: PropertyName::Ident(id), .. }
+          if result.names.resolve(*id) == Some("q")
+      )
+    })
+    .expect("q");
+  assert!(q.readonly);
+  assert!(q.optional);
+  let q_ty = q.field_type_annotation().expect("q annotation");
+  assert!(matches!(
+    arenas.type_exprs[q_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+}
+
+#[test]
+fn lowers_module_var_and_ambient_declared_types() {
+  // Value-side annotations for module vars must live on DefData.declared_type
+  // so the checker can drop its AST span walk. (`declare const` parses as a
+  // normal VarDecl; `.d.ts` sets is_ambient via FileKind.)
+  let src = "let x: string; const y: number = 1; declare const z: boolean;";
+  let result = lower_from_source(src).expect("lower");
+
+  let var_def = |name: &str| {
+    result
+      .defs
+      .iter()
+      .find(|def| {
+        def.path.kind == hir_js::DefKind::Var && result.names.resolve(def.name) == Some(name)
+      })
+      .unwrap_or_else(|| panic!("missing var {name}"))
+  };
+
+  let x = var_def("x");
+  let x_ty = x.declared_type.expect("x declared_type");
+  let x_arenas = result.type_arenas(x.id).expect("x arenas");
+  assert!(matches!(
+    x_arenas.type_exprs[x_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+
+  let y = var_def("y");
+  let y_ty = y.declared_type.expect("y declared_type");
+  let y_arenas = result.type_arenas(y.id).expect("y arenas");
+  assert!(matches!(
+    y_arenas.type_exprs[y_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+
+  // `declare const z` is still a VarDecl binding with declared_type + ambient.
+  let z = var_def("z");
+  assert!(
+    z.is_ambient,
+    "declare const in .ts must set DefData.is_ambient"
+  );
+  let z_ty = z.declared_type.expect("z declared_type");
+  let z_arenas = result.type_arenas(z.id).expect("z arenas");
+  assert!(matches!(
+    z_arenas.type_exprs[z_ty.0 as usize].kind,
+    TypeExprKind::Boolean
+  ));
+
+  let dts = hir_js::lower_from_source_with_kind(FileKind::Dts, "declare const w: string;")
+    .expect("lower dts");
+  let w = dts
+    .defs
+    .iter()
+    .find(|def| def.path.kind == hir_js::DefKind::Var && dts.names.resolve(def.name) == Some("w"))
+    .expect("w");
+  assert!(w.is_ambient);
+  let w_ty = w.declared_type.expect("w declared_type");
+  let w_arenas = dts.type_arenas(w.id).expect("w arenas");
+  assert!(matches!(
+    w_arenas.type_exprs[w_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+
+  // Destructuring annotation types the pattern — nested names stay unannotated.
+  let destr = lower_from_source("const { a, b }: { a: string; b: number } = { a: '', b: 1 };")
+    .expect("lower destr");
+  for name in ["a", "b"] {
+    let def = destr
+      .defs
+      .iter()
+      .find(|def| {
+        def.path.kind == hir_js::DefKind::Var && destr.names.resolve(def.name) == Some(name)
+      })
+      .unwrap_or_else(|| panic!("missing {name}"));
+    assert!(
+      def.declared_type.is_none(),
+      "{name} should not carry pattern annotation as declared_type"
+    );
+  }
+  let decl = destr
+    .defs
+    .iter()
+    .find(|def| def.path.kind == hir_js::DefKind::VarDeclarator)
+    .expect("var declarator");
+  assert!(decl.declared_type.is_some());
 }

@@ -85,6 +85,24 @@ fn relation_step_limit_short_circuits_with_reason_note() {
   );
   let reason = result.reason.expect("expected reason node");
   assert_eq!(reason.note.as_deref(), Some("step limit"));
+  assert!(ctx.budget_exceeded());
+}
+
+#[test]
+fn relation_should_stop_flag_short_circuits_without_panic() {
+  use std::sync::atomic::{AtomicBool, Ordering};
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let stop = AtomicBool::new(true);
+  let hooks = RelateHooks {
+    expander: None,
+    is_same_origin_private_member: None,
+    should_stop: Some(&stop),
+  };
+  let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+  assert!(ctx.is_assignable(primitives.string, primitives.number));
+  assert!(ctx.budget_exceeded());
+  assert!(stop.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -100,6 +118,9 @@ fn primitives_and_special_types() {
 
   assert!(ctx.is_assignable(primitives.never, primitives.string));
   assert!(!ctx.is_assignable(primitives.string, primitives.never));
+  // tsc: `any` is not assignable to `never` (intersectionReduction TS2322).
+  assert!(!ctx.is_assignable(primitives.any, primitives.never));
+  assert!(ctx.is_assignable(primitives.never, primitives.any));
 
   assert!(!ctx.is_assignable(primitives.null, primitives.string));
   assert!(!ctx.is_assignable(primitives.undefined, primitives.number));
@@ -242,15 +263,21 @@ fn array_assignable_to_number_like_intersection_indexer() {
 }
 
 #[test]
-fn type_params_treated_as_unknown() {
+fn free_type_params_are_nominal_targets() {
+  // tsc 5.9.3 parity (verified against the live oracle): an unconstrained free
+  // type parameter is a *nominal* assignment target — only `any` or the same
+  // parameter is assignable to it (`number`/`unknown` ↛ `T`). As a source it is
+  // opaque in a bare `RelateCtx` (no constraint info), assignable only to
+  // `unknown`/`any`/itself. (Supersedes the old "treated as unknown" target
+  // semantics; see also `concrete_type_not_assignable_to_type_param`.)
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let tp_a = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
   let tp_b = store.intern_type(TypeKind::TypeParam(TypeParamId(1)));
   let ctx = RelateCtx::new(store.clone(), default_options());
 
-  assert!(ctx.is_assignable(primitives.number, tp_a));
-  assert!(ctx.is_assignable(primitives.unknown, tp_a));
+  assert!(!ctx.is_assignable(primitives.number, tp_a));
+  assert!(!ctx.is_assignable(primitives.unknown, tp_a));
   assert!(ctx.is_assignable(primitives.any, tp_a));
   assert!(ctx.is_assignable(tp_a, primitives.unknown));
   assert!(ctx.is_assignable(tp_a, primitives.any));
@@ -899,7 +926,13 @@ fn string_indexer_satisfies_number_indexer() {
 }
 
 #[test]
-fn number_indexer_does_not_satisfy_string_indexer() {
+fn number_indexer_satisfies_string_indexer() {
+  // tsc `indexSignaturesRelatedTo`: a *number* index signature satisfies a
+  // *string* target index signature (`targetInfo.keyType === stringType &&
+  // getIndexInfoOfType(source, numberType)`), since numeric property names
+  // are string keys at runtime. Oracle-verified vs tsc 5.9.3:
+  // `declare let s: { [k: number]: number }; let d: { [k: string]: number } = s;`
+  // produces no error.
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
@@ -912,6 +945,45 @@ fn number_indexer_does_not_satisfy_string_indexer() {
       indexers: vec![Indexer {
         key_type: primitives.number,
         value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx.is_assignable(src, dst));
+}
+
+#[test]
+fn number_indexer_still_checks_value_type_against_string_indexer() {
+  // The number-covers-string fallback does not skip the value-type check:
+  // `{ [k: number]: string }` is not assignable to `{ [k: string]: number }`.
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.number,
+        value_type: primitives.string,
         readonly: false,
       }],
     },
@@ -1216,6 +1288,7 @@ fn private_member_hook() {
   let hook = RelateHooks {
     expander: None,
     is_same_origin_private_member: Some(&|_, _| true),
+    should_stop: None,
   };
   let ctx_hook = RelateCtx::with_hooks(store.clone(), default_options(), hook);
   assert!(ctx_hook.is_assignable(src, dst));
@@ -1363,6 +1436,7 @@ fn derived_types_are_normalized_during_relation() {
     distributive: false,
   });
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: keyof_obj,
     value: primitives.string,
@@ -1476,6 +1550,7 @@ fn conditional_normalization_uses_relation_ctx_hooks() {
   let hook = RelateHooks {
     expander: None,
     is_same_origin_private_member: Some(&|_, _| true),
+    should_stop: None,
   };
   let ctx_hook = RelateCtx::with_hooks(store.clone(), default_options(), hook);
   assert!(ctx_hook.is_assignable(primitives.number, conditional));
@@ -1648,6 +1723,7 @@ fn cyclic_reference_terminates() {
   let hooks = RelateHooks {
     expander: Some(&expander),
     is_same_origin_private_member: None,
+    should_stop: None,
   };
 
   let ctx = RelateCtx::with_hooks(store.clone(), default_options(), hooks);
@@ -1895,6 +1971,7 @@ fn cyclic_reference_conditional_normalization_terminates() {
   let hooks = RelateHooks {
     expander: Some(&expander),
     is_same_origin_private_member: None,
+    should_stop: None,
   };
 
   let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
@@ -1939,4 +2016,664 @@ fn string_literal_not_assignable_to_template_literal_pattern() {
   }));
 
   assert!(!ctx.is_assignable(bar, template));
+}
+
+#[test]
+fn rest_number_not_assignable_from_rest_string() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  let number_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let string_array = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+  let dst = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: number_array,
+      optional: false,
+      rest: true,
+    }],
+    primitives.number,
+  );
+  let src = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: string_array,
+      optional: false,
+      rest: true,
+    }],
+    primitives.number,
+  );
+  // src assignable to dst? (...string[]) => number  assignable to  (...number[]) => number?
+  // No: params are checked contravariantly: number must be assignable to string.
+  assert!(
+    !ctx.is_assignable(src, dst),
+    "string rest should not be assignable to number rest"
+  );
+}
+
+#[test]
+fn one_param_assignable_to_rest_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  let number_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let dst = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: number_array,
+      optional: false,
+      rest: true,
+    }],
+    primitives.number,
+  );
+  let src = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+    }],
+    primitives.number,
+  );
+  assert!(
+    ctx.is_assignable(src, dst),
+    "(x: number) => number should be assignable to (...args: number[]) => number"
+  );
+}
+
+#[test]
+fn generic_signature_instantiates_against_non_generic_target() {
+  use std::sync::Arc;
+  use types_ts_interned::TypeParamDecl;
+  let store = Arc::new(TypeStore::new());
+  let primitives = store.primitive_ids();
+  let t = TypeParamId(0);
+  let t_ty = store.intern_type(TypeKind::TypeParam(t));
+  let t_arr = store.intern_type(TypeKind::Array {
+    ty: t_ty,
+    readonly: false,
+  });
+  let number_arr = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+
+  let mut generic = Signature::new(
+    vec![Param {
+      name: None,
+      ty: t_ty,
+      optional: false,
+      rest: false,
+    }],
+    t_arr,
+  );
+  generic.type_params = vec![TypeParamDecl::new(t)];
+  let generic_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(generic)],
+  });
+  let concrete_ty = callable(
+    store.as_ref(),
+    vec![Param {
+      name: None,
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+    }],
+    number_arr,
+  );
+
+  let ctx = RelateCtx::new(Arc::clone(&store), default_options());
+  assert!(
+    ctx.is_assignable(generic_ty, concrete_ty),
+    "generic <T>(x:T)=>T[] should assign to (x:number)=>number[]"
+  );
+  assert!(
+    !ctx.is_assignable(concrete_ty, generic_ty),
+    "non-generic should not assign to generic"
+  );
+}
+
+#[test]
+fn non_generic_not_assignable_to_generic_with_constraint() {
+  use std::sync::Arc;
+  use types_ts_interned::TypeParamDecl;
+  let store = Arc::new(TypeStore::new());
+  let primitives = store.primitive_ids();
+  // Fake Array-like: use number[] as stand-in for Array<Base>
+  let number_arr = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let string_arr = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+  let t = TypeParamId(0);
+  let t_ty = store.intern_type(TypeKind::TypeParam(t));
+  let mut generic = Signature::new(
+    vec![
+      Param {
+        name: None,
+        ty: number_arr,
+        optional: false,
+        rest: false,
+      },
+      Param {
+        name: None,
+        ty: t_ty,
+        optional: false,
+        rest: false,
+      },
+    ],
+    number_arr,
+  );
+  let mut tp = TypeParamDecl::new(t);
+  tp.constraint = Some(number_arr);
+  generic.type_params = vec![tp];
+  let generic_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(generic)],
+  });
+  let concrete_ty = callable(
+    store.as_ref(),
+    vec![
+      Param {
+        name: None,
+        ty: number_arr,
+        optional: false,
+        rest: false,
+      },
+      Param {
+        name: None,
+        ty: string_arr,
+        optional: false,
+        rest: false,
+      },
+    ],
+    number_arr,
+  );
+  let ctx = RelateCtx::new(Arc::clone(&store), default_options());
+  assert!(
+    !ctx.is_assignable(concrete_ty, generic_ty),
+    "non-generic should not assign to generic signature"
+  );
+}
+
+#[test]
+fn optional_prop_vs_string_indexer_and_required_undefined() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let k1 = store.intern_name("k1");
+  let opt_src = {
+    let mut shape = Shape::new();
+    shape.properties.push(Property {
+      key: PropKey::String(k1),
+      data: PropData {
+        ty: prim.string,
+        optional: true,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let undef_src = {
+    let mut shape = Shape::new();
+    let ty = store.union(vec![prim.string, prim.undefined]);
+    shape.properties.push(Property {
+      key: PropKey::String(k1),
+      data: PropData {
+        ty,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let str_idx = {
+    let mut shape = Shape::new();
+    shape.indexers.push(Indexer {
+      key_type: prim.string,
+      value_type: prim.string,
+      readonly: false,
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let num_idx = {
+    let mut shape = Shape::new();
+    shape.indexers.push(Indexer {
+      key_type: prim.number,
+      value_type: prim.string,
+      readonly: false,
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let num_opt = {
+    let mut shape = Shape::new();
+    shape.properties.push(Property {
+      key: PropKey::Number(1),
+      data: PropData {
+        ty: prim.string,
+        optional: true,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(
+    ctx.is_assignable(opt_src, str_idx),
+    "optional -> string index"
+  );
+  assert!(
+    !ctx.is_assignable(undef_src, str_idx),
+    "string|undefined required -> string index"
+  );
+  assert!(
+    !ctx.is_assignable(num_opt, num_idx),
+    "optional number key -> number index"
+  );
+}
+
+#[test]
+fn null_undefined_not_assignable_to_type_param_under_strict_null() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let t = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(!ctx.is_assignable(prim.undefined, t));
+  assert!(!ctx.is_assignable(prim.null, t));
+  let loose = TypeStore::with_options(TypeOptions {
+    strict_null_checks: false,
+    ..default_options()
+  });
+  let loose_prim = loose.primitive_ids();
+  let loose_t = loose.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let loose_ctx = RelateCtx::new(loose.clone(), loose.options());
+  assert!(loose_ctx.is_assignable(loose_prim.undefined, loose_t));
+  assert!(loose_ctx.is_assignable(loose_prim.null, loose_t));
+}
+
+#[test]
+fn concrete_type_not_assignable_to_type_param() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let t = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(!ctx.is_assignable(prim.string, t));
+  assert!(!ctx.is_assignable(prim.number, t));
+  assert!(ctx.is_assignable(prim.any, t));
+  assert!(ctx.is_assignable(t, t));
+}
+
+#[test]
+fn type_param_optional_prop_vs_string_indexer_union() {
+  // `{ k1?: T }` → `{ [key: string]: T | number }` (same T).
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let t = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let k1 = store.intern_name("k1");
+  let opt_src = {
+    let mut shape = Shape::new();
+    shape.properties.push(Property {
+      key: PropKey::String(k1),
+      data: PropData {
+        ty: t,
+        optional: true,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let str_idx = {
+    let mut shape = Shape::new();
+    shape.indexers.push(Indexer {
+      key_type: prim.string,
+      value_type: store.union(vec![t, prim.number]),
+      readonly: false,
+    });
+    let sid = store.intern_shape(shape);
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: sid }),
+    ))
+  };
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(
+    ctx.is_assignable(opt_src, str_idx),
+    "optional T prop -> string index of T|number"
+  );
+}
+
+#[test]
+fn nullish_and_primitives_vs_void_under_strict_null() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(!ctx.is_assignable(prim.null, prim.void));
+  assert!(ctx.is_assignable(prim.undefined, prim.void));
+  assert!(ctx.is_assignable(prim.void, prim.undefined));
+  assert!(!ctx.is_assignable(prim.number, prim.void));
+  assert!(!ctx.is_assignable(prim.string, prim.void));
+}
+
+#[test]
+fn numeric_indexer_value_must_be_subtype() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let foo = store.intern_name("foo");
+  let bar = store.intern_name("bar");
+  let baz = store.intern_name("baz");
+  let base = object_type(
+    &store,
+    Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: prim.string,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let derived = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(foo),
+          data: PropData {
+            ty: prim.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(bar),
+          data: PropData {
+            ty: prim.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let derived2 = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(foo),
+          data: PropData {
+            ty: prim.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(bar),
+          data: PropData {
+            ty: prim.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(baz),
+          data: PropData {
+            ty: prim.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let idx = |val| {
+    object_type(
+      &store,
+      Shape {
+        properties: vec![],
+        call_signatures: vec![],
+        construct_signatures: vec![],
+        indexers: vec![Indexer {
+          key_type: prim.number,
+          value_type: val,
+          readonly: false,
+        }],
+      },
+    )
+  };
+  let a = idx(derived);
+  let b = idx(base);
+  let b2 = idx(derived2);
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(!ctx.is_assignable(b, a), "Base indexer -> Derived indexer");
+  assert!(ctx.is_assignable(a, b), "Derived indexer -> Base indexer");
+  assert!(
+    ctx.is_assignable(b2, a),
+    "Derived2 indexer -> Derived indexer"
+  );
+  assert!(
+    !ctx.is_assignable(a, b2),
+    "Derived indexer -> Derived2 indexer should fail"
+  );
+  assert!(!ctx.is_assignable(derived, derived2), "Derived -> Derived2");
+  assert!(ctx.is_assignable(derived2, derived), "Derived2 -> Derived");
+}
+
+#[test]
+fn required_source_param_matches_optional_target_param() {
+  // tsc `compareSignaturesRelated`: the arity floor is
+  // `getMinArgumentCount(source) > getParameterCount(target)` — the source's
+  // *required* count against the target's *total* count, so an optional
+  // destination parameter still absorbs a source required one. The type check
+  // decides afterwards (`number | undefined` ↛ `number`).
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: primitives.any,
+      optional: false,
+      rest: false,
+    }],
+    primitives.any,
+  );
+  let dst = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: primitives.number,
+      optional: true,
+      rest: false,
+    }],
+    primitives.number,
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(
+    ctx.is_assignable(src, dst),
+    "(a: any) => any must match (a?: number) => number"
+  );
+
+  let src_number = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+    }],
+    primitives.number,
+  );
+  assert!(
+    !ctx.is_assignable(src_number, dst),
+    "(a: number) => number must not match (a?: number) => number: number | undefined is not assignable to number"
+  );
+}
+
+#[test]
+fn non_generic_overload_set_assigns_to_unconstrained_generic_target() {
+  // tsc overload matrix (`signaturesRelatedTo`, checker.ts): each source
+  // signature is related against the *erased* generic target
+  // (`getErasedSignature`, type args become `any`). Erasing accepts parameter
+  // shapes that exact inference rejects
+  // (`assignmentCompatWithCallSignatures4.ts`: `b16 = a16`).
+  use std::sync::Arc;
+  use types_ts_interned::TypeParamDecl;
+
+  let store = Arc::new(TypeStore::new());
+  let primitives = store.primitive_ids();
+  let t = TypeParamId(0);
+  let t_ty = store.intern_type(TypeKind::TypeParam(t));
+  let t_arr = store.intern_type(TypeKind::Array {
+    ty: t_ty,
+    readonly: false,
+  });
+  let num_arr = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let bool_arr = store.intern_type(TypeKind::Array {
+    ty: primitives.boolean,
+    readonly: false,
+  });
+
+  // dst: <T>(x: (a: T) => T) => T[]
+  let dst_inner = callable(&store, vec![param(t_ty)], t_ty);
+  let mut dst_sig = Signature::new(vec![param(dst_inner)], t_arr);
+  dst_sig.type_params = vec![TypeParamDecl::new(t)];
+  let dst_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(dst_sig)],
+  });
+
+  // src overloads: (x: { (a: number): number; (a?: number): number }) => number[]
+  // and the boolean twin.
+  let src_overload =
+    |store: &Arc<TypeStore>, prim: types_ts_interned::TypeId, ret: types_ts_interned::TypeId| {
+      let shape = Shape {
+        properties: vec![],
+        call_signatures: vec![
+          store.intern_signature(Signature::new(vec![param(prim)], prim)),
+          store.intern_signature(Signature::new(
+            vec![Param {
+              name: None,
+              ty: prim,
+              optional: true,
+              rest: false,
+            }],
+            prim,
+          )),
+        ],
+        construct_signatures: vec![],
+        indexers: vec![],
+      };
+      let obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+        shape: store.intern_shape(shape),
+      })));
+      store.intern_signature(Signature::new(vec![param(obj)], ret))
+    };
+  let src_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![
+      src_overload(&store, primitives.number, num_arr),
+      src_overload(&store, primitives.boolean, bool_arr),
+    ],
+  });
+
+  let ctx = RelateCtx::new(Arc::clone(&store), default_options());
+  assert!(
+    ctx.is_assignable(src_ty, dst_ty),
+    "overload set must assign to the erased unconstrained generic target"
+  );
+}
+
+fn param(ty: types_ts_interned::TypeId) -> Param {
+  Param {
+    name: None,
+    ty,
+    optional: false,
+    rest: false,
+  }
 }

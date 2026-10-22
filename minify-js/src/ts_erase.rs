@@ -703,6 +703,10 @@ fn strip_stmt(ctx: &mut StripContext, stmt: Node<Stmt>, is_top_level: bool) -> V
       vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
     }
     Stmt::VarDecl(mut decl) => {
+      // Ambient `declare let/const/var` has no runtime binding.
+      if decl.stx.declare {
+        return vec![];
+      }
       strip_var_decl(ctx, &mut decl.stx);
       vec![new_node(loc, assoc, Stmt::VarDecl(decl))]
     }
@@ -764,7 +768,7 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
           }
         }
       }
-      Stmt::VarDecl(decl) => {
+      Stmt::VarDecl(decl) if !decl.stx.declare => {
         for declarator in &decl.stx.declarators {
           let mut bindings = Vec::new();
           collect_pat_binding_names(&declarator.pattern.stx.pat, &mut bindings);
@@ -922,6 +926,7 @@ fn lower_import_equals_decl(
   };
   let var_decl = VarDecl {
     export: decl.stx.export,
+    declare: false,
     mode: match ctx.top_level_mode {
       TopLevelMode::Module => VarDeclMode::Const,
       TopLevelMode::Global | TopLevelMode::Script => VarDeclMode::Var,
@@ -3577,6 +3582,10 @@ fn strip_namespace_body_stmt(
       out
     }
     Stmt::VarDecl(mut decl) if decl.stx.export => {
+      // Ambient `export declare` vars have no runtime binding.
+      if decl.stx.declare {
+        return vec![];
+      }
       decl.stx.export = false;
       strip_var_decl(ctx, &mut decl.stx);
       let mut names = Vec::new();
@@ -4498,6 +4507,8 @@ fn strip_class_members(
         optional: false,
         override_: false,
         definite_assignment: false,
+        declare_: false,
+        async_before_static: false,
         accessibility: None,
         type_annotation: None,
         val: ClassOrObjVal::Method(Node::new(

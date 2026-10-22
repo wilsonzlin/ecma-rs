@@ -1,5 +1,6 @@
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::expr::pat::Pat;
 use crate::ast::func::Func;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::ClassDecl;
@@ -24,6 +25,38 @@ pub enum VarDeclParseMode {
 }
 
 impl<'a> Parser<'a> {
+  /// tsc `isBindingIdentifierOrPrivateIdentifierOrPattern` for variable lists.
+  fn is_var_declarator_start(typ: TT) -> bool {
+    matches!(
+      typ,
+      TT::BraceOpen | TT::BracketOpen | TT::PrivateMember | TT::Identifier
+    ) || crate::lex::KEYWORDS_MAPPING.contains_key(&typ)
+      && !matches!(
+        typ,
+        // Reserved words that cannot start a binding in this position.
+        TT::KeywordConst
+          | TT::KeywordVar
+          | TT::KeywordLet
+          | TT::KeywordClass
+          | TT::KeywordFunction
+          | TT::KeywordIf
+          | TT::KeywordElse
+          | TT::KeywordFor
+          | TT::KeywordWhile
+          | TT::KeywordDo
+          | TT::KeywordSwitch
+          | TT::KeywordReturn
+          | TT::KeywordThrow
+          | TT::KeywordTry
+          | TT::KeywordCatch
+          | TT::KeywordFinally
+          | TT::KeywordWith
+          | TT::KeywordDebugger
+          | TT::KeywordImport
+          | TT::KeywordExport
+      )
+  }
+
   pub fn pat_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<PatDecl>> {
     self.with_loc(|p| {
       let pat = p.pat(ctx)?;
@@ -107,6 +140,27 @@ impl<'a> Parser<'a> {
           p.consume_if(TT::Equals)
             .and_then(|| p.expr_with_asi(ctx, [TT::Semicolon, TT::Comma], &mut asi))?
         };
+        // BindingPattern in a VariableDeclaration / LexicalBinding requires Initializer
+        // (ECMA-262 §14.3.1 / §14.3.2) — but only outside for-in/of heads, where the
+        // iteration value supplies the binding. Identifier bindings without init are
+        // fine for `var`/`let` (const-without-init is binder-owned).
+        //
+        // `VarDeclParseMode::Leftmost` is used for for-triple init *and* the for-header
+        // speculative drive; for-in/of use `for_in_of_lhs` (not this path). Require init
+        // whenever we are not in a for-in/of binding position — i.e. Asi mode always, and
+        // Leftmost only when the next token is not `in`/`of`.
+        let requires_pattern_init = p.is_strict_ecmascript()
+          && initializer.is_none()
+          && matches!(pattern.stx.pat.stx.as_ref(), Pat::Arr(_) | Pat::Obj(_));
+        if requires_pattern_init {
+          let next = p.peek().typ;
+          let in_for_in_of_binding = parse_mode == VarDeclParseMode::Leftmost
+            && matches!(next, TT::KeywordIn | TT::KeywordOf);
+          // for-triple Leftmost / Asi statement decls still need init.
+          if !in_for_in_of_binding {
+            return Err(pattern.error(SyntaxErrorType::BindingPatternRequiresInitializer));
+          }
+        }
         declarators.push(VarDeclarator {
           pattern,
           definite_assignment,
@@ -125,6 +179,45 @@ impl<'a> Parser<'a> {
             {
               break;
             };
+            if p.consume_if(TT::Comma).is_match() {
+              continue;
+            }
+            // tsc `parseDelimitedList(VariableDeclarations)` recovery:
+            // missing `,` before another binding, or junk tokens (`]`, `=`, …)
+            // after a recovered type like `C[#bar]`.
+            if p.should_recover() {
+              let next = p.peek();
+              if Self::is_var_declarator_start(next.typ) {
+                p.report_soft(next.error(SyntaxErrorType::RequiredTokenNotFound(TT::Comma)));
+                continue;
+              }
+              p.report_soft(next.error(SyntaxErrorType::RequiredTokenNotFound(TT::Comma)));
+              while p.should_recover() {
+                let junk = p.peek();
+                if junk.typ == TT::EOF
+                  || junk.typ == TT::BraceClose
+                  || junk.typ == TT::Semicolon
+                  || (junk.preceded_by_line_terminator && junk.typ != TT::Comma)
+                {
+                  break;
+                }
+                if Self::is_var_declarator_start(junk.typ) {
+                  break;
+                }
+                p.report_soft(junk.error(SyntaxErrorType::VariableDeclarationExpected));
+                p.consume();
+              }
+              let after = p.peek();
+              if after.typ == TT::EOF
+                || after.typ == TT::BraceClose
+                || after.typ == TT::Semicolon
+                || (after.preceded_by_line_terminator && after.typ != TT::Comma)
+              {
+                let _ = p.consume_if(TT::Semicolon);
+                break;
+              }
+              continue;
+            }
             p.require(TT::Comma)?;
           }
           VarDeclParseMode::Leftmost => {
@@ -136,6 +229,7 @@ impl<'a> Parser<'a> {
       }
       Ok(VarDecl {
         export,
+        declare: false,
         mode,
         declarators,
       })
@@ -165,14 +259,17 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        // Parameters and body use the function's own context, not the parent's
+        // Body may allow yield/await expressions; FormalParameters must not
+        // (ECMA-262 §15.5.1 / §15.1.1).
         let fn_ctx = ctx.with_rules(ParsePatternRules {
           await_allowed: if is_module { false } else { !is_async },
           yield_allowed: if is_module { false } else { !generator },
           await_expr_allowed: is_async,
           yield_expr_allowed: generator,
         });
-        let parameters = p.func_params(fn_ctx)?;
+        let param_ctx = fn_ctx.with_rules(fn_ctx.rules.for_formal_parameters());
+        // Parameter defaults evaluate in the function's binding environment.
+        let parameters = p.with_non_arrow_func_bindings(|p| p.func_params(param_ctx))?;
         // TypeScript: return type annotation (may be type predicate)
         let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
@@ -265,9 +362,7 @@ impl<'a> Parser<'a> {
 
         // Unlike functions, classes are scoped to their block.
         let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-          // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
-          // Parse expression, which will handle type arguments via expr_with_ts_type_args
-          Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+          Some(p.class_heritage(ctx)?)
         } else {
           None
         };

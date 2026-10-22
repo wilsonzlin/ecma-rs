@@ -10,7 +10,10 @@ fn utf8_to_utf16_roundtrip_bmp_and_astral() {
   let s = scope.alloc_string_from_utf8(original).unwrap();
 
   let js = scope.heap().get_string(s).unwrap();
-  assert_eq!(js.as_code_units(), &[0x0041, 0x2603, 0xD83D, 0xDCA9, 0x0042]);
+  assert_eq!(
+    js.as_code_units(),
+    &[0x0041, 0x2603, 0xD83D, 0xDCA9, 0x0042]
+  );
   assert_eq!(js.to_utf8_lossy(), original);
 }
 

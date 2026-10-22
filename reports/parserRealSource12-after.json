@@ -1,0 +1,89 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 1
+    },
+    "mismatches": {
+      "expected": 0,
+      "unexpected": 1,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "none",
+  "results": [
+    {
+      "id": "parser/ecmascript5/parserRealSource12.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parserRealSource12.ts",
+      "outcome": "timeout",
+      "duration_ms": 20000,
+      "rust": {
+        "status": "timeout",
+        "diagnostics": [],
+        "error": "timed out after 20000ms"
+      },
+      "tsc": {
+        "status": "timeout",
+        "diagnostics": [],
+        "error": "timed out after 20000ms"
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "expectation": {
+        "expectation": "pass",
+        "expected": false
+      },
+      "mismatched": true
+    }
+  ]
+}

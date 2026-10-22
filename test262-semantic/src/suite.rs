@@ -30,8 +30,9 @@ pub fn load_suite_from_path(path: &Path) -> Result<Suite> {
 pub fn parse_suite(raw: &str) -> Result<Suite> {
   match toml::from_str::<Suite>(raw) {
     Ok(suite) => Ok(suite),
-    Err(toml_err) => serde_json::from_str::<Suite>(raw)
-      .map_err(|json_err| anyhow!("failed to parse suite as TOML ({toml_err}) or JSON ({json_err})")),
+    Err(toml_err) => serde_json::from_str::<Suite>(raw).map_err(|json_err| {
+      anyhow!("failed to parse suite as TOML ({toml_err}) or JSON ({json_err})")
+    }),
   }
 }
 
@@ -74,8 +75,8 @@ fn compile_glob_set(patterns: &[String], label: &str) -> Result<Option<GlobSet>>
 
   let mut builder = GlobSetBuilder::new();
   for pattern in patterns {
-    let glob = Glob::new(pattern)
-      .map_err(|err| anyhow!("invalid {label} glob '{pattern}': {err}"))?;
+    let glob =
+      Glob::new(pattern).map_err(|err| anyhow!("invalid {label} glob '{pattern}': {err}"))?;
     builder.add(glob);
   }
   Ok(Some(
@@ -130,4 +131,3 @@ mod tests {
     assert!(err.to_string().contains("missing test id"));
   }
 }
-

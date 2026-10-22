@@ -1,0 +1,91 @@
+# Expectation manifest: known gaps for the vm-js language-core test262 suites.
+#
+# Regenerated 2026-07-25 after `$262.createRealm` host binding + foreign-realm
+# eval restore. Remaining residuals are honest TCO gaps only
+# (`features:[tail-call-optimization]` — not implemented).
+# Rerun: see wiki/crates/vm-js.md#test262-status.
+
+[[expectations]]
+id = "language/expressions/coalesce/tco-pos-null.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/coalesce/tco-pos-undefined.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/comma/tco-final.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/conditional/tco-cond.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/conditional/tco-pos.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/logical-and/tco-right.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/expressions/logical-or/tco-right.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/block/tco-stmt-list.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/block/tco-stmt.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/do-while/tco-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/for/tco-const-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/for/tco-let-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/for/tco-lhs-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/for/tco-var-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/if/tco-else-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/if/tco-if-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/labeled/tco.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/switch/tco-case-body-dflt.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/switch/tco-case-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/switch/tco-dftl-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"
+[[expectations]]
+id = "language/statements/while/tco-body.js"
+status = "xfail"
+reason = "tail-call-optimization (features:[tail-call-optimization]) not implemented"

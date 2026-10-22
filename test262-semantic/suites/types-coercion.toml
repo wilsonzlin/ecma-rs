@@ -1,0 +1,16 @@
+# Language type semantics and reference/property access edges.
+#
+# Exercises the primitive type model (ECMA-262 §6.1), the Reference Record
+# machinery (§6.2.5), and optional chaining short-circuit semantics (§13.3.9).
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/types/**/*.js",
+  "language/expressions/optional-chaining/**/*.js",
+  "language/expressions/grouping/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

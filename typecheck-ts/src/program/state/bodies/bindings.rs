@@ -225,6 +225,18 @@ impl ProgramState {
         }
       }
     }
+    // Named `class Foo` / `function Foo` expressions bind their name in the
+    // class/function body (and nested member bodies). Seed those before outer
+    // parent pats so the expression name shadows captured parameters.
+    seed_enclosing_named_exprs(
+      self,
+      body_id,
+      bindings,
+      binding_defs,
+      &mut seen_names,
+      &store,
+      unknown,
+    );
     while let Some(parent) = current {
       self.check_cancelled()?;
       if !visited.insert(parent) {
@@ -237,6 +249,37 @@ impl ProgramState {
       if matches!(meta.kind, HirBodyKind::TopLevel)
         && self.files.get(&meta.file).and_then(|state| state.top_body) == Some(parent)
       {
+        // Do not `check_body` the file top-level (avoids cycles / duplicate
+        // work), but still seed nested `namespace` / block class·enum·…
+        // decls. Those are not file-root bindings, yet class-body heritage
+        // (`extends Base` inside `namespace Errors`) must resolve them
+        // (`assignmentCompatWithCallSignatures4.ts`).
+        //
+        // Only enter blocks that enclose the body being checked, and let
+        // those nested decls overwrite file-root same-named types
+        // (`assignmentCompatWithNumericIndexer3.ts`).
+        let child_span = self.body_map.get(&body_id).and_then(|meta| {
+          let hir_id = meta.hir?;
+          let lowered = self.hir_lowered.get(&meta.file)?;
+          lowered.body(hir_id).map(|b| b.span)
+        });
+        if let Some(hir_body_id) = meta.hir {
+          if let Some(lowered) = self.hir_lowered.get(&meta.file).cloned() {
+            if let Some(body) = lowered.body(hir_body_id) {
+              for stmt_id in body.root_stmts.iter().copied() {
+                seed_type_decls_from_stmt(
+                  self,
+                  body,
+                  stmt_id,
+                  binding_defs,
+                  &mut seen_names,
+                  child_span,
+                  false,
+                );
+              }
+            }
+          }
+        }
         break;
       }
       let parent_result = self.check_body(parent)?;
@@ -265,6 +308,22 @@ impl ProgramState {
           &store,
           unknown,
           &mut seen_names,
+        );
+      }
+      // Nested `class` / `enum` / `interface` / `type` decls in parent bodies are
+      // not file-level bindings, but TypeScript still resolves them as types in
+      // inner scopes (e.g. `class Outer { ctor() { class Inner { m(x: Inner) {} } } }`).
+      // Seed those DefIds into the body resolver so type annotations do not emit
+      // false TC2008 / cascading TS2339.
+      for stmt_id in body.root_stmts.iter().copied() {
+        seed_type_decls_from_stmt(
+          self,
+          body,
+          stmt_id,
+          binding_defs,
+          &mut seen_names,
+          None,
+          false,
         );
       }
       if parent_result.pat_types.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -302,6 +361,360 @@ impl ProgramState {
       }
       current = self.body_parents.get(&parent).copied();
     }
+    // `seed_type_decls_from_stmt` only fills the type resolver map. Heritage
+    // and `new C()` use value-namespace lookup — materialize class/enum ctor
+    // types into `bindings` as well.
+    let pending: Vec<(String, DefId)> = binding_defs
+      .iter()
+      .filter(|(name, def)| {
+        !bindings.contains_key(*name)
+          && self
+            .def_data
+            .get(def)
+            .is_some_and(|data| matches!(data.kind, DefKind::Class(_) | DefKind::Enum(_)))
+      })
+      .map(|(name, def)| (name.clone(), *def))
+      .collect();
+    for (name, def) in pending {
+      self.check_cancelled()?;
+      if self.type_stack.contains(&def) {
+        continue;
+      }
+      let ty = self
+        .interned_def_types
+        .get(&def)
+        .copied()
+        .filter(|ty| store.contains_type_id(*ty))
+        .map(|ty| store.canon(ty))
+        .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown));
+      let ty = match ty {
+        Some(ty) => Some(ty),
+        None => match self.type_of_def(def) {
+          Ok(ty) => Some(store.canon(ty)),
+          Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
+          Err(_) => None,
+        },
+      };
+      if let Some(ty) = ty {
+        if !matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
+          bindings.insert(name, ty);
+        }
+      }
+    }
     Ok(())
+  }
+}
+
+/// Seed names of enclosing named `class` / `function` expressions into the
+/// body being checked (tsc: class/function expression name is in scope for the
+/// body and nested members). Walks `body_parents` nearest-first so an inner
+/// expression name shadows outer ones and outer parameter captures.
+fn seed_enclosing_named_exprs(
+  state: &ProgramState,
+  body_id: BodyId,
+  bindings: &mut HashMap<String, TypeId>,
+  binding_defs: &mut HashMap<String, DefId>,
+  seen_names: &mut HashSet<String>,
+  store: &Arc<tti::TypeStore>,
+  unknown: TypeId,
+) {
+  let mut child = body_id;
+  let mut current = state.body_parents.get(&body_id).copied();
+  let mut visited = HashSet::new();
+  while let Some(parent) = current {
+    if !visited.insert(parent) {
+      break;
+    }
+    let Some(meta) = state.body_map.get(&parent).copied() else {
+      current = state.body_parents.get(&parent).copied();
+      child = parent;
+      continue;
+    };
+    let Some(hir_id) = meta.hir else {
+      current = state.body_parents.get(&parent).copied();
+      child = parent;
+      continue;
+    };
+    let Some(lowered) = state.hir_lowered.get(&meta.file) else {
+      current = state.body_parents.get(&parent).copied();
+      child = parent;
+      continue;
+    };
+    let Some(parent_body) = lowered.body(hir_id) else {
+      current = state.body_parents.get(&parent).copied();
+      child = parent;
+      continue;
+    };
+    for expr in parent_body.exprs.iter() {
+      match &expr.kind {
+        HirExprKind::ClassExpr { def, body, name } => {
+          if *body != child {
+            continue;
+          }
+          let Some(name_id) = *name else {
+            continue;
+          };
+          let Some(name) = lowered.names.resolve(name_id) else {
+            continue;
+          };
+          if name.is_empty() || name.starts_with('<') {
+            continue;
+          }
+          if !seen_names.insert(name.to_string()) {
+            continue;
+          }
+          // Type-side def for `x: D`; value-side ctor type for `new D()`.
+          binding_defs.insert(name.to_string(), *def);
+          if let Some(ty) = class_expr_ctor_ty(state, store, *def, expr.span) {
+            bindings.insert(name.to_string(), ty);
+          }
+        }
+        HirExprKind::FunctionExpr {
+          def,
+          body,
+          name,
+          is_arrow: false,
+        } => {
+          if *body != child {
+            continue;
+          }
+          let Some(name_id) = *name else {
+            continue;
+          };
+          let Some(name) = lowered.names.resolve(name_id) else {
+            continue;
+          };
+          if name.is_empty() || name.starts_with('<') {
+            continue;
+          }
+          if !seen_names.insert(name.to_string()) {
+            continue;
+          }
+          binding_defs.insert(name.to_string(), *def);
+          let ty = state
+            .interned_def_types
+            .get(def)
+            .copied()
+            .filter(|ty| store.contains_type_id(*ty))
+            .map(|ty| store.canon(ty))
+            .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown))
+            .unwrap_or(unknown);
+          if ty != unknown {
+            bindings.insert(name.to_string(), ty);
+          }
+        }
+        _ => {}
+      }
+    }
+    current = state.body_parents.get(&parent).copied();
+    child = parent;
+  }
+}
+
+/// Constructor value type for a named class expression (value-side `DefId` /
+/// same-span constructable interned type). Returns `None` when only `unknown`
+/// is available so we do not poison value lookup.
+fn class_expr_ctor_ty(
+  state: &ProgramState,
+  store: &Arc<tti::TypeStore>,
+  type_def: DefId,
+  expr_span: TextRange,
+) -> Option<TypeId> {
+  if let Some(value_def) = state.value_defs.get(&type_def).copied() {
+    if let Some(ty) = state.interned_def_types.get(&value_def).copied() {
+      if store.contains_type_id(ty) {
+        let ty = store.canon(ty);
+        if check::hir_body::type_has_construct_signature(store.as_ref(), ty) {
+          return Some(ty);
+        }
+      }
+    }
+  }
+  // Fallback: any same-span interned def with construct signatures (salsa path
+  // equivalent when `value_defs` is not consulted).
+  for (other_def, data) in state.def_data.iter() {
+    if data.span != expr_span {
+      continue;
+    }
+    if let Some(ty) = state.interned_def_types.get(other_def).copied() {
+      if store.contains_type_id(ty) {
+        let ty = store.canon(ty);
+        if check::hir_body::type_has_construct_signature(store.as_ref(), ty) {
+          return Some(ty);
+        }
+      }
+    }
+  }
+  None
+}
+
+fn span_encloses(outer: TextRange, inner: TextRange) -> bool {
+  outer.start <= inner.start && outer.end >= inner.end
+}
+
+pub(super) fn seed_type_decls_from_stmt(
+  state: &ProgramState,
+  body: &hir_js::Body,
+  stmt_id: hir_js::StmtId,
+  binding_defs: &mut HashMap<String, DefId>,
+  seen_names: &mut HashSet<String>,
+  enclosing: Option<TextRange>,
+  in_enclosing_block: bool,
+) {
+  let Some(stmt) = body.stmts.get(stmt_id.0 as usize) else {
+    return;
+  };
+  match &stmt.kind {
+    hir_js::StmtKind::Decl(def_id) => {
+      if enclosing.is_some() && !in_enclosing_block {
+        return;
+      }
+      let Some(data) = state.def_data.get(def_id) else {
+        return;
+      };
+      if data.name.is_empty() || data.name.starts_with('<') {
+        return;
+      }
+      // Only TYPE-capable decls: nested functions are VALUE-only and do not
+      // satisfy `resolve_local(..., Namespace::TYPE)`.
+      if !matches!(
+        data.kind,
+        DefKind::Class(_) | DefKind::Enum(_) | DefKind::Interface(_) | DefKind::TypeAlias(_)
+      ) {
+        return;
+      }
+      if in_enclosing_block {
+        seen_names.insert(data.name.clone());
+        binding_defs.insert(data.name.clone(), *def_id);
+        return;
+      }
+      // Prefer nearer parent scopes (walk order is nearest-first).
+      if !seen_names.insert(data.name.clone()) {
+        return;
+      }
+      binding_defs.insert(data.name.clone(), *def_id);
+    }
+    hir_js::StmtKind::Block(stmts) => {
+      let child_in_block = match enclosing {
+        Some(enc) if span_encloses(stmt.span, enc) => true,
+        Some(_) => return,
+        None => in_enclosing_block,
+      };
+      for child in stmts.iter().copied() {
+        seed_type_decls_from_stmt(
+          state,
+          body,
+          child,
+          binding_defs,
+          seen_names,
+          enclosing,
+          child_in_block,
+        );
+      }
+    }
+    hir_js::StmtKind::If {
+      consequent,
+      alternate,
+      ..
+    } => {
+      seed_type_decls_from_stmt(
+        state,
+        body,
+        *consequent,
+        binding_defs,
+        seen_names,
+        enclosing,
+        in_enclosing_block,
+      );
+      if let Some(alt) = *alternate {
+        seed_type_decls_from_stmt(
+          state,
+          body,
+          alt,
+          binding_defs,
+          seen_names,
+          enclosing,
+          in_enclosing_block,
+        );
+      }
+    }
+    hir_js::StmtKind::While { body: inner, .. }
+    | hir_js::StmtKind::DoWhile { body: inner, .. }
+    | hir_js::StmtKind::For { body: inner, .. }
+    | hir_js::StmtKind::ForIn { body: inner, .. } => {
+      seed_type_decls_from_stmt(
+        state,
+        body,
+        *inner,
+        binding_defs,
+        seen_names,
+        enclosing,
+        in_enclosing_block,
+      );
+    }
+    hir_js::StmtKind::Switch { cases, .. } => {
+      for case in cases.iter() {
+        for child in case.consequent.iter().copied() {
+          seed_type_decls_from_stmt(
+            state,
+            body,
+            child,
+            binding_defs,
+            seen_names,
+            enclosing,
+            in_enclosing_block,
+          );
+        }
+      }
+    }
+    hir_js::StmtKind::Try {
+      block,
+      catch,
+      finally_block,
+    } => {
+      seed_type_decls_from_stmt(
+        state,
+        body,
+        *block,
+        binding_defs,
+        seen_names,
+        enclosing,
+        in_enclosing_block,
+      );
+      if let Some(catch) = catch {
+        seed_type_decls_from_stmt(
+          state,
+          body,
+          catch.body,
+          binding_defs,
+          seen_names,
+          enclosing,
+          in_enclosing_block,
+        );
+      }
+      if let Some(finally) = finally_block {
+        seed_type_decls_from_stmt(
+          state,
+          body,
+          *finally,
+          binding_defs,
+          seen_names,
+          enclosing,
+          in_enclosing_block,
+        );
+      }
+    }
+    hir_js::StmtKind::Labeled { body: inner, .. } | hir_js::StmtKind::With { body: inner, .. } => {
+      seed_type_decls_from_stmt(
+        state,
+        body,
+        *inner,
+        binding_defs,
+        seen_names,
+        enclosing,
+        in_enclosing_block,
+      );
+    }
+    _ => {}
   }
 }

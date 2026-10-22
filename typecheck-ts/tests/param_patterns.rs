@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use hir_js::LocalKind;
 use typecheck_ts::codes;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -25,16 +26,21 @@ fn destructured_object_params_are_typed() {
   let ty = program.type_at(file_id, offset).expect("type at x");
   assert_eq!(program.display_type(ty).to_string(), "number");
 
-  let defs = program.definitions_in_file(file_id);
-  let x_defs: Vec<_> = defs
+  // Params are LocalId-only: query via type_of_local.
+  let lowered = program.hir_lowered(file_id).expect("hir");
+  let f_def = program
+    .definitions_in_file(file_id)
     .into_iter()
-    .filter(|def| program.def_name(*def).as_deref() == Some("x"))
-    .collect();
-  assert!(!x_defs.is_empty(), "expected x parameter def");
-  for def in x_defs {
-    let ty = program.type_of_def(def);
-    assert_ne!(program.display_type(ty).to_string(), "unknown");
-  }
+    .find(|def| program.def_name(*def).as_deref() == Some("f"))
+    .expect("function f");
+  let body_id = program.body_of_def(f_def).expect("body");
+  let body = lowered.body(body_id).expect("hir body");
+  let (x_local_id, _) = body
+    .locals_with_kind(LocalKind::Param)
+    .find(|(_, local)| lowered.names.resolve(local.name) == Some("x"))
+    .expect("x param local");
+  let ty = program.type_of_local(body_id, x_local_id);
+  assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
 #[test]
@@ -59,24 +65,21 @@ fn destructured_array_params_are_typed() {
   let ty = program.type_at(file_id, offset).expect("type at y");
   assert_eq!(program.display_type(ty).to_string(), "string");
 
-  let defs = program.definitions_in_file(file_id);
-  let x_def = defs
-    .iter()
-    .copied()
-    .find(|def| program.def_name(*def).as_deref() == Some("x"))
-    .expect("x parameter def");
-  let y_def = defs
-    .iter()
-    .copied()
-    .find(|def| program.def_name(*def).as_deref() == Some("y"))
-    .expect("y parameter def");
+  let lowered = program.hir_lowered(file_id).expect("hir");
+  let g_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("g"))
+    .expect("function g");
+  let body_id = program.body_of_def(g_def).expect("body");
+  let body = lowered.body(body_id).expect("hir body");
 
-  assert_eq!(
-    program.display_type(program.type_of_def(x_def)).to_string(),
-    "number"
-  );
-  assert_eq!(
-    program.display_type(program.type_of_def(y_def)).to_string(),
-    "string"
-  );
+  let mut by_name = std::collections::BTreeMap::new();
+  for (local_id, local) in body.locals_with_kind(LocalKind::Param) {
+    let name = lowered.names.resolve(local.name).unwrap().to_string();
+    let ty = program.type_of_local(body_id, local_id);
+    by_name.insert(name, program.display_type(ty).to_string());
+  }
+  assert_eq!(by_name.get("x").map(String::as_str), Some("number"));
+  assert_eq!(by_name.get("y").map(String::as_str), Some("string"));
 }

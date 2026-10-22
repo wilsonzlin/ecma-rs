@@ -1,6 +1,4 @@
-use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
-};
+use vm_js::{Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError};
 
 #[test]
 fn used_bytes_increases_when_adding_property() -> Result<(), VmError> {
@@ -114,7 +112,10 @@ fn oom_limit_respected_after_growth() -> Result<(), VmError> {
     }
   }
 
-  assert!(saw_oom, "expected heap growth to eventually hit VmError::OutOfMemory");
+  assert!(
+    saw_oom,
+    "expected heap growth to eventually hit VmError::OutOfMemory"
+  );
   let epsilon = 4096;
   assert!(
     scope.heap().estimated_total_bytes() <= max_bytes + epsilon,
@@ -153,7 +154,10 @@ fn heap_limit_accounts_for_metadata_overhead() -> Result<(), VmError> {
     }
   }
 
-  assert!(saw_oom, "expected heap metadata growth to hit VmError::OutOfMemory");
+  assert!(
+    saw_oom,
+    "expected heap metadata growth to hit VmError::OutOfMemory"
+  );
   assert_eq!(
     scope.heap().used_bytes(),
     0,

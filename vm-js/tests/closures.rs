@@ -38,9 +38,10 @@ fn multiple_closures_share_captured_binding() {
 #[test]
 fn closure_capture_survives_gc() {
   let mut rt = new_runtime();
-  rt
-    .exec_script("function make(){ let x = {a:3}; return function(){ return x.a; }; } var f = make();")
-    .unwrap();
+  rt.exec_script(
+    "function make(){ let x = {a:3}; return function(){ return x.a; }; } var f = make();",
+  )
+  .unwrap();
 
   rt.heap.collect_garbage();
 
@@ -52,13 +53,14 @@ fn closure_capture_survives_gc() {
 fn function_decl_closure_captures_lexical_binding() {
   let mut rt = new_runtime();
   let value = rt
-    .exec_script("function make(){ let x = 1; function inner(){ return x; } return inner; } make()()")
+    .exec_script(
+      "function make(){ let x = 1; function inner(){ return x; } return inner; } make()()",
+    )
     .unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
 
 #[test]
-#[ignore = "arrow expressions in function bodies are not yet supported by the parser"]
 fn arrow_captures_lexical_this_across_calls_and_gc() -> Result<(), VmError> {
   let mut rt = new_runtime();
 
@@ -95,7 +97,9 @@ fn arrow_captures_lexical_this_across_calls_and_gc() -> Result<(), VmError> {
   {
     let arrow = rt.heap.get_root(arrow_root).expect("arrow root missing");
     let mut scope = rt.heap.scope();
-    let value = rt.vm.call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
+    let value = rt
+      .vm
+      .call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
     assert_eq!(value, Value::Object(this_obj));
   }
 
@@ -105,7 +109,6 @@ fn arrow_captures_lexical_this_across_calls_and_gc() -> Result<(), VmError> {
 }
 
 #[test]
-#[ignore = "arrow expressions in function bodies are not yet supported by the parser"]
 fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError> {
   let mut rt = new_runtime();
 
@@ -126,7 +129,10 @@ fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError
 
   let arrow_root = {
     let mut scope = rt.heap.scope();
-    let outer = scope.heap().get_root(outer_root).expect("outer root missing");
+    let outer = scope
+      .heap()
+      .get_root(outer_root)
+      .expect("outer root missing");
     let new_target = scope
       .heap()
       .get_root(new_target_root)
@@ -150,7 +156,9 @@ fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError
   {
     let arrow = rt.heap.get_root(arrow_root).expect("arrow root missing");
     let mut scope = rt.heap.scope();
-    let value = rt.vm.call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
+    let value = rt
+      .vm
+      .call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
     assert_eq!(value, Value::Object(new_target_obj));
   }
 
@@ -177,7 +185,6 @@ fn arrow_functions_are_not_constructable() -> Result<(), VmError> {
 }
 
 #[test]
-#[ignore = "arrow expressions in function bodies are not yet supported by the parser"]
 fn arrow_this_is_lexical_and_ignores_call_site() {
   let mut rt = new_runtime();
   let value = rt
@@ -196,7 +203,6 @@ fn arrow_this_is_lexical_and_ignores_call_site() {
 }
 
 #[test]
-#[ignore = "arrow expressions in function bodies are not yet supported by the parser"]
 fn arrow_new_target_is_lexical_undefined_in_plain_call() {
   let mut rt = new_runtime();
   let value = rt

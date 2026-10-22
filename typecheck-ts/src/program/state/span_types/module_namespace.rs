@@ -43,7 +43,10 @@ impl ProgramState {
         data: PropData {
           ty,
           optional: false,
-          readonly: true,
+          // tsc: namespace members are writable unless declared `const`.
+          readonly: resolved_def
+            .map(|def| self.def_is_readonly_const(def))
+            .unwrap_or_default(),
           accessibility: None,
           is_method: false,
           origin: None,
@@ -133,7 +136,10 @@ impl ProgramState {
           data: PropData {
             ty,
             optional: false,
-            readonly: true,
+            readonly: entry
+              .and_then(|entry| entry.def)
+              .map(|def| self.def_is_readonly_const(def))
+              .unwrap_or_default(),
             accessibility: None,
             is_method: false,
             origin: None,

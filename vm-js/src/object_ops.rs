@@ -230,6 +230,11 @@ impl<'a> Scope<'a> {
   }
 
   /// ECMAScript `[[Set]]` for ordinary objects.
+  ///
+  /// Note: Proxy exotic `[[Set]]` and parent-`[[Set]]` delegation live on
+  /// [`Self::ordinary_set_with_host_and_hooks`] (the path used by PutValue). This convenience
+  /// wrapper keeps the historical get-property-then-write-receiver shape for call sites that lack
+  /// host hooks.
   pub fn ordinary_set(
     &mut self,
     vm: &mut Vm,
@@ -317,8 +322,11 @@ impl<'a> Scope<'a> {
     }
   }
 
-  /// ECMAScript `[[Set]]` for ordinary objects, using an explicit embedder host context and host
-  /// hook implementation.
+  /// ECMAScript `[[Set]]` for ordinary objects (and Proxy exotic objects), using an explicit
+  /// embedder host context and host hook implementation.
+  ///
+  /// Follows OrdinarySet (§10.1.9.2): own-property check, then `parent.[[Set]]` when absent (so a
+  /// Proxy on the prototype chain receives `[[Set]]` rather than being skipped by a chain walk).
   pub fn ordinary_set_with_host_and_hooks(
     &mut self,
     vm: &mut Vm,
@@ -329,6 +337,24 @@ impl<'a> Scope<'a> {
     value: Value,
     receiver: Value,
   ) -> Result<bool, VmError> {
+    self.ordinary_set_with_host_and_hooks_depth(vm, host, hooks, obj, key, value, receiver, 0)
+  }
+
+  fn ordinary_set_with_host_and_hooks_depth(
+    &mut self,
+    vm: &mut Vm,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+    receiver: Value,
+    depth: usize,
+  ) -> Result<bool, VmError> {
+    if depth >= crate::MAX_PROTOTYPE_CHAIN {
+      return Err(VmError::PrototypeChainTooDeep);
+    }
+
     // Root inputs together so GC can't collect `key`/`value`/`receiver` while growing the root
     // stack.
     let roots = [
@@ -342,69 +368,81 @@ impl<'a> Scope<'a> {
     ];
     self.push_roots(&roots)?;
 
-    let mut desc = self.heap().get_property(obj, &key)?;
-    if desc.is_none() {
-      desc = Some(PropertyDescriptor {
-        enumerable: true,
-        configurable: true,
-        kind: PropertyKind::Data {
-          value: Value::Undefined,
-          writable: true,
-        },
-      });
+    if crate::proxy::is_proxy(self, obj)? {
+      return crate::proxy::proxy_set(vm, self, host, hooks, obj, key, value, receiver);
     }
 
-    let Some(desc) = desc else {
-      return Err(VmError::InvariantViolation(
-        "ordinary_set: internal error: missing property descriptor",
-      ));
-    };
-
-    match desc.kind {
-      PropertyKind::Data { writable, .. } => {
-        if !writable {
-          return Ok(false);
-        }
-        let Value::Object(receiver_obj) = receiver else {
-          return Ok(false);
-        };
-
-        let existing_desc = self.ordinary_get_own_property(receiver_obj, key)?;
-        if let Some(existing_desc) = existing_desc {
-          if existing_desc.is_accessor_descriptor() {
+    // OrdinarySet step 1: own property only (not a prototype-chain walk).
+    if let Some(desc) = self.ordinary_get_own_property(obj, key)? {
+      return match desc.kind {
+        PropertyKind::Data { writable, .. } => {
+          if !writable {
             return Ok(false);
           }
-          let receiver_writable = match existing_desc.kind {
-            PropertyKind::Data { writable, .. } => writable,
-            PropertyKind::Accessor { .. } => return Ok(false),
+          let Value::Object(receiver_obj) = receiver else {
+            return Ok(false);
           };
-          if !receiver_writable {
-            return Ok(false);
+
+          let existing_desc = self.ordinary_get_own_property(receiver_obj, key)?;
+          if let Some(existing_desc) = existing_desc {
+            if existing_desc.is_accessor_descriptor() {
+              return Ok(false);
+            }
+            let receiver_writable = match existing_desc.kind {
+              PropertyKind::Data { writable, .. } => writable,
+              PropertyKind::Accessor { .. } => return Ok(false),
+            };
+            if !receiver_writable {
+              return Ok(false);
+            }
+
+            return self.define_own_property(
+              receiver_obj,
+              key,
+              PropertyDescriptorPatch {
+                value: Some(value),
+                ..Default::default()
+              },
+            );
           }
 
-          return self.define_own_property(
-            receiver_obj,
-            key,
-            PropertyDescriptorPatch {
-              value: Some(value),
-              ..Default::default()
-            },
-          );
+          self.create_data_property(receiver_obj, key, value)
         }
-
-        self.create_data_property(receiver_obj, key, value)
-      }
-      PropertyKind::Accessor { set, .. } => {
-        if matches!(set, Value::Undefined) {
-          return Ok(false);
+        PropertyKind::Accessor { set, .. } => {
+          if matches!(set, Value::Undefined) {
+            return Ok(false);
+          }
+          if !self.heap().is_callable(set)? {
+            return Err(VmError::TypeError("accessor setter is not callable"));
+          }
+          let _ = vm.call_with_host_and_hooks(host, self, hooks, set, receiver, &[value])?;
+          Ok(true)
         }
-        if !self.heap().is_callable(set)? {
-          return Err(VmError::TypeError("accessor setter is not callable"));
-        }
-        let _ = vm.call_with_host_and_hooks(host, self, hooks, set, receiver, &[value])?;
-        Ok(true)
-      }
+      };
     }
+
+    // OrdinarySet step 2: no own property → parent.[[Set]](P, V, Receiver).
+    if let Some(parent) = self.heap().object_prototype(obj)? {
+      return self.ordinary_set_with_host_and_hooks_depth(
+        vm,
+        host,
+        hooks,
+        parent,
+        key,
+        value,
+        receiver,
+        depth + 1,
+      );
+    }
+
+    // OrdinarySet step 3–4: no parent — create a data property on the receiver when possible.
+    let Value::Object(receiver_obj) = receiver else {
+      return Ok(false);
+    };
+    if !self.heap().object_is_extensible(receiver_obj)? {
+      return Ok(false);
+    }
+    self.create_data_property(receiver_obj, key, value)
   }
 
   /// ECMAScript `[[Delete]]` for ordinary objects.
@@ -478,7 +516,11 @@ impl<'a> Scope<'a> {
   ///
   /// This is a convenience wrapper around [`Scope::ordinary_delete`]. If the deletion is rejected
   /// (`false`), this returns a `TypeError`.
-  pub fn delete_property_or_throw(&mut self, obj: GcObject, key: PropertyKey) -> Result<(), VmError> {
+  pub fn delete_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+  ) -> Result<(), VmError> {
     // Root `obj`/`key` for the duration of the operation. Deleting a *missing* property should not
     // require the caller to pre-root `key` even when GC is triggered while growing the root stack.
     let mut scope = self.reborrow();
@@ -795,7 +837,10 @@ fn validate_and_apply_property_descriptor(
   Ok(true)
 }
 
-fn apply_descriptor_patch(current: PropertyDescriptor, desc: PropertyDescriptorPatch) -> PropertyDescriptor {
+fn apply_descriptor_patch(
+  current: PropertyDescriptor,
+  desc: PropertyDescriptorPatch,
+) -> PropertyDescriptor {
   let enumerable = desc.enumerable.unwrap_or(current.enumerable);
   let configurable = desc.configurable.unwrap_or(current.configurable);
 

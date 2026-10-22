@@ -34,6 +34,7 @@ pub fn foreign_var_decl(bindings: &ForeignBindings) -> Option<Node<Stmt>> {
 
   let decl = VarDecl {
     export: false,
+    declare: false,
     mode: VarDeclMode::Let,
     declarators,
   };

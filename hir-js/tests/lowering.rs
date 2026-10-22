@@ -17,6 +17,9 @@ use hir_js::ImportKind;
 use hir_js::JsxAttr;
 use hir_js::JsxAttrValue;
 use hir_js::JsxChild;
+use hir_js::Literal;
+use hir_js::LocalId;
+use hir_js::LocalKind;
 use hir_js::ObjectKey;
 use hir_js::ObjectProperty;
 use hir_js::StmtKind;
@@ -410,15 +413,24 @@ fn nested_defs_are_parented_to_enclosing_function() {
   let outer = find_def(DefKind::Function, "outer");
   let other = find_def(DefKind::Function, "other");
 
-  let a = find_def(DefKind::Var, "a");
-  let a_decl = result
-    .def(a.parent.expect("a should have declarator parent"))
-    .expect("a declarator def");
-  assert_eq!(a_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(
-    a_decl.parent,
-    Some(outer.id),
-    "a should be nested under outer"
+  // Body-local `const a` is LocalId-only (no DefKind::Var).
+  assert!(
+    !result
+      .defs
+      .iter()
+      .any(|d| d.path.kind == DefKind::Var && result.names.resolve(d.name) == Some("a")),
+    "body-local a must not allocate a DefId"
+  );
+  let outer_body = result
+    .body(outer.body.expect("outer body"))
+    .expect("outer body");
+  let outer_vars: Vec<_> = outer_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| result.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert!(
+    outer_vars.iter().any(|n| n == "a"),
+    "a should be a LocalId under outer"
   );
 
   let inner = find_def(DefKind::Function, "inner");
@@ -730,36 +742,263 @@ fn params_and_locals_are_scoped_to_their_enclosing_def() {
   let outer = find_def(DefKind::Function, "outer");
   let inner = find_def(DefKind::Function, "inner");
 
-  let params: Vec<_> = lowered
+  // Params and body vars are LocalId-only: no DefKind::Param / body-local Var.
+  assert!(
+    lowered
+      .defs
+      .iter()
+      .all(|def| def.path.kind != DefKind::Param),
+    "body-local params must not allocate DefIds"
+  );
+  assert!(
+    lowered
+      .defs
+      .iter()
+      .filter(|def| def.path.kind == DefKind::Var || def.path.kind == DefKind::VarDeclarator)
+      .all(|def| {
+        // Only nested under outer/inner would be body-local; none should exist.
+        def.parent != Some(outer.id) && def.parent != Some(inner.id)
+      }),
+    "body-local vars must not allocate DefIds"
+  );
+
+  let outer_body = lowered
+    .body(outer.body.expect("outer body"))
+    .expect("outer body data");
+  let inner_body = lowered
+    .body(inner.body.expect("inner body"))
+    .expect("inner body data");
+  let outer_params: Vec<_> = outer_body
+    .locals_with_kind(LocalKind::Param)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(outer_params, vec!["a", "b"]);
+  let outer_vars: Vec<_> = outer_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(outer_vars, vec!["x"]);
+  let inner_params: Vec<_> = inner_body
+    .locals_with_kind(LocalKind::Param)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(inner_params, vec!["c"]);
+  let inner_vars: Vec<_> = inner_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(inner_vars, vec!["y"]);
+}
+
+#[test]
+fn function_params_and_vars_populate_body_locals_without_defids() {
+  let source = "function outer(a, { b }) { const x = 1; function inner(c) { return c; } }";
+  let lowered = lower_from_source(source).expect("lower");
+
+  let outer = lowered
     .defs
     .iter()
-    .filter(|def| def.path.kind == DefKind::Param)
+    .find(|d| d.path.kind == DefKind::Function && lowered.names.resolve(d.name) == Some("outer"))
+    .expect("outer");
+  let inner = lowered
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Function && lowered.names.resolve(d.name) == Some("inner"))
+    .expect("inner");
+
+  let outer_body = lowered
+    .body(outer.body.expect("outer body"))
+    .expect("outer body data");
+  let inner_body = lowered
+    .body(inner.body.expect("inner body"))
+    .expect("inner body data");
+
+  let outer_param_names: Vec<_> = outer_body
+    .locals_with_kind(LocalKind::Param)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
     .collect();
-  assert_eq!(params.len(), 3, "expected a, b, c params");
+  assert_eq!(outer_param_names, vec!["a", "b"]);
 
-  for param in params {
-    let name = lowered.names.resolve(param.name).unwrap_or("<unknown>");
-    let expected_parent = match name {
-      "a" | "b" => outer.id,
-      "c" => inner.id,
-      other => panic!("unexpected param {other}"),
-    };
-    assert_eq!(param.parent, Some(expected_parent), "{name} parent");
+  let outer_var_names: Vec<_> = outer_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| lowered.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(outer_var_names, vec!["x"]);
+
+  let inner_local_names: Vec<_> = inner_body
+    .locals
+    .iter()
+    .map(|local| {
+      assert_eq!(local.kind, LocalKind::Param);
+      lowered.names.resolve(local.name).unwrap().to_string()
+    })
+    .collect();
+  assert_eq!(inner_local_names, vec!["c"]);
+
+  // No body-local Var/Param DefIds; locals are addressable by span.
+  assert!(
+    !lowered.defs.iter().any(|d| d.path.kind == DefKind::Var
+      && d.parent.is_some_and(|p| {
+        lowered.def(p).is_some_and(|parent| {
+          parent.parent == Some(outer.id)
+            || parent.id == outer.id
+            || parent.parent == Some(inner.id)
+            || parent.id == inner.id
+        })
+      })),
+    "body-local vars must not allocate DefIds"
+  );
+  for (local_id, local) in outer_body.locals.iter().enumerate() {
+    assert_eq!(
+      outer_body.local_for_span(local.span),
+      Some(LocalId(local_id as u32))
+    );
   }
+}
 
-  let x = find_def(DefKind::Var, "x");
-  let x_decl = lowered
-    .def(x.parent.expect("x should have declarator parent"))
-    .expect("x declarator def");
-  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(x_decl.parent, Some(outer.id));
+#[test]
+fn body_vars_and_catch_populate_locals() {
+  let source = r#"
+    function f(a) {
+      let x = 1;
+      const { y } = a;
+      try {
+        var z = 2;
+      } catch (err) {
+        return err;
+      }
+      for (const item of a) {}
+    }
+  "#;
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let func = lowered
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Function && lowered.names.resolve(d.name) == Some("f"))
+    .expect("f");
+  let body = lowered.body(func.body.expect("body")).expect("body");
 
-  let y = find_def(DefKind::Var, "y");
-  let y_decl = lowered
-    .def(y.parent.expect("y should have declarator parent"))
-    .expect("y declarator def");
-  assert_eq!(y_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(y_decl.parent, Some(inner.id));
+  let kinds_and_names: Vec<_> = body
+    .locals
+    .iter()
+    .map(|local| {
+      (
+        local.kind,
+        lowered.names.resolve(local.name).unwrap().to_string(),
+      )
+    })
+    .collect();
+  assert_eq!(
+    kinds_and_names,
+    vec![
+      (LocalKind::Param, "a".into()),
+      (LocalKind::Var, "x".into()),
+      (LocalKind::Var, "y".into()),
+      (LocalKind::Var, "z".into()),
+      (LocalKind::Catch, "err".into()),
+      (LocalKind::Var, "item".into()),
+    ]
+  );
+  // No body-local Var DefIds under f.
+  assert!(
+    !lowered.defs.iter().any(|d| {
+      d.path.kind == DefKind::Var
+        && d.parent.is_some_and(|p| {
+          lowered
+            .def(p)
+            .is_some_and(|parent| parent.id == func.id || parent.parent == Some(func.id))
+        })
+    }),
+    "body-local vars must not allocate DefIds"
+  );
+}
+
+#[test]
+fn module_level_defids_stable_under_body_local_param_edit() {
+  // Acceptance for LocalId migration: editing parameters or body vars inside
+  // one function must not reshuffle unrelated module-level DefIds.
+  let base_source = r#"
+    function first(a) { return a; }
+    function second(b) { return b; }
+    const top = 1;
+    class C {}
+  "#;
+  let variant_source = r#"
+    function first(a, extra) { const local = 1; return a; }
+    function second(b) { return b; }
+    const top = 1;
+    class C {}
+  "#;
+
+  let base = lower_from_source_with_kind(FileKind::Ts, base_source).expect("lower base");
+  let variant = lower_from_source_with_kind(FileKind::Ts, variant_source).expect("lower variant");
+
+  let module_kinds = [
+    DefKind::Function,
+    DefKind::Var,
+    DefKind::VarDeclarator,
+    DefKind::Class,
+  ];
+  let base_module: BTreeMap<_, _> = base
+    .defs
+    .iter()
+    .filter(|d| d.parent.is_none() && module_kinds.contains(&d.path.kind))
+    .map(|d| {
+      (
+        (
+          d.path.kind,
+          base.names.resolve(d.name).unwrap_or("").to_string(),
+        ),
+        d.id,
+      )
+    })
+    .collect();
+  let variant_module: BTreeMap<_, _> = variant
+    .defs
+    .iter()
+    .filter(|d| d.parent.is_none() && module_kinds.contains(&d.path.kind))
+    .map(|d| {
+      (
+        (
+          d.path.kind,
+          variant.names.resolve(d.name).unwrap_or("").to_string(),
+        ),
+        d.id,
+      )
+    })
+    .collect();
+
+  assert_eq!(
+    base_module, variant_module,
+    "module-level DefIds must stay stable when only body-local params change"
+  );
+
+  // second(b) param LocalId table (no compat DefId) and second's DefId itself
+  // are unchanged when first's params change.
+  let base_second = base
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Function && base.names.resolve(d.name) == Some("second"))
+    .expect("second");
+  let variant_second = variant
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Function && variant.names.resolve(d.name) == Some("second"))
+    .expect("second");
+  assert_eq!(base_second.id, variant_second.id);
+
+  let base_body = base.body(base_second.body.expect("body")).expect("body");
+  let variant_body = variant
+    .body(variant_second.body.expect("body"))
+    .expect("body");
+  assert_eq!(base_body.locals.len(), 1);
+  assert_eq!(variant_body.locals.len(), 1);
+  assert_eq!(base_body.locals[0].kind, LocalKind::Param);
+  assert_eq!(variant_body.locals[0].kind, LocalKind::Param);
+  assert_eq!(
+    base.names.resolve(base_body.locals[0].name),
+    variant.names.resolve(variant_body.locals[0].name)
+  );
 }
 
 #[test]
@@ -804,26 +1043,22 @@ fn locals_do_not_affect_top_level_disambiguators() {
     .iter()
     .find(|d| d.path.kind == DefKind::Function && variant.names.resolve(d.name) == Some("f"))
     .expect("function f");
-  let local_offset = variant_source
-    .find("const x = 1")
-    .expect("local const x location")
-    + "const ".len();
-  let local_decl = variant
+  let func_body = variant
+    .body(func.body.expect("f body"))
+    .expect("f body data");
+  let local_vars: Vec<_> = func_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| variant.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(local_vars, vec!["x"]);
+  // Only the top-level x Var DefId exists; the body-local x is LocalId-only.
+  let x_vars: Vec<_> = variant
     .defs
     .iter()
-    .find(|d| d.path.kind == DefKind::VarDeclarator && d.span.start == local_offset as u32)
-    .expect("local x declarator");
-  assert_eq!(local_decl.parent, Some(func.id));
-  let local_x = variant
-    .defs
-    .iter()
-    .find(|d| {
-      d.path.kind == DefKind::Var
-        && variant.names.resolve(d.name) == Some("x")
-        && d.parent == Some(local_decl.id)
-    })
-    .expect("local x binding");
-  assert_eq!(local_x.parent, Some(local_decl.id));
+    .filter(|d| d.path.kind == DefKind::Var && variant.names.resolve(d.name) == Some("x"))
+    .collect();
+  assert_eq!(x_vars.len(), 1);
+  assert_eq!(x_vars[0].parent, Some(variant_decl.id));
 }
 
 #[test]
@@ -1686,8 +1921,7 @@ fn saturates_overflowing_spans() {
 
 #[test]
 fn lowers_string_literal_utf16_code_units_unpaired_surrogate() {
-  let result =
-    lower_from_source_with_kind(FileKind::Ts, r#"const s = "\uD800";"#).expect("lower");
+  let result = lower_from_source_with_kind(FileKind::Ts, r#"const s = "\uD800";"#).expect("lower");
   let literal = first_string_literal(&result);
   assert_eq!(literal.lossy, "\u{FFFD}");
   assert_eq!(literal.code_units.as_deref(), Some(&[0xD800][..]));
@@ -2239,7 +2473,6 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
   let ns = find_def(DefKind::Namespace, "NS");
   let f = find_def(DefKind::Function, "f");
   let y = find_def(DefKind::Var, "y");
-  let x = find_def(DefKind::Var, "x");
   let g = find_def(DefKind::Function, "g");
 
   let members = match ns.type_info.as_ref() {
@@ -2254,10 +2487,6 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
   assert!(
     members.contains(&y.id),
     "NS members should include exported const y"
-  );
-  assert!(
-    !members.contains(&x.id),
-    "NS members should not include nested function local x"
   );
   assert!(
     !members.contains(&g.id),
@@ -2279,15 +2508,20 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
     "y should be a direct namespace member"
   );
 
-  let x_decl = result
-    .def(x.parent.expect("x should have declarator parent"))
-    .expect("x declarator def");
-  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(
-    x_decl.parent,
-    Some(f.id),
-    "x should be scoped to function f"
+  // Body-local `x` is LocalId-only (no DefKind::Var).
+  assert!(
+    !result
+      .defs
+      .iter()
+      .any(|d| d.path.kind == DefKind::Var && result.names.resolve(d.name) == Some("x")),
+    "nested function local x must not allocate a DefId"
   );
+  let f_body = result.body(f.body.expect("f body")).expect("f body");
+  let x_locals: Vec<_> = f_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| result.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(x_locals, vec!["x"]);
   assert_eq!(g.parent, Some(f.id), "g should be scoped to function f");
 }
 
@@ -2306,7 +2540,6 @@ fn module_type_info_members_exclude_nested_function_locals() {
 
   let module = find_def(DefKind::Module, "\"m\"");
   let f = find_def(DefKind::Function, "f");
-  let x = find_def(DefKind::Var, "x");
 
   let members = match module.type_info.as_ref() {
     Some(DefTypeInfo::Namespace { members }) => members,
@@ -2318,8 +2551,11 @@ fn module_type_info_members_exclude_nested_function_locals() {
     "module \"m\" members should include exported function f"
   );
   assert!(
-    !members.contains(&x.id),
-    "module \"m\" members should not include nested function local x"
+    !result
+      .defs
+      .iter()
+      .any(|d| d.path.kind == DefKind::Var && result.names.resolve(d.name) == Some("x")),
+    "nested function local x must not allocate a DefId"
   );
 
   assert_eq!(
@@ -2327,15 +2563,12 @@ fn module_type_info_members_exclude_nested_function_locals() {
     Some(module.id),
     "f should be a direct module member"
   );
-  let x_decl = result
-    .def(x.parent.expect("x should have declarator parent"))
-    .expect("x declarator def");
-  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(
-    x_decl.parent,
-    Some(f.id),
-    "x should be scoped to function f"
-  );
+  let f_body = result.body(f.body.expect("f body")).expect("f body");
+  let x_locals: Vec<_> = f_body
+    .locals_with_kind(LocalKind::Var)
+    .map(|(_, local)| result.names.resolve(local.name).unwrap().to_string())
+    .collect();
+  assert_eq!(x_locals, vec!["x"]);
 }
 
 #[test]
@@ -2680,6 +2913,71 @@ fn lowers_type_assertion_type_annotation() {
 }
 
 #[test]
+fn lowers_expr_parenthesized_flag_on_boolean_literal() {
+  let result =
+    lower_from_source_with_kind(FileKind::Ts, "const a = true; const b = (true);").expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+  let mut flags: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::Literal(Literal::Boolean(true)) => Some(expr.parenthesized),
+      _ => None,
+    })
+    .collect();
+  flags.sort();
+  assert_eq!(
+    flags,
+    vec![false, true],
+    "bare true vs (true) parenthesized markers: {flags:?}"
+  );
+}
+
+#[test]
+fn lowers_nonnull_operand_parenthesized_flag() {
+  let result =
+    lower_from_source_with_kind(FileKind::Ts, "function f(x: number) { x!; (x)!; (x!); }")
+      .expect("lower");
+  let body = result
+    .bodies
+    .iter()
+    .find(|b| matches!(b.kind, BodyKind::Function))
+    .expect("function body");
+  let mut flags: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::NonNull {
+        operand_parenthesized,
+        ..
+      } => Some(*operand_parenthesized),
+      _ => None,
+    })
+    .collect();
+  // Source order: `x!`, `(x)!`, `(x!)` — only the middle operand is parenthesized.
+  assert_eq!(
+    flags.len(),
+    3,
+    "expected three NonNull exprs, got {flags:?}"
+  );
+  // Span order for stability (nested `(x!)` may allocate outer NonNull last).
+  let mut with_spans: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::NonNull {
+        operand_parenthesized,
+        ..
+      } => Some((expr.span.start, expr.span.end, *operand_parenthesized)),
+      _ => None,
+    })
+    .collect();
+  with_spans.sort_by_key(|(start, end, _)| (*start, *end));
+  flags = with_spans.into_iter().map(|(_, _, f)| f).collect();
+  assert_eq!(flags, vec![false, true, false]);
+}
+
+#[test]
 fn lowers_satisfies_type_annotation() {
   let result =
     lower_from_source_with_kind(FileKind::Ts, "const x = ({a:1} satisfies Foo);").expect("lower");
@@ -2709,6 +3007,56 @@ fn lowers_satisfies_type_annotation() {
     },
     other => panic!("expected type ref, got {other:?}"),
   }
+}
+
+#[test]
+fn lowers_instantiation_type_args() {
+  let result = lower_from_source_with_kind(
+    FileKind::Ts,
+    "function f<T, U>(x: T, y: U) { return x; }\nconst g = f<string, number>;\nf<boolean>(true, 1);\n",
+  )
+  .expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+
+  let mut instantiations: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::Instantiation { type_args, .. } => Some((expr.span.start, type_args.clone())),
+      _ => None,
+    })
+    .collect();
+  // Sort by Instantiation span so order is stable (standalone `f<…>` vs call).
+  instantiations.sort_by_key(|(start, _)| *start);
+  assert_eq!(
+    instantiations.len(),
+    2,
+    "expected standalone + call Instantiation nodes, got {instantiations:?}"
+  );
+
+  let arenas = result
+    .type_arenas(body.owner)
+    .expect("type arenas present for root body");
+
+  let (_, standalone_args) = &instantiations[0];
+  assert_eq!(standalone_args.len(), 2);
+  for (arg, expected) in standalone_args.iter().zip(["string", "number"]) {
+    let ty = &arenas.type_exprs[arg.0 as usize];
+    match &ty.kind {
+      TypeExprKind::String if expected == "string" => {}
+      TypeExprKind::Number if expected == "number" => {}
+      other => panic!("expected {expected}, got {other:?}"),
+    }
+  }
+
+  let (_, call_args) = &instantiations[1];
+  assert_eq!(call_args.len(), 1);
+  let ty = &arenas.type_exprs[call_args[0].0 as usize];
+  assert!(
+    matches!(ty.kind, TypeExprKind::Boolean),
+    "expected boolean type arg on call Instantiation, got {:?}",
+    ty.kind
+  );
 }
 
 #[test]
@@ -2900,6 +3248,52 @@ fn lowers_function_signature_types_and_param_flags() {
     arenas.type_exprs[ret.0 as usize].kind,
     TypeExprKind::Void
   ));
+  assert!(func.has_body, "implementation body should set has_body");
+}
+
+#[test]
+fn lowers_function_overload_has_body_flags() {
+  // Overload signatures / `declare function` must allocate FunctionData with
+  // `has_body: false` so checkers can merge overloads without re-walking AST.
+  let source = r#"
+    function f(x: string): void;
+    function f(x: number): void;
+    function f(x: string | number) {}
+    declare function g(x: boolean): void;
+  "#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let func_named = |name: &str| -> Vec<_> {
+    result
+      .defs
+      .iter()
+      .filter(|def| {
+        def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some(name)
+      })
+      .map(|def| {
+        let body = result
+          .body(def.body.expect("function body id"))
+          .expect("function body");
+        body.function.as_ref().expect("FunctionData").has_body
+      })
+      .collect()
+  };
+
+  let f_flags = func_named("f");
+  assert_eq!(f_flags.len(), 3, "expected three f overloads/impl");
+  assert_eq!(
+    f_flags.iter().filter(|&&b| !b).count(),
+    2,
+    "two overload signatures should have has_body=false: {f_flags:?}"
+  );
+  assert_eq!(
+    f_flags.iter().filter(|&&b| b).count(),
+    1,
+    "one implementation should have has_body=true: {f_flags:?}"
+  );
+
+  let g_flags = func_named("g");
+  assert_eq!(g_flags, vec![false], "declare function has no body");
 }
 
 #[test]

@@ -129,10 +129,8 @@ pub fn normalize_promise_then_handlers(
   on_fulfilled: Value,
   on_rejected: Value,
 ) -> Result<(PromiseReactionRecord, PromiseReactionRecord), VmError> {
-  let on_fulfilled = is_callable(heap, on_fulfilled)?
-    .map(|cb| host.host_make_job_callback(cb));
-  let on_rejected = is_callable(heap, on_rejected)?
-    .map(|cb| host.host_make_job_callback(cb));
+  let on_fulfilled = is_callable(heap, on_fulfilled)?.map(|cb| host.host_make_job_callback(cb));
+  let on_rejected = is_callable(heap, on_rejected)?.map(|cb| host.host_make_job_callback(cb));
 
   Ok((
     PromiseReactionRecord {
@@ -230,7 +228,12 @@ impl Promise {
   /// If this promise has no rejection handlers, this will call
   /// [`VmHostHooks::host_promise_rejection_tracker`] with
   /// [`PromiseRejectionOperation::Reject`].
-  pub fn reject(&self, host: &mut dyn VmHostHooks, heap: &mut Heap, reason: Value) -> Result<(), VmError> {
+  pub fn reject(
+    &self,
+    host: &mut dyn VmHostHooks,
+    heap: &mut Heap,
+    reason: Value,
+  ) -> Result<(), VmError> {
     let (handle, should_track_reject, reactions) = {
       let mut inner = self.inner.borrow_mut();
       match inner.state {

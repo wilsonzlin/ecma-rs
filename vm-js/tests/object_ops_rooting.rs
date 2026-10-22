@@ -4,7 +4,8 @@ use vm_js::{
 };
 
 #[test]
-fn ordinary_define_own_property_rejects_new_property_under_gc_without_panic() -> Result<(), VmError> {
+fn ordinary_define_own_property_rejects_new_property_under_gc_without_panic() -> Result<(), VmError>
+{
   // Stress rooting: force a GC before each allocation.
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
   let mut scope = heap.scope();
@@ -41,7 +42,13 @@ fn ordinary_set_roots_value_under_gc_without_panic() -> Result<(), VmError> {
   let value_s = scope.alloc_string("value")?;
   scope.heap_mut().remove_root(obj_root);
 
-  let ok = scope.ordinary_set(&mut vm, obj, key, Value::String(value_s), Value::Object(obj))?;
+  let ok = scope.ordinary_set(
+    &mut vm,
+    obj,
+    key,
+    Value::String(value_s),
+    Value::Object(obj),
+  )?;
   assert!(ok);
 
   let desc = scope
@@ -75,7 +82,8 @@ fn ordinary_delete_missing_property_under_gc_without_panic() -> Result<(), VmErr
 }
 
 #[test]
-fn array_define_own_property_roots_descriptor_value_under_gc_without_panic() -> Result<(), VmError> {
+fn array_define_own_property_roots_descriptor_value_under_gc_without_panic() -> Result<(), VmError>
+{
   // Stress rooting: force a GC before each allocation.
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
   let mut scope = heap.scope();

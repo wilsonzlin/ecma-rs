@@ -81,7 +81,10 @@ fn thrown_type_error_is_catchable_from_script() {
   let mut scope = rt.heap_mut().scope();
   scope.push_root(caught).unwrap();
 
-  assert_eq!(scope.heap().object_prototype(obj).unwrap(), Some(type_error_prototype));
+  assert_eq!(
+    scope.heap().object_prototype(obj).unwrap(),
+    Some(type_error_prototype)
+  );
 
   let name_key = PropertyKey::from_string(scope.alloc_string("name").unwrap());
   let message_key = PropertyKey::from_string(scope.alloc_string("message").unwrap());

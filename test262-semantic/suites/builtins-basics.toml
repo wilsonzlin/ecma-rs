@@ -1,0 +1,16 @@
+# Basic wrapper/primitive built-ins: Boolean and Number.
+#
+# Exercises constructor + prototype semantics, ToBoolean/ToNumber coercion,
+# and Number's conversion methods (ECMA-262 §20.3, §21.1). Deliberately scoped
+# to the interpreter-core-adjacent built-ins rather than exotic library surface.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "built-ins/Boolean/**/*.js",
+  "built-ins/Number/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

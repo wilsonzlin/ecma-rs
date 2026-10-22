@@ -1,3 +1,17 @@
+//! Residual AST type-expression lowerer (quarantine).
+//!
+//! Prefer [`crate::check::decls::HirDeclLowerer`] over HIR `TypeExprId` arenas
+//! for body/decl annotations. This module remains for:
+//! - `typeof import(...)` / missing type arenas
+//! - JSDoc `@type` / `@param` / `@returns` / `@template` (no HIR type nodes)
+//! - function type-parameter *registration* scopes on the body checker
+//!   (`register_type_params`) until that is moved to HIR
+//! - AstIndex class-field / SPI / subsequent-property AST annotations
+//! - nested function-expression signature synthesis when the enclosing body
+//!   is not the function being typed
+//!
+//! Do not add new call sites; extend HIR lowering instead.
+
 use crate::codes;
 use ahash::AHashMap;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
@@ -41,6 +55,11 @@ pub trait TypeResolver: Send + Sync {
   /// Resolve a `typeof import("...")` query in the value namespace, optionally
   /// looking up a value export within the imported module.
   fn resolve_import_typeof(&self, _module: &str, _qualifier: Option<&[String]>) -> Option<DefId> {
+    None
+  }
+
+  /// File that owns `def`, when known (for cross-file private-brand checks).
+  fn def_file(&self, _def: DefId) -> Option<FileId> {
     None
   }
 }
@@ -134,6 +153,38 @@ impl TypeLowerer {
     self.lookup_type_param(name)
   }
 
+  /// Next free type-parameter id (for seeding HIR lowerers without collisions).
+  pub fn next_type_param_alloc(&self) -> u32 {
+    self.next_type_param
+  }
+
+  /// Flattened map of in-scope type parameter names (inner scopes win).
+  pub fn type_param_map(&self) -> std::collections::HashMap<String, TypeParamId> {
+    let mut map = std::collections::HashMap::new();
+    for scope in self.type_param_scopes.iter() {
+      for (name, id) in scope.iter() {
+        map.insert(name.clone(), *id);
+      }
+    }
+    map
+  }
+
+  /// Register a JSDoc `@template` type parameter in the current scope.
+  pub fn register_jsdoc_type_param(
+    &mut self,
+    name: String,
+    constraint: Option<TypeId>,
+  ) -> TypeParamDecl {
+    let id = self.alloc_type_param(name);
+    TypeParamDecl {
+      id,
+      constraint,
+      default: None,
+      variance: None,
+      const_: false,
+    }
+  }
+
   pub fn register_type_params(&mut self, params: &[Node<TypeParameter>]) -> Vec<TypeParamDecl> {
     let mut ids = Vec::new();
     for param in params.iter() {
@@ -157,6 +208,15 @@ impl TypeLowerer {
         }),
         const_: param.stx.const_,
       })
+      .collect()
+  }
+
+  /// Register bare type-parameter names (no constraints) in the current scope.
+  /// Used for class-body heritage Instantiation (`extends Parent<T>`).
+  pub fn register_named_type_params(&mut self, names: &[String]) -> Vec<TypeParamDecl> {
+    names
+      .iter()
+      .map(|name| TypeParamDecl::new(self.alloc_type_param(name.clone())))
       .collect()
   }
 
@@ -317,14 +377,18 @@ impl TypeLowerer {
   }
 
   fn lower_constructor_type(&mut self, cons: &Node<TypeConstructor>) -> TypeId {
+    // `new (x: T) => R` must be an object with a construct signature — not a
+    // call-signature `Callable` (`assignmentCompatWithConstructSignatures*.ts`).
     let sig = self.lower_member_signature(
       &cons.stx.type_parameters,
       &cons.stx.parameters,
       Some(cons.stx.return_type.as_ref()),
     );
-    self.store.intern_type(TypeKind::Callable {
-      overloads: vec![sig],
-    })
+    let mut shape = Shape::new();
+    shape.construct_signatures.push(sig);
+    let shape_id = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape: shape_id });
+    self.store.intern_type(TypeKind::Object(obj))
   }
 
   fn lower_params(
@@ -404,17 +468,57 @@ impl TypeLowerer {
     self.lower_type_predicate_with_param(pred, parameter)
   }
 
+  fn private_type_key_name(key: &TypePropertyKey) -> Option<&str> {
+    match key {
+      TypePropertyKey::Identifier(name) | TypePropertyKey::String(name)
+        if name.starts_with('#') =>
+      {
+        Some(name.as_str())
+      }
+      _ => None,
+    }
+  }
+
+  /// TS18016 for private names in residual AST type-member lowering.
+  fn check_private_name_type_member_ast(
+    &mut self,
+    member_loc: Loc,
+    key: &TypePropertyKey,
+    full_member_span: bool,
+  ) {
+    let Some(name) = Self::private_type_key_name(key) else {
+      return;
+    };
+    let mut span = self.span_for(member_loc);
+    if !full_member_span {
+      let name_len = name.len() as u32;
+      span.range.end = span
+        .range
+        .start
+        .saturating_add(name_len)
+        .min(span.range.end);
+    }
+    self
+      .diagnostics
+      .push(codes::PRIVATE_IDENTIFIERS_OUTSIDE_CLASS.error(
+        "Private identifiers are not allowed outside class bodies.",
+        span,
+      ));
+  }
+
   pub(crate) fn lower_type_members(&mut self, members: &[Node<TypeMember>]) -> Shape {
     let mut shape = Shape::new();
 
     for member in members.iter() {
       match member.stx.as_ref() {
         TypeMember::Property(prop) => {
+          self.check_private_name_type_member_ast(member.loc, &prop.stx.key, false);
           if let Some((key, data)) = self.lower_property(prop) {
             shape.properties.push(Property { key, data });
           }
         }
         TypeMember::Method(method) => {
+          self.check_private_name_type_member_ast(member.loc, &method.stx.key, true);
           if let Some((key, sig)) = self.lower_method(method) {
             shape.properties.push(Property {
               key,
@@ -454,6 +558,7 @@ impl TypeLowerer {
           });
         }
         TypeMember::GetAccessor(get) => {
+          self.check_private_name_type_member_ast(member.loc, &get.stx.key, false);
           if let Some(key) = self.lower_type_member_key(&get.stx.key) {
             let ty = get
               .stx
@@ -476,6 +581,7 @@ impl TypeLowerer {
           }
         }
         TypeMember::SetAccessor(set) => {
+          self.check_private_name_type_member_ast(member.loc, &set.stx.key, false);
           if let Some(key) = self.lower_type_member_key(&set.stx.key) {
             shape.properties.push(Property {
               key,
@@ -514,8 +620,14 @@ impl TypeLowerer {
         Some(PropKey::String(self.store.intern_name(id.clone())))
       }
       TypePropertyKey::Number(num) => {
-        let parsed = num.parse::<i64>().ok()?;
-        Some(PropKey::Number(parsed))
+        match num.parse::<i64>() {
+          Ok(parsed) => Some(PropKey::Number(parsed)),
+          // Fractional (or overflowing) numeric keys are string keys: JS
+          // property names are strings, so `{ 1.1: string }` must keep its
+          // `1.1` member instead of dropping it
+          // (`objectTypeWithNumericProperty.ts`).
+          Err(_) => Some(PropKey::String(self.store.intern_name(num.clone()))),
+        }
       }
       TypePropertyKey::Computed(_) => None,
     }
@@ -624,6 +736,7 @@ impl TypeLowerer {
       optional: map_mapped_modifier(optional_modifier),
       name_type: remap,
       as_type: remap,
+      homomorphic_var: MappedType::homomorphic_var_of(&self.store, source),
     }));
 
     self.pop_type_param_scope();
@@ -849,6 +962,32 @@ impl TypeLowerer {
     args: Vec<TypeId>,
     for_typeof: bool,
   ) -> Option<TypeId> {
+    // Global `Object` accepts every non-nullish value (same assignability as `{}`).
+    // Keep this before resolver lookup so overload params like `(x: Object)` match
+    // enum/primitive arguments the way tsc does.
+    if !for_typeof && args.is_empty() && path == ["Object"] {
+      return Some(self.store.intern_type(TypeKind::EmptyObject));
+    }
+    // Global boxed primitives (`Number`/`String`/…) accept their primitive
+    // counterparts (`enumAssignability.ts`: `var p: Number = e`).
+    if !for_typeof && args.is_empty() {
+      let prim = self.store.primitive_ids();
+      if path == ["Number"] {
+        return Some(prim.number);
+      }
+      if path == ["String"] {
+        return Some(prim.string);
+      }
+      if path == ["Boolean"] {
+        return Some(prim.boolean);
+      }
+      if path == ["BigInt"] {
+        return Some(prim.bigint);
+      }
+      if path == ["Symbol"] {
+        return Some(prim.symbol);
+      }
+    }
     let Some(resolver) = &self.resolver else {
       return None;
     };

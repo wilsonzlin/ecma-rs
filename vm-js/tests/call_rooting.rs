@@ -1,4 +1,6 @@
-use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+};
 
 fn alloc_and_return_object(
   _vm: &mut Vm,
@@ -105,8 +107,12 @@ fn construct_return_value_is_not_rooted_by_default() -> Result<(), VmError> {
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 
-    let result =
-      vm.construct_without_host(&mut scope, Value::Object(callee), &[], Value::Object(callee))?;
+    let result = vm.construct_without_host(
+      &mut scope,
+      Value::Object(callee),
+      &[],
+      Value::Object(callee),
+    )?;
     let Value::Object(obj) = result else {
       panic!("native constructor should return an object");
     };
@@ -133,8 +139,12 @@ fn construct_return_value_survives_when_rooted_by_caller() -> Result<(), VmError
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 
-    let result =
-      vm.construct_without_host(&mut scope, Value::Object(callee), &[], Value::Object(callee))?;
+    let result = vm.construct_without_host(
+      &mut scope,
+      Value::Object(callee),
+      &[],
+      Value::Object(callee),
+    )?;
     let Value::Object(obj) = result else {
       panic!("native constructor should return an object");
     };

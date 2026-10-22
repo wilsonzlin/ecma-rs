@@ -18,7 +18,9 @@ fn ordinary_instanceof_true_for_constructed_object() {
 #[test]
 fn ordinary_instanceof_false_for_other_object() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"function C(){}; ({} instanceof C) === false"#).unwrap();
+  let value = rt
+    .exec_script(r#"function C(){}; ({} instanceof C) === false"#)
+    .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
 
@@ -62,6 +64,39 @@ fn has_instance_override_is_called() {
   let value = rt
     .exec_script(
       r#"function C(){}; C[Symbol.hasInstance] = function(){ return true; }; ({} instanceof C) === true"#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn has_instance_on_non_callable_object_is_invoked() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+      var F = {};
+      var calls = 0;
+      F[Symbol.hasInstance] = function(v) { calls++; return v === 0; };
+      (0 instanceof F) === true && (1 instanceof F) === false && calls === 2
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn constructed_instance_is_prototype_of_object_prototype() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+      function Foo(){}
+      var o = new Foo;
+      Object.prototype.isPrototypeOf(o) === true &&
+        Foo.prototype.isPrototypeOf(o) === true &&
+        Object.getPrototypeOf(Foo.prototype) === Object.prototype
+      "#,
     )
     .unwrap();
   assert_eq!(value, Value::Bool(true));

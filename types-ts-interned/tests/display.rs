@@ -147,9 +147,11 @@ fn formats_nested_combinations() {
   let union = store.union(vec![intersection, indexed, true_lit]);
 
   let formatted = format!("{}", store.display(union));
+  // Union/intersection members are ordered by content-addressed TypeId (not
+  // structural type_cmp) for canonicalization performance.
   assert_eq!(
     formatted,
-    "true | `foo${string}bar` & keyof { public readonly a: string; b?: number; [string]: number } | { public readonly a: string; b?: number; [string]: number }[keyof { public readonly a: string; b?: number; [string]: number }]",
+    "true | keyof { public readonly a: string; b?: number; [string]: number } & `foo${string}bar` | { public readonly a: string; b?: number; [string]: number }[keyof { public readonly a: string; b?: number; [string]: number }]",
   );
 }
 
@@ -317,6 +319,7 @@ fn formats_mapped_type_modifiers() {
 
   let make_mapped = |readonly, optional| {
     store.intern_type(TypeKind::Mapped(MappedType {
+      homomorphic_var: None,
       param: TypeParamId(0),
       source: primitives.string,
       value: primitives.number,
@@ -377,6 +380,7 @@ fn formats_mapped_type_as_clause() {
   let primitives = store.primitive_ids();
 
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: TypeParamId(0),
     source: primitives.string,
     value: primitives.number,

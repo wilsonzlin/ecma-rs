@@ -40,48 +40,165 @@ pub(super) fn collect_jsx_root_names(
   // they will be visited by the outer `body.exprs` scan that calls this helper.
 }
 
-pub(super) fn record_param_pats(
+/// Seed the flow initial env from [`hir_js::Body::locals`] param entries.
+pub(super) fn record_param_locals(
   body: &hir_js::Body,
-  pat_id: HirPatId,
   pat_types: &[TypeId],
   unknown: TypeId,
   initial_env: &mut HashMap<NameId, TypeId>,
 ) {
-  let Some(pat) = body.pats.get(pat_id.0 as usize) else {
-    return;
-  };
-  match &pat.kind {
-    HirPatKind::Ident(name_id) => {
-      if let Some(ty) = pat_types.get(pat_id.0 as usize).copied() {
-        if ty != unknown {
-          initial_env.insert(*name_id, ty);
-        }
+  for (_local_id, local) in body.locals_with_kind(hir_js::LocalKind::Param) {
+    let Some(pat_id) = local.pat else {
+      continue;
+    };
+    if let Some(ty) = pat_types.get(pat_id.0 as usize).copied() {
+      if ty != unknown {
+        initial_env.insert(local.name, ty);
       }
     }
-    HirPatKind::Array(arr) => {
-      for elem in arr.elements.iter().flatten() {
-        record_param_pats(body, elem.pat, pat_types, unknown, initial_env);
-      }
-      if let Some(rest) = arr.rest {
-        record_param_pats(body, rest, pat_types, unknown, initial_env);
-      }
-    }
-    HirPatKind::Object(obj) => {
-      for prop in obj.props.iter() {
-        record_param_pats(body, prop.value, pat_types, unknown, initial_env);
-      }
-      if let Some(rest) = obj.rest {
-        record_param_pats(body, rest, pat_types, unknown, initial_env);
-      }
-    }
-    HirPatKind::Rest(inner) => {
-      record_param_pats(body, **inner, pat_types, unknown, initial_env);
-    }
-    HirPatKind::Assign { target, .. } => {
-      record_param_pats(body, *target, pat_types, unknown, initial_env);
-    }
-    HirPatKind::AssignTarget(_) => {}
   }
+}
+
+/// DA alias map for a file, including imported type aliases (re-export aware).
+pub(super) fn da_type_alias_map_with_imports<'a>(
+  state: &ProgramState,
+  file: FileId,
+  lowered: &'a hir_js::LowerResult,
+  pinned: &'a mut Vec<std::sync::Arc<hir_js::LowerResult>>,
+) -> check::hir_body::DaTypeAliasMap<'a> {
+  enum ImportDaLink {
+    Body {
+      local: hir_js::NameId,
+      alias_file: FileId,
+      alias_span: TextRange,
+    },
+    Nullary {
+      local: hir_js::NameId,
+      ty: TypeId,
+    },
+  }
+  let mut import_links: Vec<ImportDaLink> = Vec::new();
+  for import in lowered.hir.imports.iter() {
+    let hir_js::ImportKind::Es(es) = &import.kind else {
+      continue;
+    };
+    for named in es.named.iter() {
+      let Some(local_str) = lowered.names.resolve(named.local) else {
+        continue;
+      };
+      let Some(import_def) = state.def_data.iter().find_map(|(def, data)| {
+        (data.file == file && data.name == local_str && matches!(data.kind, DefKind::Import(_)))
+          .then_some(*def)
+      }) else {
+        continue;
+      };
+      match resolve_imported_type_alias_link(state, import_def) {
+        Some(ImportedAliasLink::Def(alias_def)) => {
+          let Some(alias_data) = state.def_data.get(&alias_def) else {
+            continue;
+          };
+          if !matches!(alias_data.kind, DefKind::TypeAlias(_)) {
+            continue;
+          }
+          let alias_file = alias_data.file;
+          let alias_span = alias_data.span;
+          if pinned.iter().all(|l| l.hir.file != alias_file) {
+            if let Some(foreign) = state.hir_lowered.get(&alias_file).cloned() {
+              pinned.push(foreign);
+            }
+          }
+          import_links.push(ImportDaLink::Body {
+            local: named.local,
+            alias_file,
+            alias_span,
+          });
+        }
+        Some(ImportedAliasLink::TypeId(ty)) => {
+          import_links.push(ImportDaLink::Nullary {
+            local: named.local,
+            ty,
+          });
+        }
+        None => {}
+      }
+    }
+  }
+
+  let mut map = check::hir_body::DaTypeAliasMap::from_lowered(lowered);
+  for link in import_links {
+    match link {
+      ImportDaLink::Body {
+        local,
+        alias_file,
+        alias_span,
+      } => {
+        let Some(foreign) = pinned.iter().find(|l| l.hir.file == alias_file) else {
+          continue;
+        };
+        map.register_file_aliases(foreign);
+        let Some(hir_def) = foreign
+          .defs
+          .iter()
+          .find(|d| d.path.kind == hir_js::DefKind::TypeAlias && d.span == alias_span)
+        else {
+          continue;
+        };
+        let Some(export_name) = foreign.names.resolve(hir_def.name) else {
+          continue;
+        };
+        let Some(body) = map
+          .by_qualified
+          .get(&(alias_file.0, export_name.to_string()))
+          .copied()
+        else {
+          continue;
+        };
+        map.link_alias_body(local, body);
+      }
+      ImportDaLink::Nullary { local, ty } => {
+        map.link_nullary_exempt(
+          local,
+          check::hir_body::type_id_is_da_exempt(&state.store, ty),
+        );
+      }
+    }
+  }
+  map
+}
+
+enum ImportedAliasLink {
+  Def(DefId),
+  TypeId(TypeId),
+}
+
+fn resolve_imported_type_alias_link(
+  state: &ProgramState,
+  start: DefId,
+) -> Option<ImportedAliasLink> {
+  let mut current = start;
+  for _ in 0..8 {
+    let data = state.def_data.get(&current)?;
+    match &data.kind {
+      DefKind::TypeAlias(_) => return Some(ImportedAliasLink::Def(current)),
+      DefKind::Import(imp) => {
+        let ImportTarget::File(target_file) = &imp.target else {
+          return None;
+        };
+        let exports = state.files.get(target_file).map(|f| &f.exports)?;
+        let entry = exports.get(&imp.original)?;
+        if let Some(def) = entry.def {
+          current = def;
+          continue;
+        }
+        if let Some(ty) = entry.type_id {
+          return Some(ImportedAliasLink::TypeId(ty));
+        }
+        return None;
+      }
+      _ => return None,
+    }
+  }
+  None
 }
 
 pub(super) fn prop_type(store: &tti::TypeStore, ty: TypeId, name: &str) -> Option<TypeId> {

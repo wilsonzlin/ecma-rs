@@ -9,9 +9,9 @@ use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 #[cfg(feature = "bundled-libs")]
 use typecheck_ts::lib_support::{LibManager, LibName, ScriptTarget};
-use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange};
 #[cfg(feature = "bundled-libs")]
 use typecheck_ts::TypeKindSummary;
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange};
 
 #[cfg(feature = "bundled-libs")]
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
@@ -160,7 +160,7 @@ fn missing_libs_emit_unknown_global_diagnostics() {
   let diagnostics = program.check();
   let unknowns = diagnostics
     .iter()
-    .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+    .filter(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str())
     .count();
   assert!(
     unknowns >= 2,
@@ -181,6 +181,7 @@ fn missing_libs_emit_unknown_global_diagnostics() {
 fn non_dts_libs_warn_and_leave_globals_missing() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
+  options.check_js = Some(true);
   let lib = LibFile {
     key: FileKey::new("custom.js"),
     name: Arc::from("custom.js"),
@@ -207,11 +208,11 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   );
   let unknown_identifiers: Vec<_> = diagnostics
     .iter()
-    .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+    .filter(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str())
     .collect();
   assert!(
     unknown_identifiers.len() >= 3,
-    "expected unknown identifier diagnostics for Promise, Array, and Provided: {diagnostics:?}"
+    "expected Cannot find name diagnostics for Promise, Array, and Provided: {diagnostics:?}"
   );
   let provided_start = source
     .find("Provided")

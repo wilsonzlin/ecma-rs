@@ -30,7 +30,13 @@ fn native_function_can_be_allocated_and_called() -> Result<(), VmError> {
   assert!(heap.is_callable(Value::Object(func))?);
 
   let mut host = ();
-  let result = heap.call(&mut vm, &mut host, Value::Object(func), Value::Undefined, &[])?;
+  let result = heap.call(
+    &mut vm,
+    &mut host,
+    Value::Object(func),
+    Value::Undefined,
+    &[],
+  )?;
   assert_eq!(result, Value::Number(42.0));
   Ok(())
 }
@@ -52,7 +58,13 @@ fn calling_collected_native_function_returns_invalid_handle() -> Result<(), VmEr
 
   let mut host = ();
   let err = heap
-    .call(&mut vm, &mut host, Value::Object(func), Value::Undefined, &[])
+    .call(
+      &mut vm,
+      &mut host,
+      Value::Object(func),
+      Value::Undefined,
+      &[],
+    )
     .unwrap_err();
   assert!(matches!(err, VmError::InvalidHandle));
   Ok(())
@@ -103,11 +115,23 @@ fn property_descriptor_tracing_keeps_native_functions_alive() -> Result<(), VmEr
   assert!(heap.is_callable(Value::Object(func_alive))?);
 
   let mut host = ();
-  let result = heap.call(&mut vm, &mut host, Value::Object(func_alive), Value::Undefined, &[])?;
+  let result = heap.call(
+    &mut vm,
+    &mut host,
+    Value::Object(func_alive),
+    Value::Undefined,
+    &[],
+  )?;
   assert_eq!(result, Value::Number(42.0));
 
   let err = heap
-    .call(&mut vm, &mut host, Value::Object(func_dead), Value::Undefined, &[])
+    .call(
+      &mut vm,
+      &mut host,
+      Value::Object(func_dead),
+      Value::Undefined,
+      &[],
+    )
     .unwrap_err();
   assert!(matches!(err, VmError::InvalidHandle));
 

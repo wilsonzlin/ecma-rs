@@ -1,21 +1,133 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::{codes, FileKey, Host};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  DefId as HirDefId, DefTypeInfo, TypeArenas, TypeArenasByDef, TypeExprId, TypeExprKind,
-  TypeFnParam, TypeMemberId, TypeMemberKind, TypeName, TypeParamId as HirTypeParamId,
-  TypeSignature,
+  DefId as HirDefId, DefKind as HirDefKind, DefTypeInfo, FunctionData, LowerResult, TypeArenas,
+  TypeArenasByDef, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId, TypeMemberKind, TypeName,
+  TypeParamId as HirTypeParamId, TypeSignature,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use semantic_js::ts::{ModuleRef, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PredicateParam, PropData, PropKey,
-  Property, Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId,
+  Property, Shape, Signature, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamDecl, TypeParamId,
   TypeParamVariance, TypeStore,
 };
+
+use super::type_expr::TypeResolver;
+
+/// Result of lowering a value-side [`FunctionData`] signature from HIR.
+#[derive(Debug, Clone, Default)]
+pub struct ValueFunctionSignature {
+  pub params: Vec<Param>,
+  pub return_ann: Option<TypeId>,
+  pub type_params: Vec<TypeParamDecl>,
+  pub this_param: Option<TypeId>,
+  /// Per value-parameter annotation (`None` when HIR had no annotation). Excludes
+  /// a leading `this` parameter.
+  pub param_types_for_binder: Vec<Option<TypeId>>,
+}
+
+/// Narrow, object-safe view of [`Host`] used during declaration lowering.
+///
+/// Unlike `Host` this trait carries no `Send + Sync + 'static` bounds, so
+/// short-lived, thread-local implementations (e.g. a borrowed wrapper over the
+/// salsa database inside a tracked query) can implement it safely — no raw
+/// pointers or manual `Send`/`Sync` claims required.
+pub trait DeclHost {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, crate::HostError>;
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey>;
+}
+
+impl<H: Host + ?Sized> DeclHost for H {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, crate::HostError> {
+    Host::file_text(self, file)
+  }
+
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    Host::resolve(self, from, specifier)
+  }
+}
+
+/// Per-file index of HIR defs by name, with one slot per namespace.
+///
+/// TypeScript declaration merging lets the same name live in different
+/// namespaces (`interface NumberFormat` in TYPE, `var NumberFormat` in VALUE).
+/// A flat name → def map collides: whichever def is indexed last shadows the
+/// other, so a TYPE-position reference (e.g. `prototype: NumberFormat`) can
+/// bind to the VALUE-side var and pull the var's unrelated annotation type
+/// into the interface's expansion. Keeping one slot per namespace lets each
+/// reference bind to a def that actually has presence in the requested
+/// namespace, falling back to the other namespaces only when the name has no
+/// def there (preserving the previous lenient behavior).
+#[derive(Clone, Debug, Default)]
+pub struct LocalDefIndex {
+  by_name: HashMap<String, LocalDefSlots>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LocalDefSlots {
+  type_: Option<HirDefId>,
+  value: Option<HirDefId>,
+  namespace: Option<HirDefId>,
+}
+
+impl LocalDefIndex {
+  pub fn from_lowered(lowered: &LowerResult) -> Self {
+    let mut by_name: HashMap<String, LocalDefSlots> = HashMap::new();
+    for def in lowered.defs.iter() {
+      let Some(name) = lowered.names.resolve(def.name) else {
+        continue;
+      };
+      let slots = by_name.entry(name.to_string()).or_default();
+      let namespaces = local_def_namespaces(def.path.kind);
+      if namespaces.contains(Namespace::TYPE) {
+        slots.type_ = Some(def.id);
+      }
+      if namespaces.contains(Namespace::VALUE) {
+        slots.value = Some(def.id);
+      }
+      if namespaces.contains(Namespace::NAMESPACE) {
+        slots.namespace = Some(def.id);
+      }
+    }
+    Self { by_name }
+  }
+
+  /// Resolve a name to a local def, preferring defs with presence in `ns`.
+  pub fn get(&self, name: &str, ns: Namespace) -> Option<HirDefId> {
+    let slots = self.by_name.get(name)?;
+    let ordered = if ns == Namespace::VALUE {
+      [slots.value, slots.namespace, slots.type_]
+    } else {
+      [slots.type_, slots.namespace, slots.value]
+    };
+    ordered.into_iter().flatten().next()
+  }
+
+  /// Reverse lookup: the name a local def was indexed under.
+  pub fn name_of(&self, def: HirDefId) -> Option<String> {
+    self.by_name.iter().find_map(|(name, slots)| {
+      (slots.type_ == Some(def) || slots.value == Some(def) || slots.namespace == Some(def))
+        .then(|| name.clone())
+    })
+  }
+}
+
+/// Namespace presence of a HIR def kind (mirrors `def_namespaces` /
+/// `hir_namespaces` in `program/state`).
+fn local_def_namespaces(kind: HirDefKind) -> Namespace {
+  match kind {
+    HirDefKind::Class | HirDefKind::Enum => Namespace::VALUE | Namespace::TYPE,
+    HirDefKind::Interface | HirDefKind::TypeAlias => Namespace::TYPE,
+    HirDefKind::Namespace | HirDefKind::Module => Namespace::VALUE | Namespace::NAMESPACE,
+    HirDefKind::ImportBinding => Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE,
+    _ => Namespace::VALUE,
+  }
+}
 
 /// Lower HIR type expressions and declarations into interned types.
 pub struct HirDeclLowerer<'a, 'diag> {
@@ -26,17 +138,26 @@ pub struct HirDeclLowerer<'a, 'diag> {
   defs: HashMap<(FileId, String), DefId>,
   file: FileId,
   file_key: Option<FileKey>,
-  local_defs: HashMap<String, HirDefId>,
+  local_defs: LocalDefIndex,
   diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
   next_type_param: u32,
   def_map: Option<&'a HashMap<DefId, DefId>>,
   def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
-  host: Option<&'a dyn Host>,
+  host: Option<&'a dyn DeclHost>,
   key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
   module_namespace_defs: Option<&'a HashMap<FileId, DefId>>,
   value_defs: Option<&'a HashMap<DefId, DefId>>,
+  /// Optional program-grade name resolver (e.g. [`crate::program::types::ProgramTypeResolver`])
+  /// used for qualified / import-equals paths that the local semantic walk misses.
+  type_name_resolver: Option<&'a dyn Fn(&[String]) -> Option<DefId>>,
+  /// Body-check `TypeResolver` (owned/`Arc`) so lowering does not borrow a short-lived
+  /// closure against the arenas lifetime.
+  type_resolver: Option<Arc<dyn TypeResolver>>,
+  /// Live checker bindings for `typeof x` where `x` is a body-local value (TypeId,
+  /// not a module `DefId`).
+  typeof_bindings: HashMap<String, TypeId>,
 }
 
 impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
@@ -47,11 +168,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     defs: HashMap<(FileId, String), DefId>,
     file: FileId,
     file_key: Option<FileKey>,
-    local_defs: HashMap<String, HirDefId>,
+    local_defs: LocalDefIndex,
     diagnostics: &'diag mut Vec<Diagnostic>,
     def_map: Option<&'a HashMap<DefId, DefId>>,
     def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
-    host: Option<&'a dyn Host>,
+    host: Option<&'a dyn DeclHost>,
     key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
     module_namespace_defs: Option<&'a HashMap<FileId, DefId>>,
     value_defs: Option<&'a HashMap<DefId, DefId>>,
@@ -75,13 +196,225 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       key_to_id,
       module_namespace_defs,
       value_defs,
+      type_name_resolver: None,
+      type_resolver: None,
+      typeof_bindings: HashMap::new(),
     }
+  }
+
+  /// Attach a program-grade type-name resolver for qualified references.
+  pub fn with_type_name_resolver(
+    mut self,
+    resolver: &'a dyn Fn(&[String]) -> Option<DefId>,
+  ) -> Self {
+    self.type_name_resolver = Some(resolver);
+    self
+  }
+
+  /// Attach a body/program [`TypeResolver`] (named refs + `typeof` DefIds).
+  pub fn with_type_resolver(mut self, resolver: Arc<dyn TypeResolver>) -> Self {
+    self.type_resolver = Some(resolver);
+    self
+  }
+
+  /// Seed body-local value bindings consulted by `typeof` queries.
+  pub fn with_typeof_bindings(mut self, bindings: HashMap<String, TypeId>) -> Self {
+    self.typeof_bindings = bindings;
+    self
+  }
+
+  /// Seed type-parameter name → [`TypeParamId`] bindings (e.g. from the body
+  /// checker's AST `TypeLowerer` scopes) so generic param/return annotations
+  /// resolve to the same ids as the surrounding checker.
+  pub fn with_type_param_bindings(
+    mut self,
+    bindings: HashMap<hir_js::NameId, TypeParamId>,
+    next_type_param: u32,
+  ) -> Self {
+    self.type_param_names = bindings;
+    self.next_type_param = next_type_param;
+    self
   }
 
   fn arenas(&self) -> &TypeArenas {
     self
       .current_arenas
       .expect("type arenas should be set before lowering")
+  }
+
+  /// Lower a single annotation from a definition's type arenas (body checking).
+  ///
+  /// Used when HIR `VarDeclarator.type_annotation` / function param/return
+  /// annotations are preferred over walking parse-js `TypeExpr` AST nodes.
+  /// Preserves seeded [`with_type_param_bindings`] so `T` in `f<T>(x: T)`
+  /// matches the body checker's type-parameter ids.
+  pub fn lower_body_annotation(
+    &mut self,
+    owner: HirDefId,
+    type_expr: TypeExprId,
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      return self.store.primitive_ids().unknown;
+    };
+    let ty = self.lower_type_expr(type_expr, names);
+    self.current_arenas = None;
+    ty
+  }
+
+  /// Lower a single type expression owned by `owner`'s type arenas.
+  ///
+  /// Used for value-side annotations stored on [`hir_js::DefData::declared_type`]
+  /// (notably class fields) that are not part of a [`DefTypeInfo`] shape.
+  ///
+  /// When `enclosing_class` is set, that class's type parameters are registered
+  /// first so annotations like `#foo: T` on `class C<T>` resolve (per-field
+  /// arenas do not own the class type-parameter list).
+  pub fn lower_declared_type(
+    &mut self,
+    owner: HirDefId,
+    type_expr: TypeExprId,
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
+    self.lower_declared_type_with_class_params(owner, type_expr, None, names)
+  }
+
+  pub fn lower_declared_type_with_class_params(
+    &mut self,
+    owner: HirDefId,
+    type_expr: TypeExprId,
+    enclosing_class: Option<(HirDefId, &[HirTypeParamId])>,
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.next_type_param = 0;
+    if let Some((class_owner, params)) = enclosing_class {
+      if !params.is_empty() {
+        self.current_arenas = self.arenas.get(&class_owner);
+        if self.current_arenas.is_some() {
+          let _ = self.lower_type_param_decls(params, names);
+        }
+      }
+    }
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      self.type_params.clear();
+      self.type_param_names.clear();
+      self.current_arenas = None;
+      return self.store.primitive_ids().unknown;
+    };
+    let ty = self.lower_type_expr(type_expr, names);
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = None;
+    ty
+  }
+
+  /// Lower value-side function param/return annotations from [`FunctionData`].
+  ///
+  /// Missing param annotations become `any` (TS default for value signatures);
+  /// missing return stays `None` so callers can infer from the body. Used by
+  /// binder-seeded `FuncData` paths that no longer walk parse-js AST type
+  /// expressions.
+  ///
+  /// `enclosing_class` seeds `class C<T>` type params for methods/constructors/
+  /// accessors so `#bar(): T` / `constructor(t: T)` do not emit false TC2008.
+  pub fn lower_value_function_signature(
+    &mut self,
+    owner: HirDefId,
+    func: &FunctionData,
+    body: &hir_js::Body,
+    names: &hir_js::NameInterner,
+  ) -> ValueFunctionSignature {
+    self.lower_value_function_signature_with_class_params(owner, func, body, None, names)
+  }
+
+  pub fn lower_value_function_signature_with_class_params(
+    &mut self,
+    owner: HirDefId,
+    func: &FunctionData,
+    body: &hir_js::Body,
+    enclosing_class: Option<(HirDefId, &[HirTypeParamId])>,
+    names: &hir_js::NameInterner,
+  ) -> ValueFunctionSignature {
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.next_type_param = 0;
+    if let Some((class_owner, params)) = enclosing_class {
+      if !params.is_empty() {
+        self.current_arenas = self.arenas.get(&class_owner);
+        if self.current_arenas.is_some() {
+          let _ = self.lower_type_param_decls(params, names);
+        }
+      }
+    }
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      self.type_params.clear();
+      self.type_param_names.clear();
+      self.current_arenas = None;
+      return ValueFunctionSignature::default();
+    };
+    let type_params = self.lower_type_param_decls(&func.type_params, names);
+    let prim = self.store.primitive_ids();
+    let mut params = Vec::new();
+    let mut param_types_for_binder = Vec::new();
+    let mut this_param = None;
+    for (idx, param) in func.params.iter().enumerate() {
+      let name = body
+        .pats
+        .get(param.pat.0 as usize)
+        .and_then(|pat| match &pat.kind {
+          hir_js::PatKind::Ident(name_id) => names.resolve(*name_id).map(|n| n.to_string()),
+          _ => None,
+        });
+      let annotated = param
+        .type_annotation
+        .map(|ann| self.lower_type_expr(ann, names));
+      let mut ty = annotated.unwrap_or(prim.any);
+      if param.rest {
+        ty = self.normalize_rest_param_type(ty);
+      }
+      if idx == 0 && matches!(name.as_deref(), Some("this")) {
+        this_param = Some(ty);
+        continue;
+      }
+      param_types_for_binder.push(annotated);
+      params.push(Param {
+        name: name.map(|n| self.store.intern_name(n)),
+        ty,
+        optional: param.optional,
+        rest: param.rest,
+      });
+    }
+    let return_ann = match func.return_type {
+      Some(ret_id) => {
+        let ret_kind = self
+          .arenas()
+          .type_exprs
+          .get(ret_id.0 as usize)
+          .map(|expr| expr.kind.clone());
+        Some(match ret_kind {
+          Some(TypeExprKind::TypePredicate(pred)) => {
+            self.lower_type_predicate_in_signature(&pred, &params, names)
+          }
+          _ => self.lower_type_expr(ret_id, names),
+        })
+      }
+      None => None,
+    };
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = None;
+    ValueFunctionSignature {
+      params,
+      return_ann,
+      type_params,
+      this_param,
+      param_types_for_binder,
+    }
   }
 
   pub fn lower_type_info(
@@ -113,21 +446,10 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         members,
       } => {
         let params = self.lower_type_param_decls(type_params, names);
-        let mut shape = Shape::new();
-
-        for member in members.iter() {
-          self.lower_member(&mut shape, *member, names);
-        }
-
+        let own = self.lower_interface_own_object(members, names);
         let mut types: Vec<TypeId> = Vec::new();
-        if !shape.properties.is_empty()
-          || !shape.call_signatures.is_empty()
-          || !shape.construct_signatures.is_empty()
-          || !shape.indexers.is_empty()
-        {
-          let shape_id = self.store.intern_shape(shape);
-          let obj = self.store.intern_object(ObjectType { shape: shape_id });
-          types.push(self.store.intern_type(TypeKind::Object(obj)));
+        if let Some(own) = own {
+          types.push(own);
         }
 
         for base in extends.iter() {
@@ -153,9 +475,18 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         (ty, params)
       }
       DefTypeInfo::Class { type_params, .. } => {
-        let params = self.lower_type_param_decls(type_params, names);
-        let (instance, _value) =
-          self.lower_class_instance_and_value(info, names, self.store.primitive_ids().unknown);
+        let class_name = self.local_defs.name_of(owner);
+        let (params, jsdoc_tp_map) =
+          self.class_type_param_decls(type_params, names, class_name.as_deref());
+        let (instance, _value) = self.lower_class_instance_and_value(
+          owner,
+          info,
+          names,
+          self.store.primitive_ids().unknown,
+          class_name.as_deref(),
+          &params,
+          &jsdoc_tp_map,
+        );
         self.validate_variance_annotations(type_params, instance, names);
         (instance, params)
       }
@@ -166,6 +497,27 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self.type_param_names.clear();
     self.current_arenas = None;
     result
+  }
+
+  fn lower_interface_own_object(
+    &mut self,
+    members: &[TypeMemberId],
+    names: &hir_js::NameInterner,
+  ) -> Option<TypeId> {
+    let mut shape = Shape::new();
+    for member in members.iter() {
+      self.lower_member(&mut shape, *member, names);
+    }
+    if shape.properties.is_empty()
+      && shape.call_signatures.is_empty()
+      && shape.construct_signatures.is_empty()
+      && shape.indexers.is_empty()
+    {
+      return None;
+    }
+    let shape_id = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape: shape_id });
+    Some(self.store.intern_type(TypeKind::Object(obj)))
   }
 
   pub fn lower_class_instance_and_value_types(
@@ -186,10 +538,19 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       self.current_arenas = None;
       return None;
     };
-    let params = self.lower_type_param_decls(type_params, names);
-
     let unknown = self.store.primitive_ids().unknown;
-    let (instance, value) = self.lower_class_instance_and_value(info, names, unknown);
+    let class_name = self.local_defs.name_of(owner);
+    let (params, jsdoc_tp_map) =
+      self.class_type_param_decls(type_params, names, class_name.as_deref());
+    let (instance, value) = self.lower_class_instance_and_value(
+      owner,
+      info,
+      names,
+      unknown,
+      class_name.as_deref(),
+      &params,
+      &jsdoc_tp_map,
+    );
     self.validate_variance_annotations(type_params, instance, names);
 
     self.type_params.clear();
@@ -209,7 +570,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       self.current_arenas = None;
       return None;
     };
-    let value = self.lower_enum_value(info, names);
+    let value = self.lower_enum_value(owner, info, names);
     let ty = self.lower_enum_type(info, names);
     self.current_arenas = None;
     Some((ty, value))
@@ -220,17 +581,37 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let DefTypeInfo::Enum { members } = info else {
       return prim.any;
     };
+    // Prefer a union of member literals so `Record<E, T>` / mapped types get
+    // required properties (`assignmentCompatWithEnumIndexer.ts`). Fall back to
+    // the coarse number/string union when any member is computed.
+    let mut lits = Vec::with_capacity(members.len());
     let mut has_number = false;
     let mut has_string = false;
+    let mut has_computed = false;
     for member in members.iter() {
-      match member.value {
-        hir_js::EnumMemberValue::Number => has_number = true,
-        hir_js::EnumMemberValue::String => has_string = true,
+      match &member.value {
+        hir_js::EnumMemberValue::Number(n) => {
+          has_number = true;
+          lits.push(
+            self
+              .store
+              .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(*n))),
+          );
+        }
+        hir_js::EnumMemberValue::String(s) => {
+          has_string = true;
+          let name = self.store.intern_name(s.clone());
+          lits.push(self.store.intern_type(TypeKind::StringLiteral(name)));
+        }
         hir_js::EnumMemberValue::Computed => {
+          has_computed = true;
           has_number = true;
           has_string = true;
         }
       }
+    }
+    if !has_computed && !lits.is_empty() {
+      return self.store.union(lits);
     }
     match (has_number, has_string) {
       (true, true) => self.store.union(vec![prim.number, prim.string]),
@@ -240,20 +621,35 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
   }
 
-  fn lower_enum_value(&mut self, info: &DefTypeInfo, names: &hir_js::NameInterner) -> TypeId {
+  fn lower_enum_value(
+    &mut self,
+    owner: HirDefId,
+    info: &DefTypeInfo,
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
     let prim = self.store.primitive_ids();
     let DefTypeInfo::Enum { members } = info else {
       return prim.unknown;
     };
+    // Member access `E.A` is typed as the enum type (tsc), not the underlying
+    // literal — otherwise distinct enums that share member values (both `0`)
+    // become mutually assignable and first-match overloads pick the wrong sig.
+    let ref_def = self
+      .def_map
+      .and_then(|m| m.get(&owner).copied())
+      .unwrap_or(owner);
+    let enum_ty = self.store.intern_type(TypeKind::Ref {
+      def: ref_def,
+      args: Vec::new(),
+    });
     let mut shape = Shape::new();
     for member in members.iter() {
       let Some(name) = names.resolve(member.name) else {
         continue;
       };
       let key = PropKey::String(self.store.intern_name(name.to_string()));
-      let ty = match member.value {
-        hir_js::EnumMemberValue::Number => prim.number,
-        hir_js::EnumMemberValue::String => prim.string,
+      let ty = match &member.value {
+        hir_js::EnumMemberValue::Number(_) | hir_js::EnumMemberValue::String(_) => enum_ty,
         hir_js::EnumMemberValue::Computed => prim.any,
       };
       shape.properties.push(Property {
@@ -274,11 +670,88 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self.store.intern_type(TypeKind::Object(obj))
   }
 
+  /// Lower HIR class type params, falling back to checkJs `@template` tags when
+  /// the class has no TS type-parameter list.
+  fn class_type_param_decls(
+    &mut self,
+    hir_params: &[HirTypeParamId],
+    names: &hir_js::NameInterner,
+    class_name: Option<&str>,
+  ) -> (Vec<TypeParamDecl>, HashMap<String, TypeParamId>) {
+    let mut params = self.lower_type_param_decls(hir_params, names);
+    let mut jsdoc_tp_map = HashMap::new();
+    if !params.is_empty() {
+      // HIR params already registered in `type_param_names`; expose a string map
+      // so JSDoc `@param {T}` on constructors can resolve the same ids.
+      for tp in hir_params.iter() {
+        let Some(data) = self.arenas().type_params.get(tp.0 as usize) else {
+          continue;
+        };
+        let Some(name) = names.resolve(data.name) else {
+          continue;
+        };
+        if let Some(id) = self.type_params.get(tp).copied() {
+          jsdoc_tp_map.insert(name.to_owned(), id);
+        }
+      }
+      return (params, jsdoc_tp_map);
+    }
+    let Some(class_name) = class_name else {
+      return (params, jsdoc_tp_map);
+    };
+    let Some(host) = self.host else {
+      return (params, jsdoc_tp_map);
+    };
+    let Some(file_key) = self.file_key.as_ref() else {
+      return (params, jsdoc_tp_map);
+    };
+    let Ok(source) = host.file_text(file_key) else {
+      return (params, jsdoc_tp_map);
+    };
+    let Some(tags) = crate::jsdoc::class_leading_jsdoc_tags(source.as_ref(), class_name) else {
+      return (params, jsdoc_tp_map);
+    };
+    if tags.templates.is_empty() {
+      return (params, jsdoc_tp_map);
+    }
+    // Two-pass: allocate names first so constraints may reference siblings.
+    for t in tags.templates.iter() {
+      let id = TypeParamId(self.next_type_param);
+      self.next_type_param = self.next_type_param.wrapping_add(1);
+      jsdoc_tp_map.insert(t.name.to_owned(), id);
+      params.push(TypeParamDecl {
+        id,
+        constraint: None,
+        default: None,
+        variance: None,
+        const_: false,
+      });
+    }
+    let typedefs = crate::jsdoc::collect_file_typedefs(source.as_ref());
+    let env = crate::jsdoc::JsdocLowerEnv::new()
+      .with_typedefs((!typedefs.is_empty()).then_some(&typedefs))
+      .with_type_params(Some(&jsdoc_tp_map));
+    for (decl, t) in params.iter_mut().zip(tags.templates.iter()) {
+      if let Some(raw) = t.constraint {
+        decl.constraint = Some(crate::jsdoc::lower_jsdoc_type_with(
+          self.store.as_ref(),
+          raw,
+          &env,
+        ));
+      }
+    }
+    (params, jsdoc_tp_map)
+  }
+
   fn lower_class_instance_and_value(
     &mut self,
+    owner: HirDefId,
     info: &DefTypeInfo,
     names: &hir_js::NameInterner,
     unknown: TypeId,
+    class_name: Option<&str>,
+    class_type_params: &[TypeParamDecl],
+    jsdoc_tp_map: &HashMap<String, TypeParamId>,
   ) -> (TypeId, TypeId) {
     let DefTypeInfo::Class {
       extends,
@@ -332,13 +805,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = type_annotation
             .map(|t| self.lower_type_expr(t, names))
             .unwrap_or(unknown);
-          let accessibility = member.accessibility.map(|a| match a {
-            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-            hir_js::ClassMemberAccessibility::Protected => {
-              types_ts_interned::Accessibility::Protected
-            }
-            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-          });
+          let (accessibility, declared_on) =
+            self.class_member_prop_access(name, names, member.accessibility, owner);
           let prop = Property {
             key,
             data: PropData {
@@ -348,7 +816,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
               accessibility,
               is_method: false,
               origin: None,
-              declared_on: None,
+              declared_on,
             },
           };
           if member.static_ {
@@ -366,13 +834,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = self.store.intern_type(TypeKind::Callable {
             overloads: vec![sig_id],
           });
-          let accessibility = member.accessibility.map(|a| match a {
-            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-            hir_js::ClassMemberAccessibility::Protected => {
-              types_ts_interned::Accessibility::Protected
-            }
-            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-          });
+          let (accessibility, declared_on) =
+            self.class_member_prop_access(name, names, member.accessibility, owner);
           let prop = Property {
             key,
             data: PropData {
@@ -382,7 +845,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
               accessibility,
               is_method: true,
               origin: None,
-              declared_on: None,
+              declared_on,
             },
           };
           if member.static_ {
@@ -398,13 +861,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = return_type
             .map(|t| self.lower_type_expr(t, names))
             .unwrap_or(unknown);
-          let accessibility = member.accessibility.map(|a| match a {
-            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-            hir_js::ClassMemberAccessibility::Protected => {
-              types_ts_interned::Accessibility::Protected
-            }
-            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-          });
+          let (accessibility, declared_on) =
+            self.class_member_prop_access(name, names, member.accessibility, owner);
           let prop = Property {
             key,
             data: PropData {
@@ -414,7 +872,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
               accessibility,
               is_method: false,
               origin: None,
-              declared_on: None,
+              declared_on,
             },
           };
           if member.static_ {
@@ -428,13 +886,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
             continue;
           };
           let ty = self.lower_type_expr(parameter.ty, names);
-          let accessibility = member.accessibility.map(|a| match a {
-            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-            hir_js::ClassMemberAccessibility::Protected => {
-              types_ts_interned::Accessibility::Protected
-            }
-            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-          });
+          let (accessibility, declared_on) =
+            self.class_member_prop_access(name, names, member.accessibility, owner);
           let prop = Property {
             key,
             data: PropData {
@@ -444,7 +897,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
               accessibility,
               is_method: false,
               origin: None,
-              declared_on: None,
+              declared_on,
             },
           };
           if member.static_ {
@@ -455,6 +908,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
     }
+
+    // checkJs: `this.prop = …` in constructors adds instance properties.
+    self.merge_js_class_this_props(
+      class_name,
+      &ctor_signatures,
+      names,
+      &mut instance_shape,
+      unknown,
+      jsdoc_tp_map,
+    );
 
     let instance_obj = self
       .store
@@ -474,6 +937,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let mut ctor_sig_ids: Vec<types_ts_interned::SignatureId> = Vec::new();
     for sig in ctor_signatures.iter() {
       let mut lowered = self.lower_signature(sig, names);
+      self.apply_jsdoc_constructor_param_types(&mut lowered, class_name, jsdoc_tp_map);
+      // Class type parameters belong on the construct signature so `new Foo(arg)`
+      // can infer/instantiate them (tsc / checkJs `@template` parity).
+      if lowered.type_params.is_empty() && !class_type_params.is_empty() {
+        lowered.type_params = class_type_params.to_vec();
+      }
       lowered.ret = instance;
       lowered.this_param = None;
       ctor_sig_ids.push(self.store.intern_signature(lowered));
@@ -482,7 +951,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       let sig = Signature {
         params: Vec::new(),
         ret: instance,
-        type_params: Vec::new(),
+        type_params: class_type_params.to_vec(),
         this_param: None,
       };
       ctor_sig_ids.push(self.store.intern_signature(sig));
@@ -496,6 +965,132 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       })));
 
     (instance, value)
+  }
+
+  /// Overlay checkJs constructor `@param {T} name` types onto a lowered
+  /// construct signature (and resolve `@template` names via `jsdoc_tp_map`).
+  fn apply_jsdoc_constructor_param_types(
+    &self,
+    sig: &mut Signature,
+    class_name: Option<&str>,
+    jsdoc_tp_map: &HashMap<String, TypeParamId>,
+  ) {
+    let Some(class_name) = class_name else {
+      return;
+    };
+    let Some(host) = self.host else {
+      return;
+    };
+    let Some(file_key) = self.file_key.as_ref() else {
+      return;
+    };
+    let Ok(source) = host.file_text(file_key) else {
+      return;
+    };
+    let Some(tags) = crate::jsdoc::constructor_leading_jsdoc_tags(source.as_ref(), class_name)
+    else {
+      return;
+    };
+    if tags.params.is_empty() {
+      return;
+    }
+    let typedefs = crate::jsdoc::collect_file_typedefs(source.as_ref());
+    let env = crate::jsdoc::JsdocLowerEnv::new()
+      .with_typedefs((!typedefs.is_empty()).then_some(&typedefs))
+      .with_type_params((!jsdoc_tp_map.is_empty()).then_some(jsdoc_tp_map));
+    let owned: Vec<crate::jsdoc::OwnedJsdocParam> = tags
+      .params
+      .iter()
+      .map(|p| crate::jsdoc::OwnedJsdocParam {
+        ty: p.ty.to_owned(),
+        name: p.name.map(str::to_owned),
+        optional: p.optional,
+      })
+      .collect();
+    let (resolved, _) = crate::jsdoc::resolve_jsdoc_params(self.store.as_ref(), &owned, &env);
+    for p in sig.params.iter_mut() {
+      let Some(name_id) = p.name else {
+        continue;
+      };
+      let name = self.store.name(name_id);
+      if let Some(resolved) = resolved.get(&name) {
+        p.ty = resolved.ty;
+        p.optional = p.optional || resolved.optional;
+      }
+    }
+  }
+
+  /// Merge `this.prop = rhs` assignments from a JS class constructor into the
+  /// instance shape (checkJs). Property types come from matching constructor
+  /// parameter names when possible (including JSDoc `@param` overlays).
+  fn merge_js_class_this_props(
+    &mut self,
+    class_name: Option<&str>,
+    ctor_signatures: &[TypeSignature],
+    names: &hir_js::NameInterner,
+    instance_shape: &mut Shape,
+    fallback: TypeId,
+    jsdoc_tp_map: &HashMap<String, TypeParamId>,
+  ) {
+    let Some(class_name) = class_name else {
+      return;
+    };
+    let Some(host) = self.host else {
+      return;
+    };
+    let Some(file_key) = self.file_key.as_ref() else {
+      return;
+    };
+    let Ok(source) = host.file_text(file_key) else {
+      return;
+    };
+    let map = crate::jsdoc::collect_js_class_this_props(&source);
+    let Some(props) = map.get(class_name) else {
+      return;
+    };
+    // Map constructor param name → type (first ctor sig wins).
+    let mut param_tys: HashMap<String, TypeId> = HashMap::new();
+    if let Some(sig) = ctor_signatures.first() {
+      let mut lowered = self.lower_signature(sig, names);
+      self.apply_jsdoc_constructor_param_types(&mut lowered, Some(class_name), jsdoc_tp_map);
+      for p in lowered.params.iter() {
+        if let Some(name_id) = p.name {
+          let name = self.store.name(name_id);
+          if !name.is_empty() {
+            param_tys.insert(name, p.ty);
+          }
+        }
+      }
+    }
+    let existing: HashSet<String> = instance_shape
+      .properties
+      .iter()
+      .filter_map(|p| match &p.key {
+        PropKey::String(id) => {
+          let n = self.store.name(*id);
+          (!n.is_empty()).then_some(n)
+        }
+        _ => None,
+      })
+      .collect();
+    for (prop, rhs) in props.iter() {
+      if existing.contains(prop) {
+        continue;
+      }
+      let ty = param_tys.get(rhs).copied().unwrap_or(fallback);
+      instance_shape.properties.push(Property {
+        key: PropKey::String(self.store.intern_name(prop.clone())),
+        data: PropData {
+          ty,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
   }
 
   fn prop_key_from_name(
@@ -514,7 +1109,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
       hir_js::PropertyName::String(s) => Some(PropKey::String(self.store.intern_name(s.clone()))),
-      hir_js::PropertyName::Number(n) => Some(PropKey::Number(n.parse::<i64>().ok()?)),
+      hir_js::PropertyName::Number(n) => Some(match n.parse::<i64>() {
+        Ok(parsed) => PropKey::Number(parsed),
+        // Fractional numeric keys are string keys (`{ 1.1: string }`) — never
+        // drop the member (`objectTypeWithNumericProperty.ts`).
+        Err(_) => PropKey::String(self.store.intern_name(n.clone())),
+      }),
       hir_js::PropertyName::Symbol(id) => Some(PropKey::Symbol(
         self.store.intern_name(names.resolve(*id)?.to_string()),
       )),
@@ -606,12 +1206,23 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .collect();
         self.store.intersection(lowered)
       }
-      TypeExprKind::Function(func) | TypeExprKind::Constructor(func) => {
+      TypeExprKind::Function(func) => {
         let sig = self.lower_function_type(&func, names);
         let sig_id = self.store.intern_signature(sig);
         self.store.intern_type(TypeKind::Callable {
           overloads: vec![sig_id],
         })
+      }
+      TypeExprKind::Constructor(func) => {
+        // `new (x: T) => R` is a construct signature, not a call signature
+        // (`assignmentCompatWithConstructSignatures*.ts`).
+        let sig = self.lower_function_type(&func, names);
+        let sig_id = self.store.intern_signature(sig);
+        let mut shape = Shape::new();
+        shape.construct_signatures.push(sig_id);
+        let shape_id = self.store.intern_shape(shape);
+        let obj = self.store.intern_object(ObjectType { shape: shape_id });
+        self.store.intern_type(TypeKind::Object(obj))
       }
       TypeExprKind::TypeLiteral(obj) => {
         if obj.members.is_empty() {
@@ -627,50 +1238,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(inner, names),
-      TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names),
-      TypeExprKind::TypeQuery(name) => {
-        if let TypeName::Import(import) = &name {
-          let empty_qualifier = import
-            .qualifier
-            .as_ref()
-            .map(|segments| segments.is_empty())
-            .unwrap_or(true);
-          if empty_qualifier {
-            if let Some(namespace_def) = self.resolve_import_module_namespace(import) {
-              return self.store.intern_type(TypeKind::Ref {
-                def: self.map_value_def(namespace_def),
-                args: Vec::new(),
-              });
-            }
-          } else if let Some(def) = self.resolve_import_typeof_qualifier(import, names) {
-            return self.store.intern_type(TypeKind::Ref {
-              def: self.map_value_def(def),
-              args: Vec::new(),
-            });
-          }
-        }
-        if let Some(def) = self.resolve_value_name(&name, names, None) {
-          return self.store.intern_type(TypeKind::Ref {
-            def: self.map_value_def(def),
-            args: Vec::new(),
-          });
-        }
-
-        let fallback_name = self.type_name_to_string(&name, names);
-        if let Some(def) = self.defs.get(&(self.file, fallback_name.clone())) {
-          return self.store.intern_type(TypeKind::Ref {
-            def: self.map_value_def(*def),
-            args: Vec::new(),
-          });
-        }
-
-        self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-          format!("Cannot find name '{fallback_name}'."),
-          Span::new(self.file, TextRange::new(0, 0)),
-        ));
-
-        self.store.primitive_ids().unknown
-      }
+      TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names, ty.span),
+      TypeExprKind::TypeQuery(name) => self.lower_type_query(&name, names),
       TypeExprKind::KeyOf(inner) => {
         let ty = self.lower_type_expr(inner, names);
         self.store.intern_type(TypeKind::KeyOf(ty))
@@ -681,6 +1250,25 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       } => {
         let obj = self.lower_type_expr(object_type, names);
         let idx = self.lower_type_expr(index_type, names);
+        // ES private fields are not visible to string indexed access
+        // (`C["#bar"]` → TS2339), even though the shape stores `#bar`.
+        if let Some(prop) = self.private_ident_string_index_prop(index_type) {
+          let index_span = self
+            .current_arenas
+            .and_then(|a| a.type_exprs.get(index_type.0 as usize))
+            .map(|t| t.span)
+            .unwrap_or(ty.span);
+          let obj_display = TypeDisplay::new(self.store.as_ref(), obj).to_string();
+          self.diagnostics.push(codes::PROPERTY_DOES_NOT_EXIST.error(
+            format!("Property '{prop}' does not exist on type '{obj_display}'."),
+            Span {
+              file: self.file,
+              range: index_span,
+            },
+          ));
+          // tsc recovers with an error type (assignment does not cascade TS2322).
+          return self.store.primitive_ids().any;
+        }
         self
           .store
           .intern_type(TypeKind::IndexedAccess { obj, index: idx })
@@ -757,6 +1345,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       optional: self.map_modifier(mapped.optional),
       name_type,
       as_type: name_type,
+      homomorphic_var: MappedType::homomorphic_var_of(&self.store, constraint),
     };
     let mapped_ty = self.store.intern_type(TypeKind::Mapped(mapped_kind));
     mapped_ty
@@ -1142,6 +1731,24 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
   }
 
+  fn type_name_to_path(
+    &self,
+    name: &hir_js::TypeName,
+    names: &hir_js::NameInterner,
+  ) -> Option<Vec<String>> {
+    match name {
+      TypeName::Ident(id) => Some(vec![names.resolve(*id)?.to_string()]),
+      TypeName::Qualified(path) => {
+        let mut segments = Vec::with_capacity(path.len());
+        for id in path.iter() {
+          segments.push(names.resolve(*id)?.to_string());
+        }
+        (!segments.is_empty()).then_some(segments)
+      }
+      TypeName::Import(_) | TypeName::ImportExpr => None,
+    }
+  }
+
   fn lower_signature(&mut self, sig: &TypeSignature, names: &hir_js::NameInterner) -> Signature {
     let prev_params = self.type_params.clone();
     let prev_names = self.type_param_names.clone();
@@ -1193,15 +1800,133 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   }
 
   fn lower_fn_param(&mut self, param: &TypeFnParam, names: &hir_js::NameInterner) -> Param {
+    let mut ty = self.lower_type_expr(param.ty, names);
+    if param.rest {
+      ty = self.normalize_rest_param_type(ty);
+    }
     Param {
       name: param
         .name
         .and_then(|n| names.resolve(n))
         .map(|n| self.store.intern_name(n.to_string())),
-      ty: self.lower_type_expr(param.ty, names),
+      ty,
       optional: param.optional,
       rest: param.rest,
     }
+  }
+
+  /// A rest parameter annotated with the lib `Array<X>` interface form must
+  /// carry the intrinsic array type so rest-element expansion finds the
+  /// element (`taggedTemplatesWithTypeArguments1.ts`:
+  /// `...callbacks: Array<(x: T) => any>` checked each substitution against
+  /// the whole `Array` instead of the element).
+  fn normalize_rest_param_type(&mut self, ty: TypeId) -> TypeId {
+    let TypeKind::Ref { def, args } = self.store.type_kind(ty) else {
+      return ty;
+    };
+    if args.len() != 1 {
+      return ty;
+    }
+    let is_lib_array = self
+      .resolve_named_in_namespace("Array", self.file, Namespace::TYPE)
+      .is_some_and(|array_def| array_def == def || self.map_value_def(array_def) == def);
+    if !is_lib_array {
+      return ty;
+    }
+    self.store.intern_type(TypeKind::Array {
+      ty: args[0],
+      readonly: false,
+    })
+  }
+
+  /// String literal index like `"#bar"` — not a legal indexed-access key for
+  /// ES private fields (tsc TS2339 on `C["#bar"]`).
+  fn private_ident_string_index_prop(&self, index: TypeExprId) -> Option<String> {
+    let arenas = self.current_arenas?;
+    let ty = arenas.type_exprs.get(index.0 as usize)?;
+    match &ty.kind {
+      TypeExprKind::Literal(hir_js::TypeLiteral::String(s)) if s.starts_with('#') => {
+        Some(s.clone())
+      }
+      TypeExprKind::Parenthesized(inner) => self.private_ident_string_index_prop(*inner),
+      _ => None,
+    }
+  }
+
+  /// Resolve a private identifier (`#foo`) from a HIR property name, if any.
+  fn private_property_name(
+    &self,
+    name: &hir_js::PropertyName,
+    names: &hir_js::NameInterner,
+  ) -> Option<String> {
+    match name {
+      hir_js::PropertyName::Ident(id) => {
+        let resolved = names.resolve(*id)?;
+        resolved.starts_with('#').then(|| resolved.to_string())
+      }
+      hir_js::PropertyName::String(s) if s.starts_with('#') => Some(s.clone()),
+      _ => None,
+    }
+  }
+
+  /// Accessibility + nominal origin for a class member property.
+  ///
+  /// `#`-prefixed private identifiers are always `Private` and branded with the
+  /// declaring class `DefId` so assignability treats them as unique per class
+  /// (tsc private-name uniqueness / `privateNamesUnique-*`).
+  fn class_member_prop_access(
+    &self,
+    name: &hir_js::PropertyName,
+    names: &hir_js::NameInterner,
+    member_accessibility: Option<hir_js::ClassMemberAccessibility>,
+    owner: HirDefId,
+  ) -> (Option<types_ts_interned::Accessibility>, Option<DefId>) {
+    if self.private_property_name(name, names).is_some() {
+      return (Some(types_ts_interned::Accessibility::Private), Some(owner));
+    }
+    let accessibility = member_accessibility.map(|a| match a {
+      hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+      hir_js::ClassMemberAccessibility::Protected => types_ts_interned::Accessibility::Protected,
+      hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+    });
+    (accessibility, None)
+  }
+
+  /// TS18016 for private names in type/interface/object-type member positions.
+  ///
+  /// Property signatures use a name-only primary span; method signatures use the
+  /// full member span (tsc baseline parity).
+  fn check_private_name_type_member(
+    &mut self,
+    member_span: TextRange,
+    name: &hir_js::PropertyName,
+    names: &hir_js::NameInterner,
+    full_member_span: bool,
+  ) {
+    let Some(priv_name) = self.private_property_name(name, names) else {
+      return;
+    };
+    let range = if full_member_span {
+      member_span
+    } else {
+      let name_len = priv_name.len() as u32;
+      TextRange {
+        start: member_span.start,
+        end: member_span
+          .start
+          .saturating_add(name_len)
+          .min(member_span.end),
+      }
+    };
+    self
+      .diagnostics
+      .push(codes::PRIVATE_IDENTIFIERS_OUTSIDE_CLASS.error(
+        "Private identifiers are not allowed outside class bodies.",
+        Span {
+          file: self.file,
+          range,
+        },
+      ));
   }
 
   fn lower_member(
@@ -1215,11 +1940,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     };
     match member.kind {
       TypeMemberKind::Property(prop) => {
+        self.check_private_name_type_member(member.span, &prop.name, names, false);
         if let Some((key, data)) = self.lower_property(&prop, names) {
           shape.properties.push(Property { key, data });
         }
       }
       TypeMemberKind::Method(method) => {
+        self.check_private_name_type_member(member.span, &method.name, names, true);
         if let Some((key, ty)) = self.lower_method(&method, names) {
           shape.properties.push(Property {
             key,
@@ -1255,6 +1982,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         });
       }
       TypeMemberKind::Getter(getter) => {
+        self.check_private_name_type_member(member.span, &getter.name, names, false);
         if let Some((key, mut data)) = self.lower_property(
           &hir_js::TypePropertySignature {
             readonly: true,
@@ -1269,6 +1997,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
       TypeMemberKind::Setter(setter) => {
+        self.check_private_name_type_member(member.span, &setter.name, names, false);
         if let Some((key, mut data)) = self.lower_property(
           &hir_js::TypePropertySignature {
             readonly: false,
@@ -1365,10 +2094,134 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     ))
   }
 
+  fn lower_type_query(&mut self, name: &TypeName, names: &hir_js::NameInterner) -> TypeId {
+    if let TypeName::Import(import) = name {
+      let empty_qualifier = import
+        .qualifier
+        .as_ref()
+        .map(|segments| segments.is_empty())
+        .unwrap_or(true);
+      if empty_qualifier {
+        if let Some(namespace_def) = self.resolve_import_module_namespace(import) {
+          return self.store.intern_type(TypeKind::Ref {
+            def: self.map_value_def(namespace_def),
+            args: Vec::new(),
+          });
+        }
+        if let Some(resolver) = &self.type_resolver {
+          if let Some(module) = import.module.as_deref() {
+            if let Some(def) = resolver.resolve_import_typeof(module, None) {
+              return self.store.intern_type(TypeKind::Ref {
+                def: self.map_value_def(def),
+                args: Vec::new(),
+              });
+            }
+          }
+        }
+      } else if let Some(def) = self.resolve_import_typeof_qualifier(import, names) {
+        return self.store.intern_type(TypeKind::Ref {
+          def: self.map_value_def(def),
+          args: Vec::new(),
+        });
+      } else if let Some(resolver) = &self.type_resolver {
+        if let Some(module) = import.module.as_deref() {
+          if let Some(path) = import.qualifier.as_ref().map(|ids| {
+            ids
+              .iter()
+              .filter_map(|id| names.resolve(*id).map(|s| s.to_string()))
+              .collect::<Vec<_>>()
+          }) {
+            if !path.is_empty() {
+              if let Some(def) = resolver.resolve_import_typeof(module, Some(&path)) {
+                return self.store.intern_type(TypeKind::Ref {
+                  def: self.map_value_def(def),
+                  args: Vec::new(),
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Body-local values (`typeof x`) — TypeId from checker scopes.
+    if let Some(path) = self.type_name_to_path(name, names) {
+      if let [binding_name] = path.as_slice() {
+        if let Some(ty) = self.typeof_bindings.get(binding_name).copied() {
+          return ty;
+        }
+        // Ambient globals always present in tsc, even before body scopes are
+        // seeded (`typeof undefined` in a var annotation).
+        let prim = self.store.primitive_ids();
+        match binding_name.as_str() {
+          "undefined" => return prim.undefined,
+          "NaN" | "Infinity" => return prim.number,
+          _ => {}
+        }
+      }
+      if let Some(resolver) = &self.type_resolver {
+        if let Some(def) = resolver.resolve_typeof(&path) {
+          return self.store.intern_type(TypeKind::Ref {
+            def: self.map_value_def(def),
+            args: Vec::new(),
+          });
+        }
+      }
+      // Qualified `typeof` on a *value member chain* that is not a namespace
+      // path (`typeof window.document.title`): read the remaining members as
+      // indexed accesses on the head value's type — the evaluator computes
+      // the chain type (`{ document: { title: string } }["document"]["title"]`
+      // → `string`). Never resolve the last segment as a top-level name:
+      // that manufactures self-references
+      // (`declare const title: typeof window.document.title;`).
+      if path.len() > 1 {
+        if let Some(head_def) =
+          self.resolve_named_in_namespace(&path[0], self.file, Namespace::VALUE)
+        {
+          let mut ty = self.store.intern_type(TypeKind::Ref {
+            def: self.map_value_def(head_def),
+            args: Vec::new(),
+          });
+          for segment in &path[1..] {
+            let key = self.store.intern_name(segment.clone());
+            let index = self.store.intern_type(TypeKind::StringLiteral(key));
+            ty = self
+              .store
+              .intern_type(TypeKind::IndexedAccess { obj: ty, index });
+          }
+          return ty;
+        }
+      }
+    }
+
+    if let Some(def) = self.resolve_value_name(name, names, None) {
+      return self.store.intern_type(TypeKind::Ref {
+        def: self.map_value_def(def),
+        args: Vec::new(),
+      });
+    }
+
+    let fallback_name = self.type_name_to_string(name, names);
+    if let Some(def) = self.defs.get(&(self.file, fallback_name.clone())) {
+      return self.store.intern_type(TypeKind::Ref {
+        def: self.map_value_def(*def),
+        args: Vec::new(),
+      });
+    }
+
+    self.diagnostics.push(codes::CANNOT_FIND_NAME.error(
+      codes::cannot_find_name_message(&fallback_name),
+      Span::new(self.file, TextRange::new(0, 0)),
+    ));
+
+    self.store.primitive_ids().unknown
+  }
+
   fn lower_type_ref(
     &mut self,
     reference: &hir_js::TypeRef,
     names: &hir_js::NameInterner,
+    span: TextRange,
   ) -> TypeId {
     let args: Vec<_> = reference
       .type_args
@@ -1392,6 +2245,21 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         if names.resolve(*name_id) == Some("intrinsic") {
           return self.store.primitive_ids().unknown;
         }
+        // Global `Object` ≈ `{}` for assignability (primitives/enums are non-nullish).
+        if names.resolve(*name_id) == Some("Object") {
+          return self.store.intern_type(TypeKind::EmptyObject);
+        }
+        // Boxed primitives ≈ their primitive types for assignability
+        // (`enumAssignability.ts`: `var p: Number = e`).
+        let prim = self.store.primitive_ids();
+        match names.resolve(*name_id) {
+          Some("Number") => return prim.number,
+          Some("String") => return prim.string,
+          Some("Boolean") => return prim.boolean,
+          Some("BigInt") => return prim.bigint,
+          Some("Symbol") => return prim.symbol,
+          _ => {}
+        }
       }
     }
 
@@ -1400,6 +2268,30 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         def: resolved,
         args,
       });
+    }
+
+    // Program-grade resolver (import-equals, ambient export=, namespace members).
+    if let Some(resolver) = self.type_name_resolver {
+      if let Some(path) = self.type_name_to_path(&reference.name, names) {
+        if let Some(resolved) = resolver(&path) {
+          return self.store.intern_type(TypeKind::Ref {
+            def: resolved,
+            args,
+          });
+        }
+      }
+    }
+
+    // Body-check / owned TypeResolver (avoids borrowing a short-lived Fn).
+    if let Some(resolver) = &self.type_resolver {
+      if let Some(path) = self.type_name_to_path(&reference.name, names) {
+        if let Some(resolved) = resolver.resolve_type_name(&path) {
+          return self.store.intern_type(TypeKind::Ref {
+            def: resolved,
+            args,
+          });
+        }
+      }
     }
 
     let name = self.type_name_to_string(&reference.name, names);
@@ -1421,10 +2313,14 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       return self.store.intern_type(TypeKind::Ref { def, args });
     }
 
-    self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-      format!("Cannot find name '{name}'."),
-      Span::new(self.file, TextRange::new(0, 0)),
-    ));
+    // Match AST `TypeLowerer` / skipLibCheck filtering: type-position refs use
+    // TC2008, not value-position TS2304.
+    self
+      .diagnostics
+      .push(codes::UNRESOLVED_TYPE_REFERENCE.error(
+        format!("unresolved type '{name}'"),
+        Span::new(self.file, span),
+      ));
 
     self.store.primitive_ids().unknown
   }
@@ -1434,6 +2330,42 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     import: &hir_js::TypeImport,
     names: &hir_js::NameInterner,
   ) -> TypeId {
+    let args: Vec<_> = import
+      .type_args
+      .iter()
+      .map(|a| self.lower_type_expr(*a, names))
+      .collect();
+
+    let qualifier_segments: Option<Vec<String>> = import.qualifier.as_ref().and_then(|q| match q {
+      TypeName::Ident(id) => names.resolve(*id).map(|n| vec![n.to_string()]),
+      TypeName::Qualified(path) => {
+        let segs: Vec<String> = path
+          .iter()
+          .filter_map(|id| names.resolve(*id).map(|s| s.to_string()))
+          .collect();
+        (!segs.is_empty()).then_some(segs)
+      }
+      TypeName::Import(inner) => inner.qualifier.as_ref().map(|segments| {
+        segments
+          .iter()
+          .filter_map(|id| names.resolve(*id).map(|s| s.to_string()))
+          .collect()
+      }),
+      TypeName::ImportExpr => None,
+    });
+
+    // Program-grade resolver (works without DeclHost / key_to_id wiring used by
+    // body and value-signature lowering).
+    if let Some(resolver) = &self.type_resolver {
+      if let Some(def) = resolver.resolve_import_type(&import.module, qualifier_segments.as_deref())
+      {
+        return self.store.intern_type(TypeKind::Ref {
+          def,
+          args: args.clone(),
+        });
+      }
+    }
+
     let Some(host) = self.host else {
       return self.store.primitive_ids().unknown;
     };
@@ -1448,24 +2380,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       return self.store.primitive_ids().unknown;
     };
 
-    let args: Vec<_> = import
-      .type_args
-      .iter()
-      .map(|a| self.lower_type_expr(*a, names))
-      .collect();
-
-    let qualifier_name = import.qualifier.as_ref().and_then(|q| match q {
-      TypeName::Ident(id) => names.resolve(*id),
-      TypeName::Qualified(path) => path.last().and_then(|id| names.resolve(*id)),
-      TypeName::Import(inner) => inner
-        .qualifier
-        .as_ref()
-        .and_then(|segments| segments.last())
-        .and_then(|id| names.resolve(*id)),
-      TypeName::ImportExpr => None,
-    });
-
-    if let Some(name) = qualifier_name.map(|n| n.to_string()) {
+    if let Some(name) = qualifier_segments
+      .as_ref()
+      .and_then(|segs| segs.last())
+      .cloned()
+    {
       if let Some(def) = self
         .def_by_name
         .and_then(|map| map.get(&(target_file, name.clone())).copied())
@@ -1632,7 +2551,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     if file == self.file {
-      if let Some(local) = self.local_defs.get(name).copied() {
+      if let Some(local) = self.local_defs.get(name, ns) {
         if trace {
           eprintln!("[resolve_named_in_namespace] local def {:?}", local);
         }

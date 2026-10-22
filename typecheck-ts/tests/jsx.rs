@@ -191,7 +191,7 @@ const bad2 = <div {...{ id: 123 }} />;
   assert!(
     !diagnostics
       .iter()
-      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+      .any(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str()),
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
 }
@@ -583,7 +583,7 @@ const bad = <Foo x={"no"} />;
   assert!(
     !diagnostics
       .iter()
-      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+      .any(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str()),
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
   assert!(
@@ -779,7 +779,7 @@ const c = <My-Tag />;
   assert!(
     !diagnostics
       .iter()
-      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+      .any(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str()),
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
   assert!(
@@ -841,7 +841,7 @@ const ok = <Foo.Bar x={1} />;
   assert!(
     !diagnostics
       .iter()
-      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+      .any(|d| d.code.as_str() == codes::CANNOT_FIND_NAME.as_str()),
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
 }

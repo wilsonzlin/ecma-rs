@@ -249,6 +249,7 @@ fn build_var_stub(
       loc,
       VarDecl {
         export: false,
+        declare: false,
         mode: VarDeclMode::Var,
         declarators,
       },

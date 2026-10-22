@@ -261,6 +261,7 @@ fn var_binding<V: VarNamer>(
     }))),
     VarInit::Declare(mode) => node(Stmt::VarDecl(node(VarDecl {
       export: false,
+      declare: false,
       mode,
       declarators: vec![VarDeclarator {
         pattern: node(PatDecl {

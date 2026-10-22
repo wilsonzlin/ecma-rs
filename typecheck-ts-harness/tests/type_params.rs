@@ -46,7 +46,7 @@ fn unresolved_type_param_treated_conservatively() {
 }
 
 #[test]
-fn conflicting_type_arguments_still_error() {
+fn conflicting_primitive_type_arguments_reject() {
   let store = Arc::new(TypeStore::new());
   let primitives = store.primitive_ids();
   let tp = TypeParamId(0);
@@ -96,26 +96,80 @@ fn conflicting_type_arguments_still_error() {
     None,
   );
 
+  // tsc: `f<T>(a: T, b: T)` with unrelated primitives does NOT union the
+  // candidates — the first wins and the second argument is rejected
+  // (oracle: `f(1, "s")` → TS2345 '"s"' not assignable to parameter of type
+  // '1'). The direct overload API therefore rejects the call; the
+  // program-level checker emits TS2345 on the offending argument.
+  assert!(
+    !resolution.diagnostics.is_empty(),
+    "conflicting primitives must reject (tsc first-candidate-wins), got no diagnostics"
+  );
+}
+
+#[test]
+fn homogeneous_type_arguments_infer_shared_type() {
+  let store = Arc::new(TypeStore::new());
+  let primitives = store.primitive_ids();
+  let tp = TypeParamId(0);
+  let param_ty = store.intern_type(TypeKind::TypeParam(tp));
+  let sig = Signature {
+    params: vec![
+      Param {
+        name: None,
+        ty: param_ty,
+        optional: false,
+        rest: false,
+      },
+      Param {
+        name: None,
+        ty: param_ty,
+        optional: false,
+        rest: false,
+      },
+    ],
+    ret: param_ty,
+    type_params: vec![TypeParamDecl::new(tp)],
+    this_param: None,
+  };
+  let sig_id = store.intern_signature(sig);
+  let callable = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig_id],
+  });
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
+  let span = diagnostics::Span {
+    file: FileId(0),
+    range: diagnostics::TextRange::new(0, 0),
+  };
+  let instantiation = InstantiationCache::default();
+  let resolution = typecheck_ts::check::overload::resolve_overloads(
+    &store,
+    &relate,
+    &instantiation,
+    callable,
+    &[
+      CallArgType::new(primitives.number),
+      CallArgType::new(primitives.number),
+    ],
+    None,
+    None,
+    None,
+    span,
+    None,
+  );
+
   assert!(
     resolution.diagnostics.is_empty(),
-    "generic inference should accept heterogeneous arguments by inferring a union, got diagnostics: {:?}",
+    "homogeneous args must infer cleanly: {:?}",
     resolution
       .diagnostics
       .iter()
       .map(|d| d.message.clone())
       .collect::<Vec<_>>()
   );
-  match store.type_kind(resolution.return_type) {
-    TypeKind::Union(members) => {
-      assert!(
-        members.contains(&primitives.number) && members.contains(&primitives.string),
-        "expected inferred type param to include both number and string, got {:?}",
-        members
-          .iter()
-          .map(|ty| format!("{:?}", store.type_kind(*ty)))
-          .collect::<Vec<_>>()
-      );
-    }
-    other => panic!("expected union return type, got {other:?}"),
-  }
+  assert_eq!(
+    store.canon(resolution.return_type),
+    primitives.number,
+    "T should infer number for (number, number)"
+  );
 }

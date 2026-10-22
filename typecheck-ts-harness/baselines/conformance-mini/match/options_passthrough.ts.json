@@ -18,6 +18,7 @@
       "skipLibCheck": true,
       "strictFunctionTypes": true,
       "strictNullChecks": true,
+      "strictPropertyInitialization": false,
       "target": 7,
       "types": [
         "example"

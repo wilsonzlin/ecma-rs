@@ -8,6 +8,35 @@ pub(super) struct CachedBodyCheckContext {
 }
 
 impl ProgramState {
+  /// Publish the current body-check environment to the salsa database.
+  ///
+  /// Cheap when nothing changed: `body_check_context()` memoizes on the
+  /// declaration-types fingerprint, and we skip the input write entirely when
+  /// the same context `Arc` is already published (avoiding a salsa revision
+  /// bump). When a rebuild produces a new `Arc` with semantically equal
+  /// contents, the tracked context wrapper backdates and memoized body checks
+  /// survive.
+  pub(super) fn publish_body_context(&mut self) {
+    // Snapshot-loaded programs serve results from the loaded store; the salsa
+    // query must keep returning empty results for unknown bodies (matching the
+    // pre-salsa behavior of "no cached result seeded").
+    if self.snapshot_loaded {
+      return;
+    }
+    let context = self.body_check_context();
+    let already_published = self
+      .published_body_context
+      .as_ref()
+      .is_some_and(|published| Arc::ptr_eq(published, &context));
+    if already_published {
+      return;
+    }
+    self.published_body_context = Some(Arc::clone(&context));
+    self
+      .typecheck_db
+      .set_body_context(Some(db::BodyContextHandle(context)));
+  }
+
   pub(super) fn body_check_context(&mut self) -> Arc<BodyCheckContext> {
     let fingerprint = self
       .decl_types_fingerprint
@@ -84,12 +113,62 @@ impl ProgramState {
       );
     }
     let mut file_bindings = HashMap::new();
+    let any_ty = store.primitive_ids().any;
     for (file, state) in self.files.iter() {
-      file_bindings.insert(*file, state.bindings.clone());
+      let mut bindings = state.bindings.clone();
+      // For JavaScript sources (checkJs / allowJs fixtures), tsc treats
+      // CommonJS `require` / `module` / `exports` as ambient values only when
+      // the file sets `commonJsModuleIndicator` (public `exports.foo =`,
+      // `module.exports =`, or `require(...)`). Private access like
+      // `exports.#nope` does not count — leave `exports` unresolved (TS2304).
+      // Seed as `any`; we do not model Node `require` signatures.
+      if matches!(
+        self.file_kinds.get(file),
+        Some(FileKind::Js | FileKind::Jsx)
+      ) {
+        let has_cjs = self
+          .asts
+          .get(file)
+          .is_some_and(|ast| db::queries::js_ast_has_commonjs_module_indicator(ast.as_ref()));
+        if has_cjs {
+          for name in db::queries::COMMONJS_AMBIENT_GLOBALS {
+            bindings
+              .entry((*name).to_string())
+              .or_insert_with(|| db::queries::ambient_any_binding(name, Some(any_ty)));
+          }
+        }
+      }
+      file_bindings.insert(*file, bindings);
     }
-    let mut def_spans = HashMap::new();
+    // Multiple defs can share one (file, span) key — e.g. a `var` statement
+    // with a single binding yields a `Var` def and a `VarDeclarator` container
+    // def with identical spans. Pick a deterministic winner (binding kinds
+    // beat the declarator container; ties break on def id) so the context
+    // compares equal across rebuilds and salsa can backdate body checks.
+    let mut def_spans: HashMap<(FileId, TextRange), DefId> = HashMap::new();
+    let span_priority = |kind: &DefKind| match kind {
+      DefKind::VarDeclarator(_) => 1u8,
+      _ => 0u8,
+    };
     for (def, data) in self.def_data.iter() {
-      def_spans.insert((data.file, data.span), *def);
+      let key = (data.file, data.span);
+      match def_spans.entry(key) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+          entry.insert(*def);
+        }
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+          let current = *entry.get();
+          let current_priority = self
+            .def_data
+            .get(&current)
+            .map(|data| span_priority(&data.kind))
+            .unwrap_or(u8::MAX);
+          let new_priority = span_priority(&data.kind);
+          if (new_priority, def.0) < (current_priority, current.0) {
+            entry.insert(*def);
+          }
+        }
+      }
     }
     let def_kinds = Arc::new(
       self
@@ -128,16 +207,13 @@ impl ProgramState {
       target: self.compiler_options.target,
       no_implicit_any: self.compiler_options.no_implicit_any,
       use_define_for_class_fields: self.compiler_options.use_define_for_class_fields,
+      strict_null_checks: self.compiler_options.strict_null_checks,
+      strict_property_initialization: self.compiler_options.strict_property_initialization,
       interned_def_types: self.interned_def_types.clone(),
+      value_defs: Arc::new(self.value_defs.clone()),
       interned_type_params: self.interned_type_params.clone(),
       interned_type_param_decls: self.interned_type_param_decls.clone(),
       interned_intrinsics: self.interned_intrinsics.clone(),
-      asts: self.asts.clone(),
-      lowered: self
-        .hir_lowered
-        .iter()
-        .map(|(file, lowered)| (*file, Arc::clone(lowered)))
-        .collect(),
       body_info,
       body_parents: self.body_parents.clone(),
       global_bindings: self
@@ -155,6 +231,7 @@ impl ProgramState {
       module_namespace_defs: Arc::new(self.module_namespace_defs.clone()),
       namespace_members,
       qualified_def_members: Arc::clone(&self.qualified_def_members),
+      expando_members: Arc::new(self.expando_members.clone()),
       file_registry: Arc::new(self.file_registry.clone()),
       host: Arc::clone(&self.host),
       checker_caches: self.checker_caches.clone(),
@@ -162,6 +239,7 @@ impl ProgramState {
       cache_options: self.compiler_options.cache.clone(),
       jsx_mode: self.compiler_options.jsx,
       query_stats: self.query_stats.clone(),
+      cache_stats_sink: Arc::clone(&self.body_cache_stats_sink),
       cancelled: Arc::clone(&self.cancelled),
     }
   }

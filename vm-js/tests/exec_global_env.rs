@@ -33,4 +33,3 @@ fn sloppy_assignment_to_undeclared_creates_global_property() {
   let value = rt.exec_script("z = 3; globalThis.z === 3").unwrap();
   assert_eq!(value, Value::Bool(true));
 }
-

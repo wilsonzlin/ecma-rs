@@ -1,0 +1,30 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running `target/release/typecheck-ts-harness conformance --shard 2/64 --shard-strategy hash --timeout-secs 20 --compare none --fail-on none --json`
+	Command being timed: "cargo run -p typecheck-ts-harness --release -- conformance --shard 2/64 --shard-strategy hash --timeout-secs 20 --compare none --fail-on none --json"
+	User time (seconds): 82.81
+	System time (seconds): 1.53
+	Percent of CPU this job got: 380%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:22.19
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 515556
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 150399
+	Voluntary context switches: 17712
+	Involuntary context switches: 109
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 992
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

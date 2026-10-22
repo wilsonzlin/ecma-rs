@@ -10,7 +10,7 @@ use parse_js::operator::{Associativity, OperatorName, OPERATORS};
 use crate::js_pat;
 use crate::Emitter;
 
-const CALL_MEMBER_PRECEDENCE: u8 = 18; // Matches OperatorName::Call/MemberAccess precedence.
+const CALL_MEMBER_PRECEDENCE: u8 = 19; // Matches OperatorName::Call/MemberAccess precedence.
 const PRIMARY_PRECEDENCE: u8 = CALL_MEMBER_PRECEDENCE + 1;
 const ARROW_PRECEDENCE: u8 = 3; // Matches assignment-expression precedence.
 

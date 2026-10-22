@@ -1,0 +1,428 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/nullAssignableToEveryType.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/nullAssignableToEveryType.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2814,
+      "rust_ms": 1962,
+      "tsc_ms": 852,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 126,
+            "end": 127,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 149,
+            "end": 150,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 172,
+            "end": 173,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 196,
+            "end": 197,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 258,
+            "end": 259,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 281,
+            "end": 282,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 300,
+            "end": 301,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 325,
+            "end": 326,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 350,
+            "end": 351,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 384,
+            "end": 386,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 396,
+            "end": 398,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 408,
+            "end": 410,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 424,
+            "end": 425,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 449,
+            "end": 450,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 481,
+            "end": 482,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 512,
+            "end": 513,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 535,
+            "end": 536,
+            "severity": "error",
+            "message": "type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 126,
+            "end": 127,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 149,
+            "end": 150,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 172,
+            "end": 173,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 196,
+            "end": 197,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 237,
+            "end": 238,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 258,
+            "end": 259,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 281,
+            "end": 282,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 300,
+            "end": 301,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 325,
+            "end": 326,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 350,
+            "end": 351,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 384,
+            "end": 386,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 396,
+            "end": 398,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 408,
+            "end": 410,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 424,
+            "end": 425,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 449,
+            "end": 450,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 481,
+            "end": 482,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 512,
+            "end": 513,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 535,
+            "end": 536,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 616,
+            "end": 617,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 631,
+            "end": 632,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/nullAssignableToEveryType.ts",
+            "start": 646,
+            "end": 647,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 4 diagnostic(s); first missing: /nullAssignableToEveryType.ts:237-238 [2322]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/nullAssignableToEveryType.ts",
+          "start": 237,
+          "end": 238,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 36/64) rust=[TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322,TS2322] tsc=[2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

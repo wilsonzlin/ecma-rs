@@ -1,4 +1,6 @@
-use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+};
 
 #[test]
 fn user_data_set_get_smoke() {

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use num_bigint::BigInt;
@@ -189,6 +190,7 @@ where
           .prop_map(
             move |(param_seed, source, value, readonly, optional, name_type, as_type)| {
               mapped_store.intern_type(TypeKind::Mapped(MappedType {
+                homomorphic_var: None,
                 param: TypeParamId((param_seed % 6) as u32),
                 source,
                 value,
@@ -395,6 +397,7 @@ fn store_with_recursive_operator_graph(
         // A mapped type that depends on `keyof D2`.
         let param = TypeParamId(0);
         let def1 = store.intern_type(TypeKind::Mapped(MappedType {
+          homomorphic_var: None,
           param,
           source: store.intern_type(TypeKind::KeyOf(def2_ref)),
           value: def0_ref,
@@ -442,6 +445,7 @@ fn expand_ref_no_progress_cycle_does_not_overflow() {
   let hooks = RelateHooks {
     expander: Some(&expander),
     is_same_origin_private_member: None,
+    should_stop: None,
   };
   let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
   let prim = store.primitive_ids();
@@ -513,6 +517,7 @@ proptest! {
     let hooks = RelateHooks {
       expander: Some(&expander),
       is_same_origin_private_member: None,
+      should_stop: None,
     };
     let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks).with_step_limit(20_000);
     let mut expected = Vec::new();
@@ -532,6 +537,7 @@ proptest! {
     let hooks = RelateHooks {
       expander: Some(&expander),
       is_same_origin_private_member: None,
+      should_stop: None,
     };
     let fresh_ctx =
       RelateCtx::with_hooks(store.clone(), store.options(), hooks).with_step_limit(20_000);
@@ -594,41 +600,48 @@ proptest! {
 
   #[test]
   fn shape_interning_is_order_independent((store, props) in store_with_shape_props()) {
-    let mut shape_a = Shape::new();
-    for (name, ty, optional, readonly, is_method) in props.iter().cloned() {
-      shape_a.properties.push(Property {
-        key: PropKey::String(store.intern_name(name)),
-        data: PropData {
-          ty,
-          optional,
-          readonly,
-          accessibility: None,
-          is_method,
-          origin: None,
-          declared_on: None,
-        },
-      });
-    }
+    let build = |ordered: &[(String, TypeId, bool, bool, bool)]| {
+      let mut shape = Shape::new();
+      for (name, ty, optional, readonly, is_method) in ordered.iter().cloned() {
+        shape.properties.push(Property {
+          key: PropKey::String(store.intern_name(name)),
+          data: PropData {
+            ty,
+            optional,
+            readonly,
+            accessibility: None,
+            is_method,
+            origin: None,
+            declared_on: None,
+          },
+        });
+      }
+      store.intern_shape(shape)
+    };
 
-    let mut shape_b = Shape::new();
-    for (name, ty, optional, readonly, is_method) in props.iter().rev().cloned() {
-      shape_b.properties.push(Property {
-        key: PropKey::String(store.intern_name(name)),
-        data: PropData {
-          ty,
-          optional,
-          readonly,
-          accessibility: None,
-          is_method,
-          origin: None,
-          declared_on: None,
-        },
-      });
-    }
+    let id_a = build(&props);
+    let reversed: Vec<_> = props.iter().rev().cloned().collect();
+    let id_b = build(&reversed);
 
-    let id_a = store.intern_shape(shape_a);
-    let id_b = store.intern_shape(shape_b);
-    prop_assert_eq!(id_a, id_b);
+    // Same-name callable props with *different* signatures are overloads:
+    // reordering them is a genuinely different type in TS (first-match
+    // resolution in declaration order), so those are exempt from
+    // order-independence. Everything else canonicalizes.
+    let overload_order_sensitive = {
+      let mut by_name: HashMap<&str, HashSet<TypeId>> = HashMap::new();
+      for (name, ty, ..) in props.iter() {
+        if matches!(store.type_kind(*ty), TypeKind::Callable { .. }) {
+          by_name.entry(name.as_str()).or_default().insert(*ty);
+        }
+      }
+      by_name.values().any(|tys| tys.len() > 1)
+    };
+    if !overload_order_sensitive {
+      prop_assert_eq!(id_a, id_b);
+    } else {
+      // Still deterministic: building from the same input twice is stable.
+      prop_assert_eq!(id_a, build(&props));
+    }
   }
 
   #[test]

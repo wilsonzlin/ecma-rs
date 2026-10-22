@@ -1,0 +1,6727 @@
+{
+  "schema_version": 1,
+  "summary": {
+    "total": 303,
+    "passed": 227,
+    "failed": 76,
+    "timed_out": 0,
+    "skipped": 0,
+    "mismatches": {
+      "expected": 30,
+      "unexpected": 0,
+      "flaky": 0
+    }
+  },
+  "results": [
+    {
+      "id": "language/expressions/grouping/S11.1.6_A1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A2_T1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A2_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A2_T1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A2_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A2_T2.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A2_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T1.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T2.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T2.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T3.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T3.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T4.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T4.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T6.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T6.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T7.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T7.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/grouping/S11.1.6_A3_T7.js",
+      "path": "test/language/expressions/grouping/S11.1.6_A3_T7.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/call-expression-super-no-base.js",
+      "path": "test/language/expressions/optional-chaining/call-expression-super-no-base.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected super call not allowed outside derived constructors\n --> language/expressions/optional-chaining/call-expression-super-no-base.js:208:5\n  |\n208 |     super()?.a;\n    |     ^^^^^ expected super call not allowed outside derived constructors\n= note: expected super call not allowed outside derived constructors\n= note: found token: KeywordSuper",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/call-expression-super-no-base.js",
+      "path": "test/language/expressions/optional-chaining/call-expression-super-no-base.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected super call not allowed outside derived constructors\n --> language/expressions/optional-chaining/call-expression-super-no-base.js:210:5\n  |\n210 |     super()?.a;\n    |     ^^^^^ expected super call not allowed outside derived constructors\n= note: expected super call not allowed outside derived constructors\n= note: found token: KeywordSuper",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/call-expression.js",
+      "path": "test/language/expressions/optional-chaining/call-expression.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: statement type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented statement form (class/other)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/call-expression.js",
+      "path": "test/language/expressions/optional-chaining/call-expression.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: statement type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented statement form (class/other)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js:209:3\n  |\n209 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string-esi.js:211:3\n  |\n211 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js:206:7\n  |\n206 | null?.`hello`;\n    |       ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-op-template-string.js:208:7\n  |\n208 | null?.`hello`;\n    |       ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js:209:3\n  |\n209 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string-esi.js:211:3\n  |\n211 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js:206:9\n  |\n206 | null?.fn`hello`;\n    |         ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-null-optchain-template-string.js:208:9\n  |\n208 | null?.fn`hello`;\n    |         ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js:211:3\n  |\n211 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-op-template-string-esi.js:213:3\n  |\n213 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js:208:4\n  |\n208 | a?.`hello`;\n    |    ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-op-template-string.js:210:4\n  |\n210 | a?.`hello`;\n    |    ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js:211:3\n  |\n211 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string-esi.js:213:3\n  |\n213 |   `hello`\n    |   ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js:208:6\n  |\n208 | a?.fn`hello`;\n    |      ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js",
+      "path": "test/language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0028]: tagged template cannot follow optional chain\n --> language/expressions/optional-chaining/early-errors-tail-position-optchain-template-string.js:210:6\n  |\n210 | a?.fn`hello`;\n    |      ^^^^^^^ tagged template cannot follow optional chain\n= note: found token: LiteralTemplatePartStringEnd",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/eval-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/eval-optional-call.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "eval is not defined\n\nat fn (language/expressions/optional-chaining/eval-optional-call.js:208:3)\nat language/expressions/optional-chaining/eval-optional-call.js:1:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "un-triaged residual semantic mismatch: eval is not defined"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/eval-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/eval-optional-call.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "eval is not defined\n\nat fn (language/expressions/optional-chaining/eval-optional-call.js:210:3)\nat language/expressions/optional-chaining/eval-optional-call.js:1:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "un-triaged residual semantic mismatch: eval is not defined"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-do.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-do.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-do.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-do.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-await-of.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-await-of.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-await-of.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-await-of.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-in.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-in.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-in.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-in.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-of-type-error.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-of-type-error.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: GetMethod on non-object",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: GetMethod on non-object"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for-of-type-error.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for-of-type-error.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: GetMethod on non-object",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: GetMethod on non-object"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-for.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-for.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-while.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-while.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/iteration-statement-while.js",
+      "path": "test/language/expressions/optional-chaining/iteration-statement-while.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-literal.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-literal.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-literal.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-literal.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-this.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-this.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression-async-this.js",
+      "path": "test/language/expressions/optional-chaining/member-expression-async-this.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression.js",
+      "path": "test/language/expressions/optional-chaining/member-expression.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: expression type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "optional-chain short-circuit not propagated through the full chain (vm-js bug, ECMA-262 §13.3.9)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/member-expression.js",
+      "path": "test/language/expressions/optional-chaining/member-expression.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: expression type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "optional-chain short-circuit not propagated through the full chain (vm-js bug, ECMA-262 §13.3.9)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/new-target-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/new-target-optional-call.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/new-target-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/new-target-optional-call.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-call-preserves-this.js",
+      "path": "test/language/expressions/optional-chaining/optional-call-preserves-this.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-call-preserves-this.js",
+      "path": "test/language/expressions/optional-chaining/optional-call-preserves-this.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: yield/await in this expression position",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: yield/await in optional-chain / computed-member expression position"
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: yield/await in this expression position",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: yield/await in optional-chain / computed-member expression position"
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-async-square-brackets.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-async-square-brackets.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: yield/await in this expression position",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: yield/await in optional-chain / computed-member expression position"
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-async-square-brackets.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-async-square-brackets.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: yield/await in this expression position",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: yield/await in optional-chain / computed-member expression position"
+      },
+      "metadata": {
+        "includes": [
+          "asyncHelpers.js"
+        ],
+        "flags": [
+          "async"
+        ],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-expression-optional-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-expression-optional-expression.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-expression-optional-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-expression-optional-expression.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-arguments.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-arguments.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected property name\n --> language/expressions/optional-chaining/optional-chain-prod-arguments.js:210:24\n  |\n210 | assert.sameValue(fn ?. (...[10, 20, 40]), 70, 'spread');\n    |                        ^ expected property name\n= note: expected property name\n= note: found token: ParenthesisOpen",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "parser rejects valid syntax (parser, out of vm-js scope)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-arguments.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-arguments.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected property name\n --> language/expressions/optional-chaining/optional-chain-prod-arguments.js:212:24\n  |\n212 | assert.sameValue(fn ?. (...[10, 20, 40]), 70, 'spread');\n    |                        ^ expected property name\n= note: expected property name\n= note: found token: ParenthesisOpen",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "parser rejects valid syntax (parser, out of vm-js scope)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-expression.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-expression.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-identifiername.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-identifiername.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "Expected SameValue(«undefined», «\"hello\"») to be true\n\nat language/expressions/optional-chaining/optional-chain-prod-identifiername.js:49:3\nat language/expressions/optional-chaining/optional-chain-prod-identifiername.js:1:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unicode-escaped IdentifierName in member access not decoded (parser, out of vm-js scope)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain-prod-identifiername.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain-prod-identifiername.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "Expected SameValue(«undefined», «\"hello\"») to be true\n\nat language/expressions/optional-chaining/optional-chain-prod-identifiername.js:51:3\nat language/expressions/optional-chaining/optional-chain-prod-identifiername.js:1:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unicode-escaped IdentifierName in member access not decoded (parser, out of vm-js scope)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-chain.js",
+      "path": "test/language/expressions/optional-chaining/optional-chain.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-expression.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/optional-expression.js",
+      "path": "test/language/expressions/optional-chaining/optional-expression.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/punctuator-decimal-lookahead.js",
+      "path": "test/language/expressions/optional-chaining/punctuator-decimal-lookahead.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/punctuator-decimal-lookahead.js",
+      "path": "test/language/expressions/optional-chaining/punctuator-decimal-lookahead.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/runtime-semantics-evaluation.js",
+      "path": "test/language/expressions/optional-chaining/runtime-semantics-evaluation.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/runtime-semantics-evaluation.js",
+      "path": "test/language/expressions/optional-chaining/runtime-semantics-evaluation.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/short-circuiting.js",
+      "path": "test/language/expressions/optional-chaining/short-circuiting.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/short-circuiting.js",
+      "path": "test/language/expressions/optional-chaining/short-circuiting.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/static-semantics-simple-assignment.js",
+      "path": "test/language/expressions/optional-chaining/static-semantics-simple-assignment.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/expressions/optional-chaining/static-semantics-simple-assignment.js:209:1\n  |\n209 | obj?.a = 33;\n    | ^^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/static-semantics-simple-assignment.js",
+      "path": "test/language/expressions/optional-chaining/static-semantics-simple-assignment.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/expressions/optional-chaining/static-semantics-simple-assignment.js:211:1\n  |\n211 | obj?.a = 33;\n    | ^^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/super-property-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/super-property-optional-call.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: statement type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented statement form (class/other)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/super-property-optional-call.js",
+      "path": "test/language/expressions/optional-chaining/super-property-optional-call.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: statement type",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented statement form (class/other)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/expressions/optional-chaining/update-expression-postfix.js",
+      "path": "test/language/expressions/optional-chaining/update-expression-postfix.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0026]: invalid operand of update expression\n --> language/expressions/optional-chaining/update-expression-postfix.js:208:1\n  |\n208 | a?.b++;\n    | ^^^^ invalid operand of update expression",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/update-expression-postfix.js",
+      "path": "test/language/expressions/optional-chaining/update-expression-postfix.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0026]: invalid operand of update expression\n --> language/expressions/optional-chaining/update-expression-postfix.js:210:1\n  |\n210 | a?.b++;\n    | ^^^^ invalid operand of update expression",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/update-expression-prefix.js",
+      "path": "test/language/expressions/optional-chaining/update-expression-prefix.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0026]: invalid operand of update expression\n --> language/expressions/optional-chaining/update-expression-prefix.js:208:3\n  |\n208 | --a?.b;\n    |   ^^^^ invalid operand of update expression",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/expressions/optional-chaining/update-expression-prefix.js",
+      "path": "test/language/expressions/optional-chaining/update-expression-prefix.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0026]: invalid operand of update expression\n --> language/expressions/optional-chaining/update-expression-prefix.js:210:3\n  |\n210 | --a?.b;\n    |   ^^^^ invalid operand of update expression",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "optional-chaining"
+        ],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A1_T1.js",
+      "path": "test/language/types/boolean/S8.3_A1_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A1_T1.js",
+      "path": "test/language/types/boolean/S8.3_A1_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A1_T2.js",
+      "path": "test/language/types/boolean/S8.3_A1_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A1_T2.js",
+      "path": "test/language/types/boolean/S8.3_A1_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A2.1.js",
+      "path": "test/language/types/boolean/S8.3_A2.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/boolean/S8.3_A2.1.js:207:1\n  |\n207 | true = 1;\n    | ^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A2.1.js",
+      "path": "test/language/types/boolean/S8.3_A2.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/boolean/S8.3_A2.1.js:209:1\n  |\n209 | true = 1;\n    | ^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A2.2.js",
+      "path": "test/language/types/boolean/S8.3_A2.2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/boolean/S8.3_A2.2.js:207:1\n  |\n207 | false = 0;\n    | ^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A2.2.js",
+      "path": "test/language/types/boolean/S8.3_A2.2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/boolean/S8.3_A2.2.js:209:1\n  |\n209 | false = 0;\n    | ^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A3.js",
+      "path": "test/language/types/boolean/S8.3_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/boolean/S8.3_A3.js",
+      "path": "test/language/types/boolean/S8.3_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T1.js",
+      "path": "test/language/types/list/S8.8_A2_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T1.js",
+      "path": "test/language/types/list/S8.8_A2_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T2.js",
+      "path": "test/language/types/list/S8.8_A2_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T2.js",
+      "path": "test/language/types/list/S8.8_A2_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T3.js",
+      "path": "test/language/types/list/S8.8_A2_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/list/S8.8_A2_T3.js",
+      "path": "test/language/types/list/S8.8_A2_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A1_T1.js",
+      "path": "test/language/types/null/S8.2_A1_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A1_T1.js",
+      "path": "test/language/types/null/S8.2_A1_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A1_T2.js",
+      "path": "test/language/types/null/S8.2_A1_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A1_T2.js",
+      "path": "test/language/types/null/S8.2_A1_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A2.js",
+      "path": "test/language/types/null/S8.2_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected pattern\n --> language/types/null/S8.2_A2.js:207:5\n  |\n207 | var null;\n    |     ^^^^ expected pattern\n= note: expected pattern\n= note: found token: LiteralNull",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A2.js",
+      "path": "test/language/types/null/S8.2_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected pattern\n --> language/types/null/S8.2_A2.js:209:5\n  |\n209 | var null;\n    |     ^^^^ expected pattern\n= note: expected pattern\n= note: found token: LiteralNull",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A3.js",
+      "path": "test/language/types/null/S8.2_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/null/S8.2_A3.js",
+      "path": "test/language/types/null/S8.2_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/8.5.1.js",
+      "path": "test/language/types/number/8.5.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/8.5.1.js",
+      "path": "test/language/types/number/8.5.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A1.js",
+      "path": "test/language/types/number/S8.5_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A1.js",
+      "path": "test/language/types/number/S8.5_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A10_T1.js",
+      "path": "test/language/types/number/S8.5_A10_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A10_T1.js",
+      "path": "test/language/types/number/S8.5_A10_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A10_T2.js",
+      "path": "test/language/types/number/S8.5_A10_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: assignment to non-writable global property",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: assignment to non-writable global property"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/number/S8.5_A11_T1.js",
+      "path": "test/language/types/number/S8.5_A11_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A11_T1.js",
+      "path": "test/language/types/number/S8.5_A11_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A11_T2.js",
+      "path": "test/language/types/number/S8.5_A11_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A11_T2.js",
+      "path": "test/language/types/number/S8.5_A11_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A12.1.js",
+      "path": "test/language/types/number/S8.5_A12.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A12.1.js",
+      "path": "test/language/types/number/S8.5_A12.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A12.2.js",
+      "path": "test/language/types/number/S8.5_A12.2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A12.2.js",
+      "path": "test/language/types/number/S8.5_A12.2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A13_T2.js",
+      "path": "test/language/types/number/S8.5_A13_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A13_T2.js",
+      "path": "test/language/types/number/S8.5_A13_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A14_T1.js",
+      "path": "test/language/types/number/S8.5_A14_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A14_T1.js",
+      "path": "test/language/types/number/S8.5_A14_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A14_T2.js",
+      "path": "test/language/types/number/S8.5_A14_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A14_T2.js",
+      "path": "test/language/types/number/S8.5_A14_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A2.1.js",
+      "path": "test/language/types/number/S8.5_A2.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A2.1.js",
+      "path": "test/language/types/number/S8.5_A2.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A2.2.js",
+      "path": "test/language/types/number/S8.5_A2.2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A2.2.js",
+      "path": "test/language/types/number/S8.5_A2.2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A3.js",
+      "path": "test/language/types/number/S8.5_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A3.js",
+      "path": "test/language/types/number/S8.5_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A4_T1.js",
+      "path": "test/language/types/number/S8.5_A4_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A4_T1.js",
+      "path": "test/language/types/number/S8.5_A4_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A4_T2.js",
+      "path": "test/language/types/number/S8.5_A4_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: assignment to non-writable global property",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: assignment to non-writable global property"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/number/S8.5_A5.js",
+      "path": "test/language/types/number/S8.5_A5.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A5.js",
+      "path": "test/language/types/number/S8.5_A5.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A6.js",
+      "path": "test/language/types/number/S8.5_A6.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A6.js",
+      "path": "test/language/types/number/S8.5_A6.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A7.js",
+      "path": "test/language/types/number/S8.5_A7.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A7.js",
+      "path": "test/language/types/number/S8.5_A7.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A8.js",
+      "path": "test/language/types/number/S8.5_A8.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A8.js",
+      "path": "test/language/types/number/S8.5_A8.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/number/S8.5_A9.js",
+      "path": "test/language/types/number/S8.5_A9.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.1_A1.js",
+      "path": "test/language/types/object/S8.6.1_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.1_A2.js",
+      "path": "test/language/types/object/S8.6.1_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.1_A2.js",
+      "path": "test/language/types/object/S8.6.1_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.1_A3.js",
+      "path": "test/language/types/object/S8.6.1_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A1.js",
+      "path": "test/language/types/object/S8.6.2_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "value is not callable\n\nat language/types/object/S8.6.2_A1.js:208:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing built-in prototype method (Object/Number/Boolean prototype surface incomplete)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/object/S8.6.2_A1.js",
+      "path": "test/language/types/object/S8.6.2_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "value is not callable\n\nat language/types/object/S8.6.2_A1.js:210:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing built-in prototype method (Object/Number/Boolean prototype surface incomplete)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/object/S8.6.2_A2.js",
+      "path": "test/language/types/object/S8.6.2_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A2.js",
+      "path": "test/language/types/object/S8.6.2_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A3.js",
+      "path": "test/language/types/object/S8.6.2_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A3.js",
+      "path": "test/language/types/object/S8.6.2_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A4.js",
+      "path": "test/language/types/object/S8.6.2_A4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A4.js",
+      "path": "test/language/types/object/S8.6.2_A4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T1.js",
+      "path": "test/language/types/object/S8.6.2_A5_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T1.js",
+      "path": "test/language/types/object/S8.6.2_A5_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T2.js",
+      "path": "test/language/types/object/S8.6.2_A5_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T2.js",
+      "path": "test/language/types/object/S8.6.2_A5_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T3.js",
+      "path": "test/language/types/object/S8.6.2_A5_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T3.js",
+      "path": "test/language/types/object/S8.6.2_A5_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T4.js",
+      "path": "test/language/types/object/S8.6.2_A5_T4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A5_T4.js",
+      "path": "test/language/types/object/S8.6.2_A5_T4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A6.js",
+      "path": "test/language/types/object/S8.6.2_A6.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A6.js",
+      "path": "test/language/types/object/S8.6.2_A6.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A7.js",
+      "path": "test/language/types/object/S8.6.2_A7.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A7.js",
+      "path": "test/language/types/object/S8.6.2_A7.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6.2_A8.js",
+      "path": "test/language/types/object/S8.6.2_A8.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "value is not callable\n\nat language/types/object/S8.6.2_A8.js:205:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing built-in prototype method (Object/Number/Boolean prototype surface incomplete)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/object/S8.6.2_A8.js",
+      "path": "test/language/types/object/S8.6.2_A8.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "value is not callable\n\nat language/types/object/S8.6.2_A8.js:207:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing built-in prototype method (Object/Number/Boolean prototype surface incomplete)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/object/S8.6_A2_T1.js",
+      "path": "test/language/types/object/S8.6_A2_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A2_T1.js",
+      "path": "test/language/types/object/S8.6_A2_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A2_T2.js",
+      "path": "test/language/types/object/S8.6_A2_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A2_T2.js",
+      "path": "test/language/types/object/S8.6_A2_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A3_T1.js",
+      "path": "test/language/types/object/S8.6_A3_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A3_T1.js",
+      "path": "test/language/types/object/S8.6_A3_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A3_T2.js",
+      "path": "test/language/types/object/S8.6_A3_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A3_T2.js",
+      "path": "test/language/types/object/S8.6_A3_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A4_T1.js",
+      "path": "test/language/types/object/S8.6_A4_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/object/S8.6_A4_T1.js",
+      "path": "test/language/types/object/S8.6_A4_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-1-s.js",
+      "path": "test/language/types/reference/8.7.2-1-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-2-s.js",
+      "path": "test/language/types/reference/8.7.2-2-s.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-2-s.js",
+      "path": "test/language/types/reference/8.7.2-2-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-3-1-s.js",
+      "path": "test/language/types/reference/8.7.2-3-1-s.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-3-1-s.js",
+      "path": "test/language/types/reference/8.7.2-3-1-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-3-a-1gs.js",
+      "path": "test/language/types/reference/8.7.2-3-a-1gs.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-3-a-2gs.js",
+      "path": "test/language/types/reference/8.7.2-3-a-2gs.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-3-s.js",
+      "path": "test/language/types/reference/8.7.2-3-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-4-s.js",
+      "path": "test/language/types/reference/8.7.2-4-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-5-s.js",
+      "path": "test/language/types/reference/8.7.2-5-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "value is not callable\n\nat language/types/reference/8.7.2-5-s.js:208:9",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing built-in prototype method (Object/Number/Boolean prototype surface incomplete)"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "onlyStrict"
+        ],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/reference/8.7.2-6-s.js",
+      "path": "test/language/types/reference/8.7.2-6-s.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-6-s.js",
+      "path": "test/language/types/reference/8.7.2-6-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-7-s.js",
+      "path": "test/language/types/reference/8.7.2-7-s.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-7-s.js",
+      "path": "test/language/types/reference/8.7.2-7-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-8-s.js",
+      "path": "test/language/types/reference/8.7.2-8-s.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/8.7.2-8-s.js",
+      "path": "test/language/types/reference/8.7.2-8-s.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.1_A1.js",
+      "path": "test/language/types/reference/S8.7.1_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.1_A1.js",
+      "path": "test/language/types/reference/S8.7.1_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.1_A2.js",
+      "path": "test/language/types/reference/S8.7.1_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A1_T1.js",
+      "path": "test/language/types/reference/S8.7.2_A1_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/reference/S8.7.2_A1_T1.js:207:1\n  |\n207 | 'litera'=1;\n    | ^^^^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A1_T1.js",
+      "path": "test/language/types/reference/S8.7.2_A1_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/reference/S8.7.2_A1_T1.js:209:1\n  |\n209 | 'litera'=1;\n    | ^^^^^^^^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A1_T2.js",
+      "path": "test/language/types/reference/S8.7.2_A1_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/reference/S8.7.2_A1_T2.js:207:1\n  |\n207 | 1=1;\n    | ^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A1_T2.js",
+      "path": "test/language/types/reference/S8.7.2_A1_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0003]: invalid assignment target\n --> language/types/reference/S8.7.2_A1_T2.js:209:1\n  |\n209 | 1=1;\n    | ^ invalid assignment target",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A2.js",
+      "path": "test/language/types/reference/S8.7.2_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A2.js",
+      "path": "test/language/types/reference/S8.7.2_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A3.js",
+      "path": "test/language/types/reference/S8.7.2_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7.2_A3.js",
+      "path": "test/language/types/reference/S8.7.2_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A1.js",
+      "path": "test/language/types/reference/S8.7_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A1.js",
+      "path": "test/language/types/reference/S8.7_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A2.js",
+      "path": "test/language/types/reference/S8.7_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A2.js",
+      "path": "test/language/types/reference/S8.7_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A3.js",
+      "path": "test/language/types/reference/S8.7_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A3.js",
+      "path": "test/language/types/reference/S8.7_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A4.js",
+      "path": "test/language/types/reference/S8.7_A4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A4.js",
+      "path": "test/language/types/reference/S8.7_A4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A5_T1.js",
+      "path": "test/language/types/reference/S8.7_A5_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A5_T2.js",
+      "path": "test/language/types/reference/S8.7_A5_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A6.js",
+      "path": "test/language/types/reference/S8.7_A6.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A6.js",
+      "path": "test/language/types/reference/S8.7_A6.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A7.js",
+      "path": "test/language/types/reference/S8.7_A7.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/S8.7_A7.js",
+      "path": "test/language/types/reference/S8.7_A7.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/get-value-prop-base-primitive-realm.js",
+      "path": "test/language/types/reference/get-value-prop-base-primitive-realm.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "$262 is not defined\n\nat language/types/reference/get-value-prop-base-primitive-realm.js:204:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing test262 host binding $262"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "cross-realm",
+          "Symbol"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/reference/get-value-prop-base-primitive-realm.js",
+      "path": "test/language/types/reference/get-value-prop-base-primitive-realm.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "$262 is not defined\n\nat language/types/reference/get-value-prop-base-primitive-realm.js:206:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing test262 host binding $262"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "cross-realm",
+          "Symbol"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/reference/get-value-prop-base-primitive.js",
+      "path": "test/language/types/reference/get-value-prop-base-primitive.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "Symbol"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/get-value-prop-base-primitive.js",
+      "path": "test/language/types/reference/get-value-prop-base-primitive.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "Symbol"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/put-value-prop-base-primitive-realm.js",
+      "path": "test/language/types/reference/put-value-prop-base-primitive-realm.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "$262 is not defined\n\nat language/types/reference/put-value-prop-base-primitive-realm.js:204:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing test262 host binding $262"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "cross-realm",
+          "Symbol",
+          "Proxy"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/reference/put-value-prop-base-primitive-realm.js",
+      "path": "test/language/types/reference/put-value-prop-base-primitive-realm.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "$262 is not defined\n\nat language/types/reference/put-value-prop-base-primitive-realm.js:206:1",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "missing test262 host binding $262"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "cross-realm",
+          "Symbol",
+          "Proxy"
+        ],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/reference/put-value-prop-base-primitive.js",
+      "path": "test/language/types/reference/put-value-prop-base-primitive.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "Symbol",
+          "Proxy"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/reference/put-value-prop-base-primitive.js",
+      "path": "test/language/types/reference/put-value-prop-base-primitive.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [
+          "Symbol",
+          "Proxy"
+        ],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A1.js",
+      "path": "test/language/types/string/S8.4_A1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A1.js",
+      "path": "test/language/types/string/S8.4_A1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A10.js",
+      "path": "test/language/types/string/S8.4_A10.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A10.js",
+      "path": "test/language/types/string/S8.4_A10.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A11.js",
+      "path": "test/language/types/string/S8.4_A11.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A11.js",
+      "path": "test/language/types/string/S8.4_A11.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A12.js",
+      "path": "test/language/types/string/S8.4_A12.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A12.js",
+      "path": "test/language/types/string/S8.4_A12.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T1.js",
+      "path": "test/language/types/string/S8.4_A13_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A13_T1.js:207:13\n  |\n207 | var str = ''';\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: Invalid",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T1.js",
+      "path": "test/language/types/string/S8.4_A13_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A13_T1.js:209:13\n  |\n209 | var str = ''';\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: Invalid",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T2.js",
+      "path": "test/language/types/string/S8.4_A13_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0010]: line terminator not allowed in string literal\n --> language/types/string/S8.4_A13_T2.js:207:13\n  |\n207 | var str = ';\n    |             ^ line terminator not allowed in string literal\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T2.js",
+      "path": "test/language/types/string/S8.4_A13_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0010]: line terminator not allowed in string literal\n --> language/types/string/S8.4_A13_T2.js:209:13\n  |\n209 | var str = ';\n    |             ^ line terminator not allowed in string literal\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T3.js",
+      "path": "test/language/types/string/S8.4_A13_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A13_T3.js:207:13\n  |\n207 | var str = '''';\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A13_T3.js",
+      "path": "test/language/types/string/S8.4_A13_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A13_T3.js:209:13\n  |\n209 | var str = '''';\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T1.js",
+      "path": "test/language/types/string/S8.4_A14_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0010]: line terminator not allowed in string literal\n --> language/types/string/S8.4_A14_T1.js:207:13\n  |\n207 | var str = \";\n    |             ^ line terminator not allowed in string literal\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T1.js",
+      "path": "test/language/types/string/S8.4_A14_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0010]: line terminator not allowed in string literal\n --> language/types/string/S8.4_A14_T1.js:209:13\n  |\n209 | var str = \";\n    |             ^ line terminator not allowed in string literal\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T2.js",
+      "path": "test/language/types/string/S8.4_A14_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A14_T2.js:207:13\n  |\n207 | var str = \"\"\";\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: Invalid",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T2.js",
+      "path": "test/language/types/string/S8.4_A14_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A14_T2.js:209:13\n  |\n209 | var str = \"\"\";\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: Invalid",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T3.js",
+      "path": "test/language/types/string/S8.4_A14_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A14_T3.js:207:13\n  |\n207 | var str = \"\"\"\";\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A14_T3.js",
+      "path": "test/language/types/string/S8.4_A14_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "negative",
+        "phase": "parse",
+        "type": "SyntaxError"
+      },
+      "outcome": "failed",
+      "error": "error[PS0002]: expected expression operator\n --> language/types/string/S8.4_A14_T3.js:209:13\n  |\n209 | var str = \"\"\"\";\n    |             ^^ expected expression operator\n= note: expected expression operator\n= note: found token: LiteralString",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": {
+          "phase": "parse",
+          "type": "SyntaxError"
+        }
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A2.js",
+      "path": "test/language/types/string/S8.4_A2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A2.js",
+      "path": "test/language/types/string/S8.4_A2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A3.js",
+      "path": "test/language/types/string/S8.4_A3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A3.js",
+      "path": "test/language/types/string/S8.4_A3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A4.js",
+      "path": "test/language/types/string/S8.4_A4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A4.js",
+      "path": "test/language/types/string/S8.4_A4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A5.js",
+      "path": "test/language/types/string/S8.4_A5.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A5.js",
+      "path": "test/language/types/string/S8.4_A5.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A6.1.js",
+      "path": "test/language/types/string/S8.4_A6.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A6.1.js",
+      "path": "test/language/types/string/S8.4_A6.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A6.2.js",
+      "path": "test/language/types/string/S8.4_A6.2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A6.2.js",
+      "path": "test/language/types/string/S8.4_A6.2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.1.js",
+      "path": "test/language/types/string/S8.4_A7.1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.1.js",
+      "path": "test/language/types/string/S8.4_A7.1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.2.js",
+      "path": "test/language/types/string/S8.4_A7.2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.2.js",
+      "path": "test/language/types/string/S8.4_A7.2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.3.js",
+      "path": "test/language/types/string/S8.4_A7.3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.3.js",
+      "path": "test/language/types/string/S8.4_A7.3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.4.js",
+      "path": "test/language/types/string/S8.4_A7.4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A7.4.js",
+      "path": "test/language/types/string/S8.4_A7.4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A8.js",
+      "path": "test/language/types/string/S8.4_A8.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A8.js",
+      "path": "test/language/types/string/S8.4_A8.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T1.js",
+      "path": "test/language/types/string/S8.4_A9_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T1.js",
+      "path": "test/language/types/string/S8.4_A9_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T2.js",
+      "path": "test/language/types/string/S8.4_A9_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T2.js",
+      "path": "test/language/types/string/S8.4_A9_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T3.js",
+      "path": "test/language/types/string/S8.4_A9_T3.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/string/S8.4_A9_T3.js",
+      "path": "test/language/types/string/S8.4_A9_T3.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A1_T1.js",
+      "path": "test/language/types/undefined/S8.1_A1_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A1_T1.js",
+      "path": "test/language/types/undefined/S8.1_A1_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A1_T2.js",
+      "path": "test/language/types/undefined/S8.1_A1_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A1_T2.js",
+      "path": "test/language/types/undefined/S8.1_A1_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A2_T1.js",
+      "path": "test/language/types/undefined/S8.1_A2_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A2_T1.js",
+      "path": "test/language/types/undefined/S8.1_A2_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A2_T2.js",
+      "path": "test/language/types/undefined/S8.1_A2_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A2_T2.js",
+      "path": "test/language/types/undefined/S8.1_A2_T2.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A3_T1.js",
+      "path": "test/language/types/undefined/S8.1_A3_T1.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A3_T1.js",
+      "path": "test/language/types/undefined/S8.1_A3_T1.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A3_T2.js",
+      "path": "test/language/types/undefined/S8.1_A3_T2.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "failed",
+      "error": "unimplemented: assignment to non-writable global property",
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "unimplemented: assignment to non-writable global property"
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [
+          "noStrict"
+        ],
+        "features": [],
+        "negative": null
+      },
+      "mismatched": true,
+      "expected_mismatch": true
+    },
+    {
+      "id": "language/types/undefined/S8.1_A4.js",
+      "path": "test/language/types/undefined/S8.1_A4.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A4.js",
+      "path": "test/language/types/undefined/S8.1_A4.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A5.js",
+      "path": "test/language/types/undefined/S8.1_A5.js",
+      "variant": "non_strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    },
+    {
+      "id": "language/types/undefined/S8.1_A5.js",
+      "path": "test/language/types/undefined/S8.1_A5.js",
+      "variant": "strict",
+      "expected": {
+        "kind": "pass"
+      },
+      "outcome": "passed",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true,
+        "from_manifest": false
+      },
+      "metadata": {
+        "includes": [],
+        "flags": [],
+        "features": [],
+        "negative": null
+      }
+    }
+  ]
+}

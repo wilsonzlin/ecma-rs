@@ -33,14 +33,8 @@ fn dispatch_routes_to_rust_function() {
   .unwrap();
   assert_eq!(out, Value::Number(1.0));
 
-  let out = dispatch_native_call(
-    NativeFunctionId(1),
-    &mut vm,
-    &mut scope,
-    Value::Null,
-    &[],
-  )
-  .unwrap();
+  let out =
+    dispatch_native_call(NativeFunctionId(1), &mut vm, &mut scope, Value::Null, &[]).unwrap();
   assert_eq!(out, Value::Number(2.0));
 
   let out = dispatch_native_construct(

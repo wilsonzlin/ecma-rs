@@ -23,4 +23,3 @@ impl JsSymbol {
     self.description
   }
 }
-

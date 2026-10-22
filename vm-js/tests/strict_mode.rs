@@ -24,10 +24,7 @@ fn strict_directive_makes_unbound_assignment_throw_reference_error() {
     .unwrap_or_else(|| panic!("expected thrown exception, got {err:?}"));
 
   // Root the thrown value across any subsequent allocations / script runs.
-  let root: RootId = rt
-    .heap_mut()
-    .add_root(thrown)
-    .expect("root thrown value");
+  let root: RootId = rt.heap_mut().add_root(thrown).expect("root thrown value");
 
   let Value::Object(thrown_obj) = thrown else {
     panic!("expected thrown value to be an object, got {thrown:?}");

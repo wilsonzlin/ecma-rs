@@ -1,0 +1,691 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembersOptionality2.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembersOptionality2.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2850,
+      "rust_ms": 1952,
+      "tsc_ms": 897,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 711,
+            "end": 712,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 723,
+            "end": 724,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 731,
+            "end": 732,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 735,
+            "end": 736,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 747,
+            "end": 748,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 759,
+            "end": 760,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 767,
+            "end": 768,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 771,
+            "end": 772,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 783,
+            "end": 784,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 795,
+            "end": 796,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 803,
+            "end": 804,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 807,
+            "end": 808,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1271,
+            "end": 1272,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1292,
+            "end": 1293,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1309,
+            "end": 1310,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1313,
+            "end": 1314,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1330,
+            "end": 1331,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1334,
+            "end": 1335,
+            "severity": "error",
+            "message": "a is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1350,
+            "end": 1351,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1354,
+            "end": 1355,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1371,
+            "end": 1372,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1375,
+            "end": 1376,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1392,
+            "end": 1393,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1396,
+            "end": 1397,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1413,
+            "end": 1414,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1433,
+            "end": 1434,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1437,
+            "end": 1438,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1454,
+            "end": 1455,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1458,
+            "end": 1459,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1475,
+            "end": 1476,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1479,
+            "end": 1480,
+            "severity": "error",
+            "message": "f is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2741",
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1514,
+            "end": 1515,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 707,
+            "end": 708,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 711,
+            "end": 712,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 719,
+            "end": 720,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 723,
+            "end": 724,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 731,
+            "end": 732,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 735,
+            "end": 736,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 743,
+            "end": 744,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 747,
+            "end": 748,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 755,
+            "end": 756,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 759,
+            "end": 760,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 767,
+            "end": 768,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 771,
+            "end": 772,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 779,
+            "end": 780,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 783,
+            "end": 784,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 791,
+            "end": 792,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 795,
+            "end": 796,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2559,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 803,
+            "end": 804,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 807,
+            "end": 808,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1267,
+            "end": 1268,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1271,
+            "end": 1272,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1288,
+            "end": 1289,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1292,
+            "end": 1293,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1309,
+            "end": 1310,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1313,
+            "end": 1314,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1334,
+            "end": 1335,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1350,
+            "end": 1351,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1354,
+            "end": 1355,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1371,
+            "end": 1372,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1375,
+            "end": 1376,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1392,
+            "end": 1393,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1396,
+            "end": 1397,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1433,
+            "end": 1434,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1437,
+            "end": 1438,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1454,
+            "end": 1455,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1458,
+            "end": 1459,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2741,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1475,
+            "end": 1476,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+            "start": 1479,
+            "end": 1480,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 6 diagnostic(s); first missing: /assignmentCompatWithObjectMembersOptionality2.ts:707-708 [2559]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2559,
+          "file": "/assignmentCompatWithObjectMembersOptionality2.ts",
+          "start": 707,
+          "end": 708,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 15/64) rust=[TC2008,TC2008,TC2008,TC2008,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TC2008,TC2008,TC2008,TC2008,TS2454,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2454,TS2454] tsc=[2559,2454,2559,2454,2559,2454,2559,2454,2559,2454,2559,2454,2559,2454,2559,2454,2559,2454,2741,2454,2741,2454,2741,2454,2454,2741,2454,2741,2454,2741,2454,2741,2454,2741,2454,2741,2454]"
+      },
+      "mismatched": true
+    }
+  ]
+}

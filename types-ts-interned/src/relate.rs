@@ -2,6 +2,7 @@ use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::eval::ConditionalAssignability;
 use crate::eval::EvaluatorCacheStats;
 use crate::eval::EvaluatorCaches;
+use crate::eval::EvaluatorLimits;
 use crate::eval::ExpandedType;
 use crate::eval::TypeEvaluator;
 use crate::eval::TypeExpander as EvalTypeExpander;
@@ -19,12 +20,13 @@ use crate::SignatureId;
 use crate::TypeId;
 use crate::TypeKind;
 use crate::TypeOptions;
+use crate::TypeParamId;
 use crate::TypeStore;
 use bitflags::bitflags;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "tracing")]
@@ -61,6 +63,16 @@ bitflags! {
     /// conditional type evaluation needs to ask the relation engine whether the
     /// evaluated `check` type is assignable to the evaluated `extends` type.
     const SKIP_NORMALIZE = 1 << 1;
+    /// Treat free type parameters as nominal markers (only identical ids, or
+    /// `any`, relate into them). Used while comparing signature params/returns
+    /// after generic instantiation so `string[]` is not assignable to `T[]`
+    /// (`assignmentCompatWithCallSignatures4.ts` `a2 = b2` / `b3 = a3`).
+    const STRICT_TYPE_PARAMS = 1 << 2;
+    /// tsc `comparableRelation`: an optional source property may satisfy a
+    /// required target property (no strictNullChecks optionality gate). Used
+    /// by the type-assertion overlap check, which tsc runs under the
+    /// *comparable* relation, not assignability (`optionalProperties01.ts`).
+    const COMPARABLE_OPTIONALITY = 1 << 3;
   }
 }
 
@@ -88,7 +100,9 @@ const MAX_REASON_NODES: usize = 256;
 pub struct RelationLimits {
   /// Maximum number of relation steps before conservatively assuming success.
   ///
-  /// Use `usize::MAX` to disable step tracking entirely (the default).
+  /// Use [`RelationLimits::UNLIMITED_STEP_LIMIT`] (`usize::MAX`) to disable step
+  /// tracking. The default is finite so pathological graphs degrade to a
+  /// deterministic budget hit instead of unbounded work / memory growth.
   pub step_limit: usize,
   /// Maximum recursion depth for `RelateCtx::relate_internal`.
   pub max_relation_depth: usize,
@@ -105,7 +119,14 @@ pub struct RelationLimits {
 }
 
 impl RelationLimits {
-  pub const DEFAULT_STEP_LIMIT: usize = usize::MAX;
+  /// Sentinel that disables step tracking entirely.
+  pub const UNLIMITED_STEP_LIMIT: usize = usize::MAX;
+  /// Generous default step budget for production checking.
+  ///
+  /// Calibrated above the 401-case upstream shard sample (shards 0/1/3/4) while
+  /// still bounding pathological conformance cases (e.g. `parserRealSource12.ts`)
+  /// so they terminate with a budget diagnostic instead of multi-GB RSS.
+  pub const DEFAULT_STEP_LIMIT: usize = 50_000;
   pub const DEFAULT_MAX_RELATION_DEPTH: usize = 64;
   pub const DEFAULT_MAX_IN_PROGRESS: usize = 128;
   pub const DEFAULT_MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
@@ -148,9 +169,32 @@ enum PropKeyKind {
   Symbol,
 }
 
+/// Structural variance of a type parameter measured from its member positions
+/// (tsc `getStructuralVariancesOfTypeParameters`, simplified): covariant when
+/// it only appears in output positions, contravariant in parameter positions,
+/// invariant when both (or when the position is unanalyzable), bivariant when
+/// unused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MeasuredVariance {
+  Covariant,
+  Contravariant,
+  Invariant,
+  Unused,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct VarianceMeasurement {
+  seen_output: bool,
+  seen_input: bool,
+}
+
 pub struct RelateHooks<'a> {
   pub expander: Option<&'a dyn RelateTypeExpander>,
   pub is_same_origin_private_member: Option<&'a dyn Fn(&Property, &Property) -> bool>,
+  /// Cooperative stop flag (e.g. host cancellation). When set, the relation
+  /// engine takes the same conservative short-circuit path as a step-budget
+  /// hit — it never panics.
+  pub should_stop: Option<&'a AtomicBool>,
 }
 
 impl<'a> fmt::Debug for RelateHooks<'a> {
@@ -164,6 +208,10 @@ impl<'a> fmt::Debug for RelateHooks<'a> {
         "is_same_origin_private_member",
         &self.is_same_origin_private_member.as_ref().map(|_| "Fn"),
       )
+      .field(
+        "should_stop",
+        &self.should_stop.map(|flag| flag.load(Ordering::Relaxed)),
+      )
       .finish()
   }
 }
@@ -173,6 +221,7 @@ impl<'a> Default for RelateHooks<'a> {
     Self {
       expander: None,
       is_same_origin_private_member: None,
+      should_stop: None,
     }
   }
 }
@@ -245,6 +294,14 @@ pub trait RelateTypeExpander {
   fn type_param_decls(&self, _def: DefId) -> Option<Arc<[TypeParamDecl]>> {
     None
   }
+
+  /// Whether `def` is a TypeScript `enum` type definition.
+  ///
+  /// Distinct enums are not mutually assignable even when they expand to the
+  /// same numeric/string literal union (tsc treats enums as nominal here).
+  fn is_enum_type(&self, _def: DefId) -> bool {
+    false
+  }
 }
 
 struct RelateExpanderAdapter<'a> {
@@ -273,6 +330,8 @@ pub struct RelateCtx<'a> {
   reason_budget: RefCell<ReasonBudget>,
   limits: RelationLimits,
   steps: Cell<usize>,
+  /// Set when a step budget or [`RelateHooks::should_stop`] short-circuits.
+  budget_exceeded: Cell<bool>,
 }
 
 impl<'a> fmt::Debug for RelateCtx<'a> {
@@ -390,6 +449,7 @@ impl<'a> RelateCtx<'a> {
       reason_budget: RefCell::new(ReasonBudget::default()),
       limits: RelationLimits::default(),
       steps: Cell::new(0),
+      budget_exceeded: Cell::new(false),
     }
   }
 
@@ -409,6 +469,24 @@ impl<'a> RelateCtx<'a> {
 
   pub fn step_count(&self) -> usize {
     self.steps.get()
+  }
+
+  /// True if a step budget or cooperative `should_stop` hook short-circuited.
+  pub fn budget_exceeded(&self) -> bool {
+    self.budget_exceeded.get()
+  }
+
+  /// Clear the budget-exceeded latch (e.g. between independent top-level queries).
+  pub fn clear_budget_exceeded(&self) {
+    self.budget_exceeded.set(false);
+  }
+
+  /// True when the cooperative stop flag is currently set (without latching).
+  pub fn stop_requested(&self) -> bool {
+    self
+      .hooks
+      .should_stop
+      .is_some_and(|flag| flag.load(Ordering::Relaxed))
   }
 
   pub fn cache_stats(&self) -> CacheStats {
@@ -477,6 +555,31 @@ impl<'a> RelateCtx<'a> {
         dst,
         RelationKind::Assignable,
         RelationMode::SKIP_NORMALIZE,
+        false,
+        0,
+      )
+      .result
+  }
+
+  /// Assignability with an explicit [`RelationMode`] (e.g.
+  /// `STRICT_TYPE_PARAMS` for nominal free-type-parameter comparisons in
+  /// interface-extends checks).
+  pub fn is_assignable_with_mode(&self, src: TypeId, dst: TypeId, mode: RelationMode) -> bool {
+    self
+      .relate_internal(src, dst, RelationKind::Assignable, mode, false, 0)
+      .result
+  }
+
+  /// tsc `comparableRelation` for type-assertion overlap checks: assignability
+  /// with the strictNullChecks optionality gate relaxed (an optional source
+  /// property may satisfy a required target property; raw types compared).
+  pub fn is_assignable_comparable_optionality(&self, src: TypeId, dst: TypeId) -> bool {
+    self
+      .relate_internal(
+        src,
+        dst,
+        RelationKind::Assignable,
+        RelationMode::COMPARABLE_OPTIONALITY,
         false,
         0,
       )
@@ -607,9 +710,9 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
-    if depth == 0 && self.limits.step_limit != RelationLimits::DEFAULT_STEP_LIMIT {
-      self.steps.set(0);
-    }
+    // Steps accumulate across the lifetime of this `RelateCtx` so a body that
+    // issues many top-level relations cannot bypass the budget by resetting
+    // per call. Callers that want a fresh budget should build a new context.
 
     let key = RelationKey {
       src,
@@ -661,7 +764,21 @@ impl<'a> RelateCtx<'a> {
       };
     }
 
-    if self.limits.step_limit != RelationLimits::DEFAULT_STEP_LIMIT {
+    // Cooperative stop (cancellation) — observe before doing more work.
+    if self
+      .hooks
+      .should_stop
+      .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+      self.budget_exceeded.set(true);
+      let record = record && self.take_reason_slot();
+      return RelationResult {
+        result: true,
+        reason: self.join_reasons(record, key, Vec::new(), true, Some("stopped".into()), depth),
+      };
+    }
+
+    if self.limits.step_limit != RelationLimits::UNLIMITED_STEP_LIMIT {
       let current_steps = self.steps.get();
       if current_steps >= self.limits.step_limit {
         #[cfg(feature = "tracing")]
@@ -669,6 +786,7 @@ impl<'a> RelateCtx<'a> {
           let span = tracing::Span::current();
           span.record("step_limit_hit", &true);
         }
+        self.budget_exceeded.set(true);
         let record = record && self.take_reason_slot();
         return RelationResult {
           result: true,
@@ -988,7 +1106,135 @@ impl<'a> RelateCtx<'a> {
                 ),
               };
             }
+
+            // Unannotated type parameters on the same generic symbol: measure
+            // each parameter's variance structurally (tsc
+            // `getStructuralVariancesOfTypeParameters`, simplified) instead of
+            // blindly expanding or blindly comparing invariantly.
+            //
+            // Structural expand of `C<number>` vs `C<string>` recurses through
+            // methods whose parameters mention `C<number>` / `C<string>` /
+            // `C<T>`, hits the in-progress cycle assumption, and can incorrectly
+            // treat the instantiations as mutually assignable (missing TS2322
+            // on `a = b` / `b = a` after dual generic class instantiations).
+            // Blind invariance is the opposite failure: covariant interfaces
+            // like `Box<Bar> → Box<Foo>` and `IteratorYieldResult<Bar> →
+            // IteratorYieldResult<Foo>` falsely fail. Position analysis (output
+            // positions covariant, parameter positions contravariant, both →
+            // invariant) matches tsc's measured variance for these shapes
+            // without any recursive relate call.
+            if !saw_variance {
+              let mut ok = true;
+              for (idx, (src_arg, dst_arg)) in src_args
+                .iter()
+                .copied()
+                .zip(dst_args.iter().copied())
+                .enumerate()
+              {
+                let measured = self.measured_type_param_variance(src_def, idx);
+                let record = record && self.take_reason_slot();
+                let related = match measured {
+                  MeasuredVariance::Covariant => self.relate_internal(
+                    src_arg,
+                    dst_arg,
+                    RelationKind::Assignable,
+                    mode,
+                    record,
+                    depth + 1,
+                  ),
+                  MeasuredVariance::Contravariant => self.relate_internal(
+                    dst_arg,
+                    src_arg,
+                    RelationKind::Assignable,
+                    mode,
+                    record,
+                    depth + 1,
+                  ),
+                  MeasuredVariance::Invariant => {
+                    let forward = self.relate_internal(
+                      src_arg,
+                      dst_arg,
+                      RelationKind::Assignable,
+                      mode,
+                      record,
+                      depth + 1,
+                    );
+                    if !forward.result {
+                      forward
+                    } else {
+                      self.relate_internal(
+                        dst_arg,
+                        src_arg,
+                        RelationKind::Assignable,
+                        mode,
+                        record,
+                        depth + 1,
+                      )
+                    }
+                  }
+                  MeasuredVariance::Unused => continue,
+                };
+                if record {
+                  children.push(related.reason);
+                }
+                if !related.result {
+                  ok = false;
+                  break;
+                }
+              }
+              let record = record && self.take_reason_slot();
+              return RelationResult {
+                result: ok,
+                reason: self.join_reasons(
+                  record,
+                  key,
+                  children,
+                  ok,
+                  Some("measured variance of type arguments".into()),
+                  depth,
+                ),
+              };
+            }
           }
+        }
+      }
+    }
+
+    // Distinct enum types stay nominal: both may expand to the same literal
+    // union (`0`), but `E` is not assignable to `E2`. Must run before
+    // normalize/expand collapses both refs to that shared literal.
+    {
+      let src_kind = self.store.type_kind(src);
+      let dst_kind = self.store.type_kind(dst);
+      if let (
+        TypeKind::Ref {
+          def: src_def,
+          args: src_args,
+        },
+        TypeKind::Ref {
+          def: dst_def,
+          args: dst_args,
+        },
+      ) = (&src_kind, &dst_kind)
+      {
+        if src_args.is_empty()
+          && dst_args.is_empty()
+          && src_def != dst_def
+          && self.is_enum_type(*src_def)
+          && self.is_enum_type(*dst_def)
+        {
+          let record = record && self.take_reason_slot();
+          return RelationResult {
+            result: false,
+            reason: self.join_reasons(
+              record,
+              key,
+              Vec::new(),
+              false,
+              Some("distinct enum types".into()),
+              depth,
+            ),
+          };
         }
       }
     }
@@ -998,11 +1244,31 @@ impl<'a> RelateCtx<'a> {
       let normalized_dst = self.normalize_type(dst);
       if normalized_src != src || normalized_dst != dst {
         let record = record && self.take_reason_slot();
+        // Lib `Array<T>` (and similar) callables re-intern expanded method
+        // graphs on every evaluate pass, so normalize never reaches a
+        // fixpoint. Further normalize recursion then hits `max_relation_depth`
+        // and incorrectly assumes assignable (`assignmentCompatWithCallSignatures3`
+        // `b12 = a12`). After one normalize on Callable↔Callable, relate
+        // structurally without re-normalizing.
+        let next_mode = match (
+          self.store.type_kind(src),
+          self.store.type_kind(dst),
+          self.store.type_kind(normalized_src),
+          self.store.type_kind(normalized_dst),
+        ) {
+          (
+            TypeKind::Callable { .. },
+            TypeKind::Callable { .. },
+            TypeKind::Callable { .. },
+            TypeKind::Callable { .. },
+          ) => mode | RelationMode::SKIP_NORMALIZE,
+          _ => mode,
+        };
         let related = self.relate_internal(
           normalized_src,
           normalized_dst,
           RelationKind::Assignable,
-          mode,
+          next_mode,
           record,
           depth + 1,
         );
@@ -1042,7 +1308,7 @@ impl<'a> RelateCtx<'a> {
       );
     }
 
-    if let Some(res) = self.assignable_special(&src_kind, &dst_kind) {
+    if let Some(res) = self.assignable_special(&src_kind, &dst_kind, mode) {
       let record = record && self.take_reason_slot();
       return RelationResult {
         result: res,
@@ -1767,7 +2033,7 @@ impl<'a> RelateCtx<'a> {
     false
   }
 
-  fn assignable_special(&self, src: &TypeKind, dst: &TypeKind) -> Option<bool> {
+  fn assignable_special(&self, src: &TypeKind, dst: &TypeKind, mode: RelationMode) -> Option<bool> {
     let opts = &self.options;
     if !opts.strict_null_checks
       && (matches!(src, TypeKind::Null | TypeKind::Undefined)
@@ -1788,10 +2054,25 @@ impl<'a> RelateCtx<'a> {
 
     match (src, dst) {
       (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => Some(a == b),
-      // Unresolved type parameters are treated conservatively as `unknown` to
-      // avoid spurious incompatibilities during overload checking. They accept
-      // any source but are only assignable to top types when used as sources.
-      (_, TypeKind::TypeParam(_)) => Some(true),
+      // `void` (and `never`) must not flow into a free type parameter — otherwise
+      // `<T>(x: T) => void` is wrongly assignable to `<T>(x: T) => T`
+      // (`assignmentCompatWithCallSignatures5.ts`: `b3 = a3`).
+      (TypeKind::Void | TypeKind::Never, TypeKind::TypeParam(_)) => Some(false),
+      // Under strictNullChecks, `null`/`undefined` are not assignable to a type
+      // parameter even when unconstrained (`undefinedAssignableToEveryType.ts`,
+      // `nullAssignableToEveryType.ts`: `x = undefined` for `x: T`).
+      (TypeKind::Null | TypeKind::Undefined, TypeKind::TypeParam(_)) if opts.strict_null_checks => {
+        Some(false)
+      }
+      // Free type parameters are nominal as assignment *targets*: only `any`
+      // (or the same param via the arm above) may flow in. Treating them as
+      // `unknown` wrongly allowed `Derived` → `T extends Derived`
+      // (`assignmentCompatWithNumericIndexer3.ts`: `a = b` inside `foo<T>`).
+      (_, TypeKind::TypeParam(_)) => Some(matches!(src, TypeKind::Any)),
+      // Fall through for compound targets so `T <: T | U` can use union-target
+      // rules (`optionalPropertyAssignableToStringIndexSignature.ts`:
+      // `{ k1?: T }` → `{ [k: string]: T | number }`).
+      (TypeKind::TypeParam(_), TypeKind::Union(_) | TypeKind::Intersection(_)) => None,
       (TypeKind::TypeParam(_), _) => Some(matches!(dst, TypeKind::Any | TypeKind::Unknown)),
       // `NoInfer<T>` is transparent for assignability. The evaluator usually
       // erases `NoInfer`, but keep this shortcut for SKIP_NORMALIZE checks.
@@ -1801,14 +2082,14 @@ impl<'a> RelateCtx<'a> {
           ty,
         },
         _,
-      ) => self.assignable_special(&self.store.type_kind(*ty), dst),
+      ) => self.assignable_special(&self.store.type_kind(*ty), dst, mode),
       (
         _,
         TypeKind::Intrinsic {
           kind: IntrinsicKind::NoInfer,
           ty,
         },
-      ) => self.assignable_special(src, &self.store.type_kind(*ty)),
+      ) => self.assignable_special(src, &self.store.type_kind(*ty), mode),
       // `BuiltinIteratorReturn` behaves like `any` in TypeScript.
       (
         TypeKind::Intrinsic {
@@ -1850,16 +2131,31 @@ impl<'a> RelateCtx<'a> {
         | TypeKind::KeyOf(_) => None,
         _ => Some(false),
       },
+      // `never` must be handled before `any`: tsc rejects `any` ↛ `never`
+      // (e.g. `x1[k] = … as any` when the write target reduces to `never`).
+      (TypeKind::Never, _) => Some(true),
+      (_, TypeKind::Never) => Some(false),
       (TypeKind::Any, _) | (_, TypeKind::Any) => Some(true),
       (TypeKind::Unknown, TypeKind::Unknown) => Some(true),
       (_, TypeKind::Unknown) => Some(true),
       (TypeKind::Unknown, _) => Some(false),
+      (TypeKind::EmptyObject, TypeKind::Object(obj)) => {
+        // tsc: the `{}` type is assignable to object types whose members are
+        // all optional (incl. the `object` keyword — an empty structural
+        // object — and index-signature-only targets like `Record<string, T>`),
+        // but not to shapes with required properties or call/construct
+        // signatures (`'a' in {}`, `parserForStatement9.ts`).
+        let shape = self.store.shape(self.store.object(*obj).shape);
+        Some(
+          shape.properties.iter().all(|prop| prop.data.optional)
+            && shape.call_signatures.is_empty()
+            && shape.construct_signatures.is_empty(),
+        )
+      }
       (TypeKind::EmptyObject, _) => Some(matches!(
         dst,
         TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject
       )),
-      (TypeKind::Never, _) => Some(true),
-      (_, TypeKind::Never) => Some(matches!(src, TypeKind::Never)),
       (TypeKind::Void, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::Undefined) | (TypeKind::Undefined, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::EmptyObject) => Some(!opts.strict_null_checks),
@@ -2524,23 +2820,132 @@ impl<'a> RelateCtx<'a> {
     for dst_sig in dst_overloads {
       let dst_sig_data = self.store.signature(*dst_sig);
       let mut matched = None;
-      for src_sig in src_overloads {
-        let src_sig_data = self.store.signature(*src_sig);
-        let related = self.relate_signature(
-          *src_sig,
-          *dst_sig,
-          &src_sig_data,
-          &dst_sig_data,
-          mode,
-          record,
-          depth + 1,
-        );
-        if related.result {
-          matched = Some(related.reason);
-          break;
+      // Overload set → unconstrained generic target (tsc
+      // `signaturesRelatedTo` overload matrix + `getErasedSignature`).
+      // - Non-generic overloads: instantiate the target from each overload;
+      //   when that rejects, fall back to relating against the *erased* target
+      //   (type args become `any`) — the shape `b16 = a16` needs (erased
+      //   `(a: T) => T` ≡ `(a: any) => any` matches incompatible-overload
+      //   parameters; `…CallSignatures4`).
+      // - Generic overloads: erase target type params to `any` and relate
+      //   (collectively covers the target; `…CallSignatures5` `b17 = a17`).
+      // A single source signature must not use this path (`b = a` / lone
+      // `<T extends Derived>…` stay TS2322).
+      if src_overloads.len() > 1
+        && !dst_sig_data.type_params.is_empty()
+        && dst_sig_data
+          .type_params
+          .iter()
+          .all(|tp| tp.constraint.is_none())
+      {
+        let any_ty = self.store.primitive_ids().any;
+        let mut dst_any = dst_sig_data.clone();
+        let mut any_bindings: HashMap<TypeParamId, TypeId> = HashMap::new();
+        for tp in &dst_any.type_params {
+          any_bindings.insert(tp.id, any_ty);
         }
-        if record {
-          children.push(related.reason);
+        for param in &mut dst_any.params {
+          param.ty = self.subst_type(param.ty, &any_bindings, 0);
+        }
+        dst_any.ret = self.subst_type(dst_any.ret, &any_bindings, 0);
+        if let Some(this) = dst_any.this_param.as_mut() {
+          *this = self.subst_type(*this, &any_bindings, 0);
+        }
+        dst_any.type_params.clear();
+        let dst_any_id = self.store.intern_signature(dst_any.clone());
+
+        for src_sig in src_overloads {
+          let src_sig_data = self.store.signature(*src_sig);
+          if src_sig_data.type_params.is_empty() {
+            let inst_opt = self.instantiate_signature_against_target(
+              *dst_sig,
+              &dst_sig_data,
+              &src_sig_data,
+              depth + 1,
+            );
+            let mut related_opt = None;
+            if let Some((inst_id, inst)) = inst_opt {
+              let related = self.relate_signature(
+                *src_sig,
+                inst_id,
+                &src_sig_data,
+                &inst,
+                mode,
+                record,
+                depth + 1,
+              );
+              if related.result {
+                related_opt = Some(related);
+              } else if record {
+                children.push(related.reason);
+              }
+            }
+            // tsc overload matrix (checker.ts `signaturesRelatedTo`): each
+            // source signature is also related against the *erased* target
+            // (`getErasedSignature` — type args become `any`). This accepts
+            // shapes instantiation rejects when the source parameter itself
+            // carries incompatible overloads (`assignmentCompatWithCallSignatures4.ts`:
+            // `b16 = a16` — `(a: T) => T` erased to `(a: any) => any` matches
+            // `{ (a: number): number; (a?: number): number }`).
+            if related_opt.is_none() {
+              let related = self.relate_signature(
+                *src_sig,
+                dst_any_id,
+                &src_sig_data,
+                &dst_any,
+                mode,
+                record,
+                depth + 1,
+              );
+              if related.result {
+                related_opt = Some(related);
+              } else if record {
+                children.push(related.reason);
+              }
+            }
+            if let Some(related) = related_opt {
+              matched = Some(related.reason);
+              break;
+            }
+          } else {
+            let related = self.relate_signature(
+              *src_sig,
+              dst_any_id,
+              &src_sig_data,
+              &dst_any,
+              mode,
+              record,
+              depth + 1,
+            );
+            if related.result {
+              matched = Some(related.reason);
+              break;
+            }
+            if record {
+              children.push(related.reason);
+            }
+          }
+        }
+      }
+      if matched.is_none() {
+        for src_sig in src_overloads {
+          let src_sig_data = self.store.signature(*src_sig);
+          let related = self.relate_signature(
+            *src_sig,
+            *dst_sig,
+            &src_sig_data,
+            &dst_sig_data,
+            mode,
+            record,
+            depth + 1,
+          );
+          if related.result {
+            matched = Some(related.reason);
+            break;
+          }
+          if record {
+            children.push(related.reason);
+          }
         }
       }
       if matched.is_none() {
@@ -2645,6 +3050,506 @@ impl<'a> RelateCtx<'a> {
     )
   }
 
+  /// Instantiate equal-arity generic `src` onto `dst`'s type parameters.
+  /// Expand every type parameter to its constraint (or `unknown`) on both
+  /// signatures and erase generics. Used when equal-arity identity mapping
+  /// cannot relate constraints that are structurally compatible only after
+  /// expansion (`<S extends C[]>(x: S)` vs `<T extends C>(x: T[])`).
+  fn expand_generic_signatures_to_constraints(
+    &self,
+    src_id: SignatureId,
+    src: &Signature,
+    dst_id: SignatureId,
+    dst: &Signature,
+  ) -> Option<(SignatureId, Signature, (SignatureId, Signature))> {
+    if src.type_params.is_empty() || dst.type_params.is_empty() {
+      return None;
+    }
+    let unknown = self.store.primitive_ids().unknown;
+    let expand = |sig_id: SignatureId, sig: &Signature| {
+      let mut bindings: HashMap<TypeParamId, TypeId> = HashMap::new();
+      for tp in &sig.type_params {
+        let c = tp
+          .constraint
+          .map(|c| self.subst_type(c, &bindings, 0))
+          .unwrap_or(unknown);
+        bindings.insert(tp.id, c);
+      }
+      let mut out = self.store.signature(sig_id);
+      for param in &mut out.params {
+        param.ty = self.subst_type(param.ty, &bindings, 0);
+      }
+      out.ret = self.subst_type(out.ret, &bindings, 0);
+      if let Some(this) = out.this_param.as_mut() {
+        *this = self.subst_type(*this, &bindings, 0);
+      }
+      out.type_params.clear();
+      let id = self.store.intern_signature(out.clone());
+      (id, out)
+    };
+    let (src_exp_id, src_exp) = expand(src_id, src);
+    let (dst_exp_id, dst_exp) = expand(dst_id, dst);
+    Some((src_exp_id, src_exp, (dst_exp_id, dst_exp)))
+  }
+
+  fn instantiate_generic_source_to_generic_target(
+    &self,
+    src_id: SignatureId,
+    src: &Signature,
+    dst_id: SignatureId,
+    dst: &Signature,
+    depth: usize,
+  ) -> Option<(SignatureId, Signature, (SignatureId, Signature))> {
+    if depth > 32 || src.type_params.len() != dst.type_params.len() || src.type_params.is_empty() {
+      return None;
+    }
+    // Map every source type param to the corresponding destination param first
+    // so source constraints are compared in the destination's type-param space
+    // (`assignmentCompatWithGenericCallSignatures4.ts`: `I2<T>` vs `I2<I2<T>>`).
+    let mut bindings: HashMap<TypeParamId, TypeId> = HashMap::new();
+    for (s_tp, d_tp) in src.type_params.iter().zip(dst.type_params.iter()) {
+      let d_ty = self.store.intern_type(TypeKind::TypeParam(d_tp.id));
+      bindings.insert(s_tp.id, d_ty);
+    }
+    let unknown = self.store.primitive_ids().unknown;
+    // One-level expansion: `T extends C` means `T` is assignable to `C`, so
+    // constraint checks may replace destination type params with their
+    // constraints (`T extends I2<T>` ⇒ `I2<T> <: I2<I2<T>>` via `T ↦ I2<T>`).
+    let mut dest_constraint_expand: HashMap<TypeParamId, TypeId> = HashMap::new();
+    for d_tp in dst.type_params.iter() {
+      if let Some(c) = d_tp.constraint {
+        dest_constraint_expand.insert(d_tp.id, self.subst_type(c, &bindings, 0));
+      }
+    }
+    for (s_tp, d_tp) in src.type_params.iter().zip(dst.type_params.iter()) {
+      // Destination type param must satisfy the source constraint: the
+      // destination constraint (or `unknown` if unconstrained) is assignable
+      // to the source constraint (destination is at least as specific).
+      let Some(src_constraint) = s_tp.constraint else {
+        continue;
+      };
+      let src_constraint = self.subst_type(src_constraint, &bindings, 0);
+      let dst_constraint = d_tp
+        .constraint
+        .map(|c| self.subst_type(c, &bindings, 0))
+        .unwrap_or(unknown);
+      let ok = self
+        .relate_internal(
+          dst_constraint,
+          src_constraint,
+          RelationKind::Assignable,
+          RelationMode::empty(),
+          false,
+          depth + 1,
+        )
+        .result
+        || (!dest_constraint_expand.is_empty()
+          && self
+            .relate_internal(
+              self.subst_type(dst_constraint, &dest_constraint_expand, 0),
+              src_constraint,
+              RelationKind::Assignable,
+              RelationMode::empty(),
+              false,
+              depth + 1,
+            )
+            .result);
+      if !ok {
+        return None;
+      }
+    }
+
+    let mut inst = self.store.signature(src_id);
+    for param in &mut inst.params {
+      param.ty = self.subst_type(param.ty, &bindings, 0);
+    }
+    inst.ret = self.subst_type(inst.ret, &bindings, 0);
+    if let Some(this) = inst.this_param.as_mut() {
+      *this = self.subst_type(*this, &bindings, 0);
+    }
+    inst.type_params.clear();
+    let inst_id = self.store.intern_signature(inst.clone());
+
+    let mut dst_erased = self.store.signature(dst_id);
+    dst_erased.type_params.clear();
+    let dst_erased_id = self.store.intern_signature(dst_erased.clone());
+    Some((inst_id, inst, (dst_erased_id, dst_erased)))
+  }
+
+  /// Infer `src`'s type parameters from `dst` and return an instantiated
+  /// non-generic signature, or `None` when inference/constraints fail.
+  fn instantiate_signature_against_target(
+    &self,
+    src_id: SignatureId,
+    src: &Signature,
+    dst: &Signature,
+    depth: usize,
+  ) -> Option<(SignatureId, Signature)> {
+    if depth > 32 {
+      return None;
+    }
+    let free: HashSet<TypeParamId> = src.type_params.iter().map(|tp| tp.id).collect();
+    let mut bindings: HashMap<TypeParamId, TypeId> = HashMap::new();
+    let param_len = src.params.len().min(dst.params.len());
+    for i in 0..param_len {
+      self.infer_type_args_into(src.params[i].ty, dst.params[i].ty, &free, &mut bindings, 0);
+    }
+    self.infer_type_args_into(src.ret, dst.ret, &free, &mut bindings, 0);
+
+    let unknown = self.store.primitive_ids().unknown;
+    for tp in &src.type_params {
+      // Prefer an inferred binding. If none, keep the type param as itself —
+      // declaration lowering often reuses the same `TypeParamId` across
+      // signatures, so `infer` early-returns on identical ids and would
+      // otherwise fall through to `unknown` (`…CallSignatures5` `a6`/`b6`).
+      let inferred = bindings.get(&tp.id).copied();
+      let constraint = tp.constraint.map(|c| self.subst_type(c, &bindings, 0));
+      let chosen = match (inferred, constraint) {
+        (Some(inferred), Some(constraint)) => {
+          // When the inference is a type parameter, check that parameter's
+          // constraint (from either signature) instead of the bare marker.
+          let inferred_for_constraint = match self.store.type_kind(inferred) {
+            TypeKind::TypeParam(id) => src
+              .type_params
+              .iter()
+              .chain(dst.type_params.iter())
+              .find(|d| d.id == id)
+              .and_then(|d| d.constraint)
+              .map(|c| self.subst_type(c, &bindings, 0))
+              .unwrap_or(unknown),
+            _ => inferred,
+          };
+          if self
+            .relate_internal(
+              inferred_for_constraint,
+              constraint,
+              RelationKind::Assignable,
+              RelationMode::empty(),
+              false,
+              depth + 1,
+            )
+            .result
+          {
+            inferred
+          } else if self
+            .relate_internal(
+              constraint,
+              inferred_for_constraint,
+              RelationKind::Assignable,
+              RelationMode::empty(),
+              false,
+              depth + 1,
+            )
+            .result
+          {
+            // Inference is a supertype of the constraint (common when the
+            // target return is wider than `T extends C`). Clamp to the
+            // constraint (`…CallSignatures4` `a12 = b12`: return infers
+            // `Array<Derived>` for `T extends Array<Derived2>`).
+            constraint
+          } else {
+            return None;
+          }
+        }
+        (Some(inferred), None) => inferred,
+        // No inference and constrained: keep the marker when the destination
+        // *mentions* the same type parameter — substituting the constraint
+        // would break marker identity (`<T extends Derived>(a: T): T` vs
+        // `(a: T) => T` — `callSignatureAssignabilityInInheritance3.ts` `I9`).
+        (None, Some(constraint)) => {
+          if self.signature_mentions_type_param(dst, tp.id) {
+            self.store.intern_type(TypeKind::TypeParam(tp.id))
+          } else {
+            constraint
+          }
+        }
+        (None, None) => self.store.intern_type(TypeKind::TypeParam(tp.id)),
+      };
+      bindings.insert(tp.id, chosen);
+    }
+
+    let mut inst = self.store.signature(src_id);
+    for param in &mut inst.params {
+      param.ty = self.subst_type(param.ty, &bindings, 0);
+    }
+    inst.ret = self.subst_type(inst.ret, &bindings, 0);
+    if let Some(this) = inst.this_param.as_mut() {
+      *this = self.subst_type(*this, &bindings, 0);
+    }
+    inst.type_params.clear();
+    let inst_id = self.store.intern_signature(inst.clone());
+    Some((inst_id, inst))
+  }
+
+  /// True when `sig`'s parameter, return, or `this` types mention `id` —
+  /// shallow structural walk over immediate interned children (no `Ref`
+  /// expansion), so it terminates on arbitrary types; depth-capped.
+  fn signature_mentions_type_param(&self, sig: &Signature, id: TypeParamId) -> bool {
+    const MAX_DEPTH: usize = 16;
+    fn go(store: &TypeStore, ty: TypeId, id: TypeParamId, depth: usize) -> bool {
+      if depth > MAX_DEPTH {
+        return false;
+      }
+      match store.type_kind(ty) {
+        TypeKind::TypeParam(p) => p == id,
+        TypeKind::Union(members) | TypeKind::Intersection(members) => {
+          members.iter().any(|&m| go(store, m, id, depth + 1))
+        }
+        TypeKind::Array { ty, .. } => go(store, ty, id, depth + 1),
+        TypeKind::Tuple(elems) => elems.iter().any(|e| go(store, e.ty, id, depth + 1)),
+        TypeKind::Ref { args, .. } => args.iter().any(|&a| go(store, a, id, depth + 1)),
+        TypeKind::Callable { overloads } => overloads.iter().any(|&s| {
+          let sig = store.signature(s);
+          sig.params.iter().any(|p| go(store, p.ty, id, depth + 1))
+            || go(store, sig.ret, id, depth + 1)
+            || sig.this_param.is_some_and(|t| go(store, t, id, depth + 1))
+        }),
+        TypeKind::Intrinsic { ty, .. } => go(store, ty, id, depth + 1),
+        _ => false,
+      }
+    }
+    sig
+      .params
+      .iter()
+      .any(|p| go(self.store.as_ref(), p.ty, id, 0))
+      || go(self.store.as_ref(), sig.ret, id, 0)
+      || sig
+        .this_param
+        .is_some_and(|t| go(self.store.as_ref(), t, id, 0))
+  }
+
+  fn infer_type_args_into(
+    &self,
+    pattern: TypeId,
+    concrete: TypeId,
+    free: &HashSet<TypeParamId>,
+    bindings: &mut HashMap<TypeParamId, TypeId>,
+    depth: usize,
+  ) {
+    if depth > 24 || pattern == concrete {
+      return;
+    }
+    let pattern = self.store.canon(pattern);
+    let concrete = self.store.canon(concrete);
+    match (
+      self.store.type_kind(pattern),
+      self.store.type_kind(concrete),
+    ) {
+      (TypeKind::TypeParam(id), _) if free.contains(&id) => {
+        bindings.entry(id).or_insert(concrete);
+      }
+      (TypeKind::Array { ty: p, .. }, TypeKind::Array { ty: c, .. }) => {
+        self.infer_type_args_into(p, c, free, bindings, depth + 1);
+      }
+      (TypeKind::Tuple(p_elems), TypeKind::Tuple(c_elems)) => {
+        for (p, c) in p_elems.iter().zip(c_elems.iter()) {
+          self.infer_type_args_into(p.ty, c.ty, free, bindings, depth + 1);
+        }
+      }
+      (TypeKind::Union(p_members), TypeKind::Union(c_members))
+        if p_members.len() == c_members.len() =>
+      {
+        for (p, c) in p_members.iter().zip(c_members.iter()) {
+          self.infer_type_args_into(*p, *c, free, bindings, depth + 1);
+        }
+      }
+      (TypeKind::Callable { overloads: p_over }, TypeKind::Callable { overloads: c_over }) => {
+        if let (Some(p_sig), Some(c_sig)) = (p_over.first(), c_over.first()) {
+          let p = self.store.signature(*p_sig);
+          let c = self.store.signature(*c_sig);
+          let n = p.params.len().min(c.params.len());
+          for i in 0..n {
+            self.infer_type_args_into(p.params[i].ty, c.params[i].ty, free, bindings, depth + 1);
+          }
+          self.infer_type_args_into(p.ret, c.ret, free, bindings, depth + 1);
+        }
+      }
+      // Callable pattern against an object type whose shape carries call
+      // signatures (overloaded function-typed members): infer from the first
+      // call signature, mirroring the `Object` arm
+      // (`assignmentCompatWithCallSignatures4.ts` `b16 = a16`: `(a: T) => T`
+      // vs `{ (a: number): number; (a?: number): number }`).
+      (TypeKind::Callable { overloads: p_over }, TypeKind::Object(c_obj)) => {
+        let c_shape = self.store.shape(self.store.object(c_obj).shape);
+        if let (Some(p_sig), Some(c_sig)) = (p_over.first(), c_shape.call_signatures.first()) {
+          let p = self.store.signature(*p_sig);
+          let c = self.store.signature(*c_sig);
+          let n = p.params.len().min(c.params.len());
+          for i in 0..n {
+            self.infer_type_args_into(p.params[i].ty, c.params[i].ty, free, bindings, depth + 1);
+          }
+          self.infer_type_args_into(p.ret, c.ret, free, bindings, depth + 1);
+        }
+      }
+      (TypeKind::Object(p_obj), TypeKind::Object(c_obj)) => {
+        let p_shape = self.store.shape(self.store.object(p_obj).shape);
+        let c_shape = self.store.shape(self.store.object(c_obj).shape);
+        if let (Some(p_sig), Some(c_sig)) = (
+          p_shape.call_signatures.first(),
+          c_shape.call_signatures.first(),
+        ) {
+          let p = self.store.signature(*p_sig);
+          let c = self.store.signature(*c_sig);
+          let n = p.params.len().min(c.params.len());
+          for i in 0..n {
+            self.infer_type_args_into(p.params[i].ty, c.params[i].ty, free, bindings, depth + 1);
+          }
+          self.infer_type_args_into(p.ret, c.ret, free, bindings, depth + 1);
+        }
+        for p_prop in &p_shape.properties {
+          if let Some(c_prop) = c_shape.properties.iter().find(|c| c.key == p_prop.key) {
+            self.infer_type_args_into(p_prop.data.ty, c_prop.data.ty, free, bindings, depth + 1);
+          }
+        }
+      }
+      (
+        TypeKind::Ref {
+          def: p_def,
+          args: p_args,
+        },
+        TypeKind::Ref {
+          def: c_def,
+          args: c_args,
+        },
+      ) if p_def == c_def => {
+        for (p, c) in p_args.iter().zip(c_args.iter()) {
+          self.infer_type_args_into(*p, *c, free, bindings, depth + 1);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn subst_type(
+    &self,
+    ty: TypeId,
+    bindings: &HashMap<TypeParamId, TypeId>,
+    depth: usize,
+  ) -> TypeId {
+    if depth > 24 || bindings.is_empty() {
+      return ty;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::TypeParam(id) => bindings.get(&id).copied().unwrap_or(ty),
+      TypeKind::Array { ty: elem, readonly } => {
+        let elem = self.subst_type(elem, bindings, depth + 1);
+        self
+          .store
+          .intern_type(TypeKind::Array { ty: elem, readonly })
+      }
+      TypeKind::Tuple(elems) => {
+        let elems = elems
+          .into_iter()
+          .map(|mut e| {
+            e.ty = self.subst_type(e.ty, bindings, depth + 1);
+            e
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Tuple(elems))
+      }
+      TypeKind::Union(members) => {
+        let members = members
+          .into_iter()
+          .map(|m| self.subst_type(m, bindings, depth + 1))
+          .collect();
+        self.store.union(members)
+      }
+      TypeKind::Intersection(members) => {
+        let members = members
+          .into_iter()
+          .map(|m| self.subst_type(m, bindings, depth + 1))
+          .collect();
+        self.store.intersection(members)
+      }
+      TypeKind::Callable { overloads } => {
+        let overloads = overloads
+          .into_iter()
+          .map(|sig_id| {
+            let mut sig = self.store.signature(sig_id);
+            for param in &mut sig.params {
+              param.ty = self.subst_type(param.ty, bindings, depth + 1);
+            }
+            sig.ret = self.subst_type(sig.ret, bindings, depth + 1);
+            if let Some(this) = sig.this_param.as_mut() {
+              *this = self.subst_type(*this, bindings, depth + 1);
+            }
+            // Nested signatures keep their own type params; only substitute
+            // free outer params that appear in their types.
+            self.store.intern_signature(sig)
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Callable { overloads })
+      }
+      TypeKind::Object(obj) => {
+        let obj_ty = self.store.object(obj);
+        let shape = self.store.shape(obj_ty.shape);
+        let mut new_shape = Shape::new();
+        new_shape.properties = shape
+          .properties
+          .iter()
+          .map(|p| {
+            let mut p = p.clone();
+            p.data.ty = self.subst_type(p.data.ty, bindings, depth + 1);
+            p
+          })
+          .collect();
+        new_shape.indexers = shape
+          .indexers
+          .iter()
+          .map(|idx| {
+            let mut idx = idx.clone();
+            idx.key_type = self.subst_type(idx.key_type, bindings, depth + 1);
+            idx.value_type = self.subst_type(idx.value_type, bindings, depth + 1);
+            idx
+          })
+          .collect();
+        new_shape.call_signatures = shape
+          .call_signatures
+          .iter()
+          .map(|sig_id| {
+            let mut sig = self.store.signature(*sig_id);
+            for param in &mut sig.params {
+              param.ty = self.subst_type(param.ty, bindings, depth + 1);
+            }
+            sig.ret = self.subst_type(sig.ret, bindings, depth + 1);
+            if let Some(this) = sig.this_param.as_mut() {
+              *this = self.subst_type(*this, bindings, depth + 1);
+            }
+            self.store.intern_signature(sig)
+          })
+          .collect();
+        new_shape.construct_signatures = shape
+          .construct_signatures
+          .iter()
+          .map(|sig_id| {
+            let mut sig = self.store.signature(*sig_id);
+            for param in &mut sig.params {
+              param.ty = self.subst_type(param.ty, bindings, depth + 1);
+            }
+            sig.ret = self.subst_type(sig.ret, bindings, depth + 1);
+            if let Some(this) = sig.this_param.as_mut() {
+              *this = self.subst_type(*this, bindings, depth + 1);
+            }
+            self.store.intern_signature(sig)
+          })
+          .collect();
+        let shape_id = self.store.intern_shape(new_shape);
+        let obj_id = self
+          .store
+          .intern_object(crate::ObjectType { shape: shape_id });
+        self.store.intern_type(TypeKind::Object(obj_id))
+      }
+      TypeKind::Ref { def, args } => {
+        let args = args
+          .into_iter()
+          .map(|a| self.subst_type(a, bindings, depth + 1))
+          .collect();
+        self.store.intern_type(TypeKind::Ref { def, args })
+      }
+      _ => ty,
+    }
+  }
+
   fn relate_signature(
     &self,
     src_id: SignatureId,
@@ -2678,7 +3583,134 @@ impl<'a> RelateCtx<'a> {
     let allow_bivariance =
       !self.options.strict_function_types || mode.contains(RelationMode::BIVARIANT_PARAMS);
 
-    if src.type_params.len() != dst.type_params.len() {
+    // Contextual signature instantiation (tsc assignment): a generic source
+    // signature is assignable to a non-generic target when type args can be
+    // inferred from the target and the instantiated source relates
+    // (`assignmentCompatWithCallSignatures3.ts`: `a = b` for `<T>(x:T)=>T[]`).
+    if !src.type_params.is_empty() && dst.type_params.is_empty() {
+      if let Some((inst_id, inst)) =
+        self.instantiate_signature_against_target(src_id, src, dst, depth)
+      {
+        // CSI must keep permissive TypeParam-as-unknown relating — do not
+        // apply STRICT_TYPE_PARAMS (breaks `<U>(x:U)=>1` → `(x:number)=>void`).
+        return self.relate_signature(inst_id, dst_id, &inst, dst, mode, record, depth);
+      }
+      return RelationResult {
+        result: false,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("type parameters".into()),
+          depth,
+        ),
+      };
+    }
+
+    // Different-arity generics (both sides generic): match tsc
+    // `instantiateSignatureInContextOf` — instantiate only the *source* against
+    // the target (type params act as markers), then relate. Do not instantiate
+    // the destination and flip: that wrongly accepts `b11 = a11` / `b15 = a15`
+    // (`assignmentCompatWithCallSignatures5.ts`). Constrained target params are
+    // replaced by their constraints on both sides so `U extends Derived` relates
+    // to `Derived` (`a6`/`b6` both directions).
+    if src.type_params.len() != dst.type_params.len()
+      && !src.type_params.is_empty()
+      && !dst.type_params.is_empty()
+    {
+      if let Some((_inst_id, inst)) =
+        self.instantiate_signature_against_target(src_id, src, dst, depth)
+      {
+        let mut constraint_bindings: HashMap<TypeParamId, TypeId> = HashMap::new();
+        for tp in &dst.type_params {
+          if let Some(c) = tp.constraint {
+            let c = self.subst_type(c, &constraint_bindings, 0);
+            constraint_bindings.insert(tp.id, c);
+          }
+        }
+        let mut src_cmp = inst;
+        let mut dst_cmp = self.store.signature(dst_id);
+        if !constraint_bindings.is_empty() {
+          for param in &mut src_cmp.params {
+            param.ty = self.subst_type(param.ty, &constraint_bindings, depth);
+          }
+          src_cmp.ret = self.subst_type(src_cmp.ret, &constraint_bindings, depth);
+          if let Some(this) = src_cmp.this_param.as_mut() {
+            *this = self.subst_type(*this, &constraint_bindings, depth);
+          }
+          for param in &mut dst_cmp.params {
+            param.ty = self.subst_type(param.ty, &constraint_bindings, depth);
+          }
+          dst_cmp.ret = self.subst_type(dst_cmp.ret, &constraint_bindings, depth);
+          if let Some(this) = dst_cmp.this_param.as_mut() {
+            *this = self.subst_type(*this, &constraint_bindings, depth);
+          }
+        }
+        src_cmp.type_params.clear();
+        dst_cmp.type_params.clear();
+        let src_cmp_id = self.store.intern_signature(src_cmp.clone());
+        let dst_cmp_id = self.store.intern_signature(dst_cmp.clone());
+        // Remaining TypeParam markers must be nominal (`string[]` ≰ `T[]`).
+        let mode = mode | RelationMode::STRICT_TYPE_PARAMS;
+        return self.relate_signature(
+          src_cmp_id, dst_cmp_id, &src_cmp, &dst_cmp, mode, record, depth,
+        );
+      }
+      return RelationResult {
+        result: false,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("type parameters".into()),
+          depth,
+        ),
+      };
+    }
+    // One side non-generic (or its markers were already substituted away):
+    // fall through to the plain signature relate, where marker identity and
+    // the nominal type-param rules decide. A hard false for arity-mismatched
+    // *marker* counts wrongly rejects `<T>(x: (a: T) => T) => any[]` against
+    // `<T extends Derived>(x: <T extends Derived>(a: T): T) => any[]`
+    // (`callSignatureAssignabilityInInheritance3.ts`: `I9 extends A`).
+
+    // Equal-arity generics: instantiate the source type params to the
+    // destination's type params and compare the erased signatures. A more
+    // general source (`<T extends Base>`) is assignable to a more specific
+    // destination (`<T extends Derived>`) when each destination type param
+    // satisfies the corresponding source constraint
+    // (`assignmentCompatWithCallSignatures3.ts`: `a16 = b16`).
+    if !src.type_params.is_empty() {
+      if let Some((inst_id, inst, dst_erased)) =
+        self.instantiate_generic_source_to_generic_target(src_id, src, dst_id, dst, depth)
+      {
+        // Remaining TypeParam markers must be nominal (`string[]` ≰ `T[]`)
+        // (`assignmentCompatWithCallSignatures4.ts`: `a2 = b2` / `b3 = a3`).
+        let mode = mode | RelationMode::STRICT_TYPE_PARAMS;
+        return self.relate_signature(
+          inst_id,
+          dst_erased.0,
+          &inst,
+          &dst_erased.1,
+          mode,
+          record,
+          depth,
+        );
+      }
+      // Fallback when identity mapping rejects (constraints incomparable as
+      // bare types): expand each type param to its constraint and compare.
+      // Covers array-constraint vs element-array param shapes
+      // (`assignmentCompatWithGenericCallSignatures.ts`: `f`/`g` both ways).
+      if let Some((src_exp_id, src_exp, dst_exp)) =
+        self.expand_generic_signatures_to_constraints(src_id, src, dst_id, dst)
+      {
+        let mode = mode | RelationMode::STRICT_TYPE_PARAMS;
+        return self.relate_signature(
+          src_exp_id, dst_exp.0, &src_exp, &dst_exp.1, mode, record, depth,
+        );
+      }
       return RelationResult {
         result: false,
         reason: self.join_reasons(
@@ -2761,8 +3793,19 @@ impl<'a> RelateCtx<'a> {
     }
 
     let src_required = src.params.iter().filter(|p| !p.optional && !p.rest).count();
-    let dst_required = dst.params.iter().filter(|p| !p.optional && !p.rest).count();
-    if src_required > dst_required {
+    // tsc `compareSignaturesRelated`: the arity floor is
+    // `getMinArgumentCount(source) > getParameterCount(target)` — the source's
+    // *required* count against the target's *total* count, so optional
+    // destination parameters still absorb source required ones
+    // (`assignmentCompatWithCallSignatures4.ts`: `(a: any) => any` matches
+    // `(a?: number): number`).
+    let dst_total = dst.params.len();
+    let src_rest_index = src.params.iter().position(|p| p.rest);
+    let dst_rest_index = dst.params.iter().position(|p| p.rest);
+    // tsc: `(x: number) => R` is assignable to `(...args: number[]) => R` —
+    // a destination rest parameter absorbs source required params that would
+    // otherwise look like a higher required arity (`assignmentCompatWithCallSignaturesWithRestParameters`).
+    if src_required > dst_total && dst_rest_index.is_none() {
       return RelationResult {
         result: false,
         reason: self.join_reasons(
@@ -2777,8 +3820,6 @@ impl<'a> RelateCtx<'a> {
     }
 
     let prim = self.store.primitive_ids();
-    let src_rest_index = src.params.iter().position(|p| p.rest);
-    let dst_rest_index = dst.params.iter().position(|p| p.rest);
 
     let effective_param_type =
       |sig: &Signature, rest_index: Option<usize>, index: usize| match sig.params.get(index) {
@@ -2963,11 +4004,32 @@ impl<'a> RelateCtx<'a> {
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
+    // Share the relation step budget with nested evaluation so each
+    // `normalize_type` call cannot reset to a fresh full `step_limit`.
+    let eval_step_limit = if self.limits.step_limit == RelationLimits::UNLIMITED_STEP_LIMIT {
+      EvaluatorLimits::DEFAULT_STEP_LIMIT
+    } else {
+      self
+        .limits
+        .step_limit
+        .saturating_sub(self.steps.get())
+        .max(1)
+    };
     let mut evaluator =
       TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone())
-        .with_step_limit(self.limits.step_limit)
+        .with_step_limit(eval_step_limit)
         .with_conditional_assignability(self);
+    if let Some(flag) = self.hooks.should_stop {
+      evaluator = evaluator.with_should_stop(flag);
+    }
     let result = evaluator.evaluate(ty);
+    let used = evaluator.step_count();
+    if used > 0 && self.limits.step_limit != RelationLimits::UNLIMITED_STEP_LIMIT {
+      self.steps.set(self.steps.get().saturating_add(used));
+    }
+    if evaluator.budget_exceeded() {
+      self.budget_exceeded.set(true);
+    }
 
     #[cfg(feature = "tracing")]
     {
@@ -3009,9 +4071,32 @@ impl<'a> RelateCtx<'a> {
 
     let src_shape = self.store.shape(self.store.object(src_obj).shape);
     let dst_shape = self.store.shape(self.store.object(dst_obj).shape);
+    // tsc `getUnmatchedProperties` filters static private-identifier fields
+    // (`typeof C = class {}` stays OK). Instance `#x` is still required.
+    // Constructor/value types carry construct signatures; instance types do not.
+    let skip_unmatched_private_idents = !dst_shape.construct_signatures.is_empty();
 
     for dst_prop in &dst_shape.properties {
-      match self.find_property(&src_shape, &dst_prop.key) {
+      if skip_unmatched_private_idents && self.prop_key_is_private_ident(&dst_prop.key) {
+        // Still enforce brand compatibility when the private *is* present.
+        if let Some(src_prop) = self.find_private_ident_property(&src_shape, dst_prop) {
+          if !self.private_compatible(src_prop, dst_prop) {
+            return RelationResult {
+              result: false,
+              reason: self.join_reasons(
+                record,
+                key,
+                children,
+                false,
+                Some("private/protected property".into()),
+                depth,
+              ),
+            };
+          }
+        }
+        continue;
+      }
+      match self.find_property_for_private_brand(&src_shape, dst_prop) {
         Some(src_prop) => {
           if !self.private_compatible(src_prop, dst_prop) {
             return RelationResult {
@@ -3026,21 +4111,15 @@ impl<'a> RelateCtx<'a> {
               ),
             };
           }
-          if !dst_prop.data.readonly && src_prop.data.readonly {
-            return RelationResult {
-              result: false,
-              reason: self.join_reasons(
-                record,
-                key,
-                children,
-                false,
-                Some("readonly property".into()),
-                depth,
-              ),
-            };
-          }
+          // tsc erases `readonly` for property assignability: a readonly source
+          // property is assignable to a writable target (readonly only
+          // restricts *writes*). Array/tuple readonlyness is handled at the
+          // type-kind level (`ReadonlyArray` ↛ `Array`), not here.
 
-          if !dst_prop.data.optional && src_prop.data.optional {
+          if !dst_prop.data.optional
+            && src_prop.data.optional
+            && !mode.contains(RelationMode::COMPARABLE_OPTIONALITY)
+          {
             return RelationResult {
               result: false,
               reason: self.join_reasons(
@@ -3060,16 +4139,27 @@ impl<'a> RelateCtx<'a> {
             } else {
               mode
             };
-          let src_ty = self.optional_type(
-            src_prop.data.ty,
-            src_prop.data.optional,
-            OptionalFlavor::Property,
-          );
-          let dst_ty = self.optional_type(
-            dst_prop.data.ty,
-            dst_prop.data.optional,
-            OptionalFlavor::Property,
-          );
+          // tsc `comparableRelation` compares the *raw* property types (no
+          // undefined-union for optionality); assignability wraps it in.
+          let wrap_optional = !mode.contains(RelationMode::COMPARABLE_OPTIONALITY);
+          let src_ty = if wrap_optional {
+            self.optional_type(
+              src_prop.data.ty,
+              src_prop.data.optional,
+              OptionalFlavor::Property,
+            )
+          } else {
+            src_prop.data.ty
+          };
+          let dst_ty = if wrap_optional {
+            self.optional_type(
+              dst_prop.data.ty,
+              dst_prop.data.optional,
+              OptionalFlavor::Property,
+            )
+          } else {
+            dst_prop.data.ty
+          };
           let related = self.relate_internal(
             src_ty,
             dst_ty,
@@ -3197,8 +4287,13 @@ impl<'a> RelateCtx<'a> {
           if !self.indexer_accepts_prop(dst_index, &prop.key, mode, depth + 1) {
             continue;
           }
+          // tsc: optional props vs *string* index signatures check as `T`
+          // (missing key ≠ `undefined` value). Numeric index signatures keep
+          // optionality (`T | undefined`) so holes are rejected
+          // (`optionalPropertyAssignableToStringIndexSignature.ts`).
+          let treat_optional = prop.data.optional && !self.indexer_is_string_keyed(dst_index);
           let related = self.relate_internal(
-            self.optional_type(prop.data.ty, prop.data.optional, OptionalFlavor::Property),
+            self.optional_type(prop.data.ty, treat_optional, OptionalFlavor::Property),
             self.optional_type(dst_index.value_type, false, OptionalFlavor::IndexerValue),
             RelationKind::Assignable,
             mode,
@@ -3237,29 +4332,23 @@ impl<'a> RelateCtx<'a> {
       }
     }
 
-    for dst_sig in &dst_shape.call_signatures {
-      let dst_sig_data = self.store.signature(*dst_sig);
-      let mut matched = None;
-      for src_sig in &src_shape.call_signatures {
-        let src_sig_data = self.store.signature(*src_sig);
-        let related = self.relate_signature(
-          *src_sig,
-          *dst_sig,
-          &src_sig_data,
-          &dst_sig_data,
-          mode | RelationMode::BIVARIANT_PARAMS,
-          record,
-          depth + 1,
-        );
-        if related.result {
-          matched = Some(related.reason);
-          break;
-        }
-        if record {
-          children.push(related.reason);
-        }
+    // Call / construct signature sets share CSI + overload→generic rules with
+    // `relate_callable` (construct-only types are object shapes, not
+    // `TypeKind::Callable` — `…ConstructSignatures{3,5}`).
+    if !dst_shape.call_signatures.is_empty() {
+      let related = self.relate_callable(
+        src_id,
+        dst_id,
+        &src_shape.call_signatures,
+        &dst_shape.call_signatures,
+        mode | RelationMode::BIVARIANT_PARAMS,
+        record,
+        depth + 1,
+      );
+      if record {
+        children.push(related.reason);
       }
-      if matched.is_none() {
+      if !related.result {
         return RelationResult {
           result: false,
           reason: self.join_reasons(
@@ -3271,34 +4360,27 @@ impl<'a> RelateCtx<'a> {
             depth,
           ),
         };
-      } else if record {
-        children.push(matched.flatten());
       }
     }
 
-    for dst_sig in &dst_shape.construct_signatures {
-      let dst_sig_data = self.store.signature(*dst_sig);
-      let mut matched = None;
-      for src_sig in &src_shape.construct_signatures {
-        let src_sig_data = self.store.signature(*src_sig);
-        let related = self.relate_signature(
-          *src_sig,
-          *dst_sig,
-          &src_sig_data,
-          &dst_sig_data,
-          mode | RelationMode::BIVARIANT_PARAMS,
-          record,
-          depth + 1,
-        );
-        if related.result {
-          matched = Some(related.reason);
-          break;
-        }
-        if record {
-          children.push(related.reason);
-        }
+    if !dst_shape.construct_signatures.is_empty() {
+      // Construct signatures are compared with strict param variance under
+      // `strictFunctionTypes` (unlike methodful call sigs). Do not force
+      // `BIVARIANT_PARAMS` — that falsely accepted `a10 = b10` /
+      // `a11 = b11` in `…ConstructSignatures4.ts`.
+      let related = self.relate_callable(
+        src_id,
+        dst_id,
+        &src_shape.construct_signatures,
+        &dst_shape.construct_signatures,
+        mode,
+        record,
+        depth + 1,
+      );
+      if record {
+        children.push(related.reason);
       }
-      if matched.is_none() {
+      if !related.result {
         return RelationResult {
           result: false,
           reason: self.join_reasons(
@@ -3310,8 +4392,6 @@ impl<'a> RelateCtx<'a> {
             depth,
           ),
         };
-      } else if record {
-        children.push(matched.flatten());
       }
     }
 
@@ -3389,6 +4469,11 @@ impl<'a> RelateCtx<'a> {
     self.indexer_key_accepts_prop_kind(idx.key_type, key_kind, mode, depth)
   }
 
+  /// True when the indexer's key type is (canonically) `string`.
+  fn indexer_is_string_keyed(&self, idx: &Indexer) -> bool {
+    self.store.canon(idx.key_type) == self.store.primitive_ids().string
+  }
+
   fn find_matching_indexer<'b>(
     &self,
     shape: &'b Shape,
@@ -3412,10 +4497,19 @@ impl<'a> RelateCtx<'a> {
     depth: usize,
   ) -> bool {
     use PropKeyKind::*;
-    [String, Number, Symbol].into_iter().all(|kind| {
+    let direct = [String, Number, Symbol].into_iter().all(|kind| {
       !self.indexer_key_accepts_prop_kind(dst_key, kind, mode, depth)
         || self.indexer_key_accepts_prop_kind(src_key, kind, mode, depth)
-    })
+    });
+    if direct {
+      return true;
+    }
+    // tsc `indexSignaturesRelatedTo`: a *number* index signature satisfies a
+    // *string* target index signature
+    // (`targetInfo.keyType === stringType && getIndexInfoOfType(source, numberType)`),
+    // since numeric property names are string keys at runtime.
+    let prim = self.store.primitive_ids();
+    self.store.canon(dst_key) == prim.string && self.store.canon(src_key) == prim.number
   }
 
   fn indexer_key_specificity(&self, idx_key: TypeId, mode: RelationMode, depth: usize) -> u8 {
@@ -3488,6 +4582,56 @@ impl<'a> RelateCtx<'a> {
     }
   }
 
+  /// Private identifier property keys are stored as `#name` strings.
+  fn prop_key_is_private_ident(&self, key: &PropKey) -> bool {
+    match key {
+      PropKey::String(name) | PropKey::Symbol(name) => self.store.name(*name).starts_with('#'),
+      PropKey::Number(_) => false,
+    }
+  }
+
+  /// Brand-aware lookup for `#`-private-identifier properties. Shapes may hold
+  /// several same-spelled private slots from different declarations (a derived
+  /// class redeclaring the base's `#x`); the target's slot is the one with a
+  /// *compatible* brand (same declaring class), not merely the first by key.
+  /// Falls back to the first key match (the brand-error path) when no slot is
+  /// brand-compatible — tsc `isPropertyInTypeDerivedFrom` for private
+  /// identifiers.
+  fn find_private_ident_property<'b>(
+    &self,
+    shape: &'b Shape,
+    dst_prop: &Property,
+  ) -> Option<&'b Property> {
+    let mut first: Option<&'b Property> = None;
+    for prop in shape.properties.iter() {
+      if self.store.compare_prop_keys(&prop.key, &dst_prop.key) != std::cmp::Ordering::Equal {
+        continue;
+      }
+      if first.is_none() {
+        first = Some(prop);
+      }
+      if self.private_compatible(prop, dst_prop) {
+        return Some(prop);
+      }
+    }
+    first
+  }
+
+  /// Property lookup for a relate target prop: brand-aware for
+  /// `#`-private-identifier keys (see [`Self::find_private_ident_property`]),
+  /// plain first-match otherwise.
+  fn find_property_for_private_brand<'b>(
+    &self,
+    shape: &'b Shape,
+    dst_prop: &Property,
+  ) -> Option<&'b Property> {
+    if self.prop_key_is_private_ident(&dst_prop.key) {
+      self.find_private_ident_property(shape, dst_prop)
+    } else {
+      self.find_property(shape, &dst_prop.key)
+    }
+  }
+
   fn find_property<'b>(&self, shape: &'b Shape, key: &PropKey) -> Option<&'b Property> {
     let lookup = |key: &PropKey| {
       shape
@@ -3517,6 +4661,276 @@ impl<'a> RelateCtx<'a> {
       .hooks
       .expander
       .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, args))
+  }
+
+  /// Measured structural variance of the `param_index`-th type parameter of
+  /// `def` (tsc `getStructuralVariancesOfTypeParameters`, simplified): the
+  /// definition is expanded with its own parameter markers and member
+  /// positions are walked — property/return positions are covariant,
+  /// parameter positions contravariant; both → invariant; unanalyzable
+  /// positions (conditionals, mapped types, indexed access, cycles) stay
+  /// invariant. Unused parameters are bivariant.
+  fn measured_type_param_variance(&self, def: DefId, param_index: usize) -> MeasuredVariance {
+    let Some(expander) = self.hooks.expander else {
+      return MeasuredVariance::Invariant;
+    };
+    let Some(decls) = expander.type_param_decls(def) else {
+      return MeasuredVariance::Invariant;
+    };
+    let Some(decl) = decls.get(param_index) else {
+      return MeasuredVariance::Invariant;
+    };
+    let target = decl.id;
+    let markers: Vec<TypeId> = decls
+      .iter()
+      .map(|d| self.store.intern_type(TypeKind::TypeParam(d.id)))
+      .collect();
+    let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &markers) else {
+      return MeasuredVariance::Invariant;
+    };
+    let mut measurement = VarianceMeasurement {
+      seen_output: false,
+      seen_input: false,
+    };
+    let mut visited = std::collections::HashSet::new();
+    self.measure_param_positions(expanded, target, false, 0, &mut visited, &mut measurement);
+    match (measurement.seen_input, measurement.seen_output) {
+      (false, false) => MeasuredVariance::Unused,
+      (false, true) => MeasuredVariance::Covariant,
+      (true, false) => MeasuredVariance::Contravariant,
+      (true, true) => MeasuredVariance::Invariant,
+    }
+  }
+
+  /// Walk `ty` recording where the marker type parameter appears: output
+  /// positions (properties, index values, return types, tuple/array elements)
+  /// are covariant; flipped positions (call/construct signature parameters)
+  /// are contravariant. Complex or recursive positions conservatively mark
+  /// both (invariant), matching tsc's measured-variance fallback.
+  fn measure_param_positions(
+    &self,
+    ty: TypeId,
+    target: TypeParamId,
+    contra: bool,
+    depth: usize,
+    visited: &mut std::collections::HashSet<TypeId>,
+    measurement: &mut VarianceMeasurement,
+  ) {
+    const MAX_DEPTH: usize = 8;
+    if measurement.seen_input && measurement.seen_output {
+      return;
+    }
+    if depth > MAX_DEPTH {
+      // Analysis cut-off: stay sound by treating the parameter as invariant.
+      measurement.seen_input = true;
+      measurement.seen_output = true;
+      return;
+    }
+    let ty = self.store.canon(ty);
+    // Record marker occurrences per position *before* the cycle guard: the
+    // same marker TypeId legitimately appears in both parameter and return
+    // positions (`m(x: T): T`), and the guard must not swallow the second.
+    if let TypeKind::TypeParam(id) = self.store.type_kind(ty) {
+      if id == target {
+        if contra {
+          measurement.seen_input = true;
+        } else {
+          measurement.seen_output = true;
+        }
+      }
+      return;
+    }
+    if !visited.insert(ty) {
+      return;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::TypeParam(_) => {}
+      TypeKind::Callable { overloads } => {
+        for sig_id in overloads {
+          let sig = self.store.signature(sig_id);
+          for param in &sig.params {
+            self.measure_param_positions(
+              param.ty,
+              target,
+              !contra,
+              depth + 1,
+              visited,
+              measurement,
+            );
+          }
+          if let Some(this_param) = sig.this_param {
+            self.measure_param_positions(
+              this_param,
+              target,
+              !contra,
+              depth + 1,
+              visited,
+              measurement,
+            );
+          }
+          self.measure_param_positions(sig.ret, target, contra, depth + 1, visited, measurement);
+        }
+      }
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        for prop in &shape.properties {
+          // tsc: method parameters are *bivariant* (the strictFunctionTypes
+          // method exemption), so a method's `T`-typed parameters do not make
+          // `T` contravariant — `class C<T> { m(x: T): T }` stays covariant.
+          // Only property *values* (and non-method function types) constrain.
+          if prop.data.is_method {
+            if let TypeKind::Callable { overloads } = self.store.type_kind(prop.data.ty) {
+              for sig_id in overloads {
+                let sig = self.store.signature(sig_id);
+                self.measure_param_positions(
+                  sig.ret,
+                  target,
+                  contra,
+                  depth + 1,
+                  visited,
+                  measurement,
+                );
+              }
+            } else {
+              self.measure_param_positions(
+                prop.data.ty,
+                target,
+                contra,
+                depth + 1,
+                visited,
+                measurement,
+              );
+            }
+          } else {
+            self.measure_param_positions(
+              prop.data.ty,
+              target,
+              contra,
+              depth + 1,
+              visited,
+              measurement,
+            );
+          }
+        }
+        for sig_id in shape
+          .call_signatures
+          .iter()
+          .chain(shape.construct_signatures.iter())
+        {
+          let sig = self.store.signature(*sig_id);
+          for param in &sig.params {
+            self.measure_param_positions(
+              param.ty,
+              target,
+              !contra,
+              depth + 1,
+              visited,
+              measurement,
+            );
+          }
+          if let Some(this_param) = sig.this_param {
+            self.measure_param_positions(
+              this_param,
+              target,
+              !contra,
+              depth + 1,
+              visited,
+              measurement,
+            );
+          }
+          self.measure_param_positions(sig.ret, target, contra, depth + 1, visited, measurement);
+        }
+        for indexer in &shape.indexers {
+          self.measure_param_positions(
+            indexer.value_type,
+            target,
+            contra,
+            depth + 1,
+            visited,
+            measurement,
+          );
+        }
+      }
+      TypeKind::Array { ty: elem, .. } => {
+        self.measure_param_positions(elem, target, contra, depth + 1, visited, measurement);
+      }
+      TypeKind::Tuple(elems) => {
+        for elem in elems {
+          self.measure_param_positions(elem.ty, target, contra, depth + 1, visited, measurement);
+        }
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        for member in members {
+          self.measure_param_positions(member, target, contra, depth + 1, visited, measurement);
+        }
+      }
+      TypeKind::Ref { def, args } => {
+        // Nested generic refs (e.g. `value: Box<T>` inside `Outer<T>`):
+        // variance composes through the nested definition. Expand with the
+        // same markers and keep walking; cycles/unsupported expansions stay
+        // sound (both positions).
+        let expanded = self.expand_ref(def, &args);
+        match expanded {
+          Some(exp) => {
+            self.measure_param_positions(exp, target, contra, depth + 1, visited, measurement);
+          }
+          None => {
+            measurement.seen_input = true;
+            measurement.seen_output = true;
+          }
+        }
+      }
+      TypeKind::Infer { constraint, .. } => {
+        if let Some(constraint) = constraint {
+          self.measure_param_positions(constraint, target, contra, depth + 1, visited, measurement);
+        }
+        // The `infer` binding itself is positionally opaque: stay sound.
+        measurement.seen_input = true;
+        measurement.seen_output = true;
+      }
+      // Conditionals, mapped types, indexed access, `keyof`, intrinsics, and
+      // predicates are positionally opaque: treat any mention as invariant.
+      TypeKind::Conditional { .. }
+      | TypeKind::Mapped(_)
+      | TypeKind::IndexedAccess { .. }
+      | TypeKind::KeyOf(_)
+      | TypeKind::Intrinsic { .. }
+      | TypeKind::Predicate { .. }
+      | TypeKind::TemplateLiteral(_) => {
+        if self.type_mentions_type_param(ty, target, 0) {
+          measurement.seen_input = true;
+          measurement.seen_output = true;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Whether `ty` structurally mentions the marker type parameter (shallow
+  /// walk for the opaque-position arms; depth-capped).
+  fn type_mentions_type_param(&self, ty: TypeId, target: TypeParamId, depth: usize) -> bool {
+    if depth > 8 {
+      return false;
+    }
+    let ty = self.store.canon(ty);
+    match self.store.type_kind(ty) {
+      TypeKind::TypeParam(id) => id == target,
+      TypeKind::Array { ty: elem, .. } => self.type_mentions_type_param(elem, target, depth + 1),
+      TypeKind::Tuple(elems) => elems
+        .iter()
+        .any(|e| self.type_mentions_type_param(e.ty, target, depth + 1)),
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .any(|m| self.type_mentions_type_param(*m, target, depth + 1)),
+      _ => true,
+    }
+  }
+
+  fn is_enum_type(&self, def: DefId) -> bool {
+    self
+      .hooks
+      .expander
+      .is_some_and(|expander| expander.is_enum_type(def))
   }
 }
 

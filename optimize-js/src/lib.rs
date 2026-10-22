@@ -952,7 +952,9 @@ mod tests {
     let err = super::parse_source("export {};", SOURCE_FILE, TopLevelMode::Global)
       .expect_err("export should not be allowed in global scripts");
     assert!(
-      err.iter().any(|diag| diag.message.contains("export not allowed in scripts")),
+      err
+        .iter()
+        .any(|diag| diag.message.contains("export not allowed in scripts")),
       "expected parse diagnostic about export not allowed in scripts, got {err:?}"
     );
 

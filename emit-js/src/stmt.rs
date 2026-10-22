@@ -354,6 +354,9 @@ fn emit_var_decl(em: &mut Emitter, decl: &VarDecl, trailing_semicolon: bool) -> 
   if decl.export {
     em.write_keyword("export");
   }
+  if decl.declare {
+    em.write_keyword("declare");
+  }
   emit_var_decl_mode(em, decl.mode);
   for (idx, var) in decl.declarators.iter().enumerate() {
     if idx > 0 {

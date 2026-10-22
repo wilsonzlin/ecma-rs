@@ -1,19 +1,56 @@
 # Expectations for test262 parser tests.
 #
-# Use this file to record skips/xfails/flaky cases until the parser is fully
-# conformant. Leave it empty to treat all mismatches as unexpected.
+# The runner parses every case with the strict `Ecma` dialect and, for the
+# `early/`, `pass/`, and `pass-explicit/` corpora, additionally runs JS-mode
+# binding (semantic-js) so that scope-dependent early errors (duplicate
+# declarations, strict-mode rules, `new.target` placement, duplicate
+# `__proto__`, `let`-as-binding-name, missing `const` initializer, ...) are
+# enforced — and so binder over-strictness on the pass corpus is a harness
+# failure. See test262/src/main.rs and wiki/crates/{parse-js,semantic-js}.md.
+#
+# The blanket `fail/**` and `early/**` xfails were replaced (2026-07-23) with the
+# precise, per-cluster entries below. Each entry names the Early Error rule, its
+# ECMA-262 section, and the owning layer. Matcher precedence: exact id > glob >
+# regex (see wiki/engineering/testing.md).
 
-[[expectations]]
-glob = "fail/**"
-status = "xfail"
-reason = "Parser currently accepts some fail corpus cases instead of emitting syntax errors."
-
-[[expectations]]
-glob = "early/**"
-status = "xfail"
-reason = "Early error enforcement gaps."
-
+# Template/string literal handling gaps (pass/pass-explicit corpus).
 [[expectations]]
 regex = "^(pass|pass-explicit)/(07bce073a241288b|431ecef8c85d4d24|5b39aca97d9006f4|647e21f8f157c338|69063bc9496ea6e5|6d707802519c7158|8af69d8f15295ed2|9cf32425f04fd865|d0dba4e03608ad64|e95b9364e90a4b5c|fb7c5656640f6ec7)\\.js$"
 status = "xfail"
 reason = "Template/string literal handling gaps."
+
+# early-dup-block-function (5 cases)
+[[expectations]]
+regex = "^early/(12a74c60f52a60de|1aff49273f3e3a98|be7329119eaa3d47|e262ea7682c36f92|ec31fa5e521c5df4)\\.js$"
+status = "xfail"
+reason = "Duplicate function declarations sharing a block scope (ECMA-262 §14.2.1 / B.3.3). Binder-owned; not yet implemented."
+
+# early-escaped-dup-binding (4 cases)
+[[expectations]]
+regex = "^early/(2c10310cb3f9beb8|50e4cd4d8fb1cdaa|abe07ddcc6b1cbc0|b4994b656f8c8e75)\\.js$"
+status = "xfail"
+reason = "Duplicate lexical BoundNames equal only after unicode-escape decoding (ECMA-262 §14.3.1). Parser retains raw identifier text so the binder sees distinct names; owner: parser identifier cooking."
+
+# early-catch-var-conflict (1 cases)
+[[expectations]]
+regex = "^early/(0f5f47108da5c34e)\\.js$"
+status = "xfail"
+reason = "A for-of/for-in var binding collides with a catch parameter (ECMA-262 §14.15.1). Binder-owned; not yet implemented."
+
+# early-other (1 cases)
+[[expectations]]
+regex = "^early/(4de83a7417cd30dd)\\.js$"
+status = "xfail"
+reason = "Miscellaneous early error not yet implemented (e.g. RegExp unicode code-point range under the u flag)."
+
+# fail-other (21 cases) — template legacy-octal cases burned down 2026-07-23 (PS0025).
+[[expectations]]
+regex = "^fail/(0d5e450f1da8a92a|265fda17a34611b1|320eade064b2c635|40449ddc6ec37b35|4ff4b78ff3e2de6e|50a060984b757dc1|66e667cc2b718770|748656edbfb2d0bb|79f882da06f88c9f|8a331fdde7032f33|8e93bcbd389c6bf6|90cd97db35a1a503|92b6af54adef3624|944ea2478d838026|98204d734f8c72b3|b9b5930aa449a36a|ca2716d236c027cd|db41a80ccf646002|e82474d52b99f1b7|ef81b93cf9bdb4ec|fb130c395c6aafe7)\\.js$"
+status = "xfail"
+reason = "Miscellaneous parser/lexer early-error gaps: string NonOctalDecimalEscape in sloppy (Annex B still allows; corpus expects reject), arrow function as immediate call callee (§15.3), parenthesized destructuring assignment target (§13.15.1), duplicate switch default (§14.12.1), labelled generator declaration (B.3.2), strict octal property name / string escape, unterminated string, class field shorthand. Not yet implemented."
+
+# fail-regex-u-flag (4 cases)
+[[expectations]]
+regex = "^fail/(66e383bfd18e66ab|78c215fabdf13bae|bf49ec8d96884562|e4a43066905a597b)\\.js$"
+status = "xfail"
+reason = "Strict RegularExpressionLiteral pattern grammar under the u/v flag (ECMA-262 §22.2.1). Regex-body validation; deferred (needs more than flag/lexical checks)."

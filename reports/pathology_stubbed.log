@@ -1,0 +1,15 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling typecheck-ts v0.1.0 (/root/r/ecma-rs/typecheck-ts)
+    Finished `release` profile [optimized] target(s) in 1m 05s
+     Running tests/pathology_diag.rs (target/release/deps/pathology_diag-69935897dda02e33)
+
+running 1 test
+CASE stubbed_walkers.ts: elapsed=898.454775ms diags=0
+test diag_stubbed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.92s
+

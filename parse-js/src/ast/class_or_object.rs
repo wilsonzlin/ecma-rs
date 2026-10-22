@@ -114,6 +114,13 @@ pub struct ClassMember {
   pub override_: bool,
   #[drive(skip)]
   pub definite_assignment: bool, // TypeScript: prop!: Type
+  /// TypeScript `declare` field / ambient member modifier.
+  #[drive(skip)]
+  pub declare_: bool,
+  /// True when `async` appeared before `static` in source (illegal order;
+  /// checker emits TS1029). Set by parse recovery.
+  #[drive(skip)]
+  pub async_before_static: bool,
   pub accessibility: Option<Accessibility>,
   pub type_annotation: Option<Node<TypeExpr>>, // For properties only
   pub val: ClassOrObjVal,

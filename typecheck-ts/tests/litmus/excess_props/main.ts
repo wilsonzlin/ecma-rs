@@ -1,5 +1,5 @@
 const direct: { foo: number } = { foo: 1, bar: 2 };
-// expect-diagnostic: TC0006 "direct: { foo: number } = { foo: 1, bar: 2 }"
+// expect-diagnostic: TS2353 "direct: { foo: number } = { foo: 1, bar: 2 }"
 
 const indexed: { foo: number; [key: string]: number } = { foo: 1, bar: 2 };
 
@@ -10,24 +10,24 @@ const asserted: { foo: number } = ({ foo: 1, bar: 2 } as { foo: number });
 
 const unionOk: { foo: number } | { bar: number } = { foo: 1 };
 const unionBad: { foo: number } | { bar: number } = { foo: 1, bar: 2 };
-// expect-diagnostic: TC0006 "unionBad: { foo: number } | { bar: number } = { foo: 1, bar: 2 }"
+// expect-diagnostic: TS2353 "unionBad: { foo: number } | { bar: number } = { foo: 1, bar: 2 }"
 
 type UnionWithPrimitive = { foo: number } | number;
 const unionPrimitive: UnionWithPrimitive = { foo: 1, bar: 2 };
-// expect-diagnostic: TC0006 "UnionWithPrimitive = { foo: 1, bar: 2 }"
+// expect-diagnostic: TS2353 "UnionWithPrimitive = { foo: 1, bar: 2 }"
 
 type Nested = { inner: { foo: number } };
 const indexedAccess: Nested["inner"] = { foo: 1, bar: 2 };
-// expect-diagnostic: TC0006 "indexedAccess: Nested[\"inner\"] = { foo: 1, bar: 2 }"
+// expect-diagnostic: TS2353 "indexedAccess: Nested[\"inner\"] = { foo: 1, bar: 2 }"
 
 function make(): { foo: number } {
   return { foo: 1, bar: 2 };
 }
-// expect-diagnostic: TC0006 "return { foo: 1, bar: 2 }"
+// expect-diagnostic: TS2353 "return { foo: 1, bar: 2 }"
 
 function takes(obj: { foo: number }) {}
 takes({ foo: 1, bar: 2 });
-// expect-diagnostic: TC0006 "takes({ foo: 1, bar: 2 });"
+// expect-diagnostic: TS2353 "takes({ foo: 1, bar: 2 });"
 
 type Mapped = { [K in string]: number };
 const mapped: Mapped = { foo: 1, bar: 2, baz: 3 };

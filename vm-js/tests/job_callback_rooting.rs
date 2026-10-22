@@ -1,9 +1,9 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use vm_js::{
   GcObject, Heap, HeapLimits, Job, JobKind, JobResult, RootId, Value, VmError, VmHostHooks,
   VmJobContext,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(Default)]
 struct TestHost;
@@ -77,7 +77,10 @@ fn job_callback_payload_is_not_a_gc_root() -> Result<(), VmError> {
 
 #[test]
 fn job_roots_callback_until_run_then_releases() -> Result<(), VmError> {
-  let heap = Rc::new(RefCell::new(Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024))));
+  let heap = Rc::new(RefCell::new(Heap::new(HeapLimits::new(
+    1024 * 1024,
+    1024 * 1024,
+  ))));
   let mut host = TestHost::default();
   let mut ctx = HeapBackedContext { heap: heap.clone() };
 

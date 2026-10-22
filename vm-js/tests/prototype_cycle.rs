@@ -1,7 +1,6 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
-  VmError, VmHost, VmHostHooks, VmOptions,
-  MAX_PROTOTYPE_CHAIN,
+  VmError, VmHost, VmHostHooks, VmOptions, MAX_PROTOTYPE_CHAIN,
 };
 
 fn return_undefined(
@@ -167,11 +166,15 @@ fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
     Value::Object(leaf)
   )?);
   assert_eq!(
-    scope.heap().object_get_own_data_property_value(leaf, &key)?,
+    scope
+      .heap()
+      .object_get_own_data_property_value(leaf, &key)?,
     Some(Value::Number(456.0))
   );
   assert_eq!(
-    scope.heap().object_get_own_data_property_value(base, &key)?,
+    scope
+      .heap()
+      .object_get_own_data_property_value(base, &key)?,
     Some(Value::Number(123.0))
   );
 
@@ -179,8 +182,12 @@ fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
   let a = scope.alloc_object()?;
   let b = scope.alloc_object()?;
   unsafe {
-    scope.heap_mut().object_set_prototype_unchecked(a, Some(b))?;
-    scope.heap_mut().object_set_prototype_unchecked(b, Some(a))?;
+    scope
+      .heap_mut()
+      .object_set_prototype_unchecked(a, Some(b))?;
+    scope
+      .heap_mut()
+      .object_set_prototype_unchecked(b, Some(a))?;
   }
 
   let missing_key_str = scope.alloc_string("missing")?;

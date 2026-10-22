@@ -1,0 +1,1 @@
+error: no conformance tests discovered under 'parse-js/tests/TypeScript/tests/cases/conformance' (extensions: ts,tsx,d.ts); ensure the TypeScript suite is checked out (git submodule update --init --recursive parse-js/tests/TypeScript), use --root to point at another suite, or pass --allow-empty to bypass this check

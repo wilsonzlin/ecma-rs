@@ -10,17 +10,28 @@ use crate::ParseOptions;
 use crate::SourceType;
 use serde_json::Value;
 
-fn parse_stmt_and_serialize(input: String) -> Value {
+// Fixtures named `*.script.js` parse as sloppy scripts (contextual keywords like
+// `await`/`let`/`yield` are identifiers); everything else parses as a TS module
+// (where those are reserved and `await`-expressions are legal, e.g. for-await).
+// One ParseCtx cannot serve both: a spec-correct parser treats `await` as an
+// operator in module code and as an identifier in sloppy scripts. Mirrors the
+// test262 runner's filename-based mode inference.
+fn parse_stmt_and_serialize(name: &str, input: String) -> Value {
+  let is_script = name.contains(".script.");
   let opts = ParseOptions {
     dialect: Dialect::Ts,
-    source_type: SourceType::Module,
+    source_type: if is_script {
+      SourceType::Script
+    } else {
+      SourceType::Module
+    },
   };
   let mut parser = Parser::new(Lexer::new(&input), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: false,
-      yield_allowed: false,
-      await_expr_allowed: true,
+      await_allowed: is_script,
+      yield_allowed: is_script,
+      await_expr_allowed: !is_script,
       yield_expr_allowed: false,
     },
     top_level: true,

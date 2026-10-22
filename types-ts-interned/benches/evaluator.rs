@@ -155,6 +155,7 @@ fn build_complex_operator_type(store: &TypeStore, prop_count: usize) -> TypeId {
 
   // `{ [K in keyof Obj as `...${Uppercase<K>}`]: `prop_${Uppercase<K>}_${...}` }[keyof Obj]`
   let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    homomorphic_var: None,
     param: k_param,
     source: keys,
     value: value_tpl,

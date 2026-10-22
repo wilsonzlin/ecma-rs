@@ -1,0 +1,533 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/everyTypeAssignableToAny.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/everyTypeAssignableToAny.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2432,
+      "rust_ms": 1660,
+      "tsc_ms": 771,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 427,
+            "end": 428,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 431,
+            "end": 432,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 435,
+            "end": 436,
+            "severity": "error",
+            "message": "c is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 439,
+            "end": 440,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 443,
+            "end": 444,
+            "severity": "error",
+            "message": "d is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 447,
+            "end": 448,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 451,
+            "end": 452,
+            "severity": "error",
+            "message": "e is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 471,
+            "end": 472,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 475,
+            "end": 476,
+            "severity": "error",
+            "message": "h is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 479,
+            "end": 480,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 483,
+            "end": 484,
+            "severity": "error",
+            "message": "i is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 487,
+            "end": 488,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 491,
+            "end": 492,
+            "severity": "error",
+            "message": "j is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 495,
+            "end": 496,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 499,
+            "end": 500,
+            "severity": "error",
+            "message": "k is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 503,
+            "end": 504,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 507,
+            "end": 508,
+            "severity": "error",
+            "message": "l is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 511,
+            "end": 512,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 515,
+            "end": 516,
+            "severity": "error",
+            "message": "m is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 519,
+            "end": 520,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 523,
+            "end": 524,
+            "severity": "error",
+            "message": "o is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 527,
+            "end": 528,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 531,
+            "end": 532,
+            "severity": "error",
+            "message": "p is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 536,
+            "end": 537,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 540,
+            "end": 541,
+            "severity": "error",
+            "message": "q is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 544,
+            "end": 545,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 548,
+            "end": 550,
+            "severity": "error",
+            "message": "ac is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 553,
+            "end": 554,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 557,
+            "end": 559,
+            "severity": "error",
+            "message": "ai is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 562,
+            "end": 563,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 566,
+            "end": 568,
+            "severity": "error",
+            "message": "ae is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 659,
+            "end": 660,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 671,
+            "end": 672,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 427,
+            "end": 428,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 435,
+            "end": 436,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 443,
+            "end": 444,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 451,
+            "end": 452,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 475,
+            "end": 476,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 483,
+            "end": 484,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 491,
+            "end": 492,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 499,
+            "end": 500,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 507,
+            "end": 508,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 515,
+            "end": 516,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 523,
+            "end": 524,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 531,
+            "end": 532,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 540,
+            "end": 541,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 548,
+            "end": 550,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 557,
+            "end": 559,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/everyTypeAssignableToAny.ts",
+            "start": 566,
+            "end": 568,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 17 extra diagnostic(s); first extra: /everyTypeAssignableToAny.ts:431-432 [TS2322]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/everyTypeAssignableToAny.ts",
+          "start": 431,
+          "end": 432,
+          "severity": "error",
+          "message": "assignment type mismatch"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_extra_diagnostics (shard 11/64) rust=[TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2454,TS2454,TS2322,TS2454,TS2322,TS2454,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2322,TS2454,TS2454,TS2454,TS2454,TS2322,TS2454,TS2322,TS2322] tsc=[2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454,2454]"
+      },
+      "mismatched": true
+    }
+  ]
+}

@@ -99,4 +99,3 @@ pub fn format_stack_trace(frames: &[StackFrame]) -> String {
     .collect::<Vec<_>>()
     .join("\n")
 }
-

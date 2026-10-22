@@ -21,10 +21,13 @@ fn reports_implicit_any_for_params_and_destructuring() {
     .iter()
     .filter(|diag| diag.code.as_str() == codes::IMPLICIT_ANY.as_str())
     .collect();
+  // tsc emits TS7006 for the unannotated parameter only — the destructured
+  // `a` from an unresolved RHS gets no implicit-any diagnostic (only the
+  // TS2304 for `something`).
   assert_eq!(
     implicit.len(),
-    2,
-    "expected exactly two implicit-any diagnostics, got {implicit:?} (all={diagnostics:?})",
+    1,
+    "expected exactly one implicit-any diagnostic, got {implicit:?} (all={diagnostics:?})",
   );
 
   let x_start = source.find("f(x)").expect("expected f(x) in source") as u32 + 2;
@@ -36,14 +39,47 @@ fn reports_implicit_any_for_params_and_destructuring() {
     "missing implicit-any diagnostic on parameter `x` at {x_span:?}: {implicit:?}",
   );
 
-  let a_start = source.find("{a}").expect("expected {a} in source") as u32 + 1;
-  let a_span = TextRange::new(a_start, a_start + 1);
   assert!(
-    implicit
+    diagnostics
       .iter()
-      .any(|diag| diag.primary.file == file_id && diag.primary.range == a_span),
-    "missing implicit-any diagnostic on binding `a` at {a_span:?}: {implicit:?}",
+      .any(|diag| diag.code.as_str() == "TS2304"),
+    "expected TS2304 for unresolved `something`: {diagnostics:?}",
   );
+}
+
+#[test]
+fn parameter_default_value_suppresses_implicit_any() {
+  // Spec (tsc, --strict): a parameter with an initializer infers its type from
+  // the (widened) initializer, so `--noImplicitAny` does not flag it. Mirrors
+  // upstream conformance case
+  // `expressions/nullishCoalescingOperator/nullishCoalescingOperator6.ts`:
+  //   function foo(foo: string, bar = foo ?? "bar") { }
+  // tsc reports no diagnostics; the checker must not report TC3000 for `bar`.
+  let source = "function foo(foo: string, bar = foo ?? \"bar\") { bar; }";
+  let key = FileKey::new("main.ts");
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_implicit_any: true,
+    strict_null_checks: true,
+    strict_function_types: true,
+    ..Default::default()
+  });
+  host.insert(key.clone(), source);
+
+  let program = Program::new(host, vec![key.clone()]);
+  let file_id = program.file_id(&key).expect("file id");
+  let diagnostics = program.check();
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|diag| diag.code.as_str() == codes::IMPLICIT_ANY.as_str()),
+    "parameter with a default value must not be implicit-any, got {diagnostics:?}",
+  );
+
+  // The inferred type of `bar` should come from the initializer (`string`).
+  let bar_use = source.rfind("bar;").expect("bar; use") as u32;
+  let bar_ty = program.type_at(file_id, bar_use).expect("type at bar use");
+  assert_eq!(program.display_type(bar_ty).to_string(), "string");
 }
 
 #[test]
@@ -77,6 +113,42 @@ fn reports_implicit_any_for_uncontextualized_arrow_params() {
       .iter()
       .any(|diag| diag.primary.file == file_id && diag.primary.range == x_span),
     "missing implicit-any diagnostic on arrow parameter `x` at {x_span:?}: {implicit:?}",
+  );
+}
+
+#[test]
+fn annotated_class_fields_suppress_implicit_any() {
+  // Spec (tsc, --strict): a class field with an explicit type annotation is not
+  // implicit-any, including private `#name` fields. Mirrors upstream
+  // `classes/members/privateNames/privateNameField.ts` (`#name: string`).
+  // The checker must read HIR `DefData.declared_type` / class-member annotations
+  // so annotated public and private fields do not emit TC3000.
+  let source = r#"
+class A {
+  #name: string;
+  publicName: string;
+  constructor(name: string) {
+    this.#name = name;
+    this.publicName = name;
+  }
+}
+"#;
+  let key = FileKey::new("main.ts");
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_implicit_any: true,
+    strict_null_checks: true,
+    ..Default::default()
+  });
+  host.insert(key.clone(), source);
+
+  let program = Program::new(host, vec![key]);
+  let diagnostics = program.check();
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|diag| diag.code.as_str() == codes::IMPLICIT_ANY.as_str()),
+    "annotated class fields (#name / publicName) must not be implicit-any, got {diagnostics:?}",
   );
 }
 

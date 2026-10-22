@@ -32,7 +32,9 @@ pub fn to_number(heap: &mut Heap, value: Value) -> Result<f64, VmError> {
       "Cannot convert a BigInt value to a number",
     )),
     Value::String(s) => string_to_number(heap, s),
-    Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a number")),
+    Value::Symbol(_) => Err(VmError::TypeError(
+      "Cannot convert a Symbol value to a number",
+    )),
     Value::Object(_) => {
       // Per spec: ToPrimitive, then ToNumber.
       let prim = to_primitive(heap, value)?;
@@ -59,7 +61,9 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
       (Bool(x), Bool(y)) => return Ok(x == y),
       (Number(x), Number(y)) => return Ok(x == y),
       (BigInt(x), BigInt(y)) => return Ok(x == y),
-      (String(x), String(y)) => return Ok(scope.heap().get_string(x)? == scope.heap().get_string(y)?),
+      (String(x), String(y)) => {
+        return Ok(scope.heap().get_string(x)? == scope.heap().get_string(y)?)
+      }
       (Symbol(x), Symbol(y)) => return Ok(x == y),
       (Object(x), Object(y)) => return Ok(x == y),
 
@@ -84,6 +88,26 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
       (_, Bool(_)) => {
         let bn = to_number(scope.heap_mut(), b)?;
         b = scope.push_root(Number(bn))?;
+      }
+
+      // BigInt ↔ Number: mathematical-value equality (§7.2.14).
+      (BigInt(x), Number(y)) => return Ok(x.mathematically_equal_to_number(y)),
+      (Number(x), BigInt(y)) => return Ok(y.mathematically_equal_to_number(x)),
+
+      // BigInt ↔ String via StringToBigInt (§7.2.14 steps 6–7).
+      (BigInt(x), String(y)) => {
+        let text = scope.heap().get_string(y)?.to_utf8_lossy();
+        return Ok(match crate::JsBigInt::from_string_integer_literal(&text) {
+          Some(n) => x == n,
+          None => false,
+        });
+      }
+      (String(x), BigInt(y)) => {
+        let text = scope.heap().get_string(x)?.to_utf8_lossy();
+        return Ok(match crate::JsBigInt::from_string_integer_literal(&text) {
+          Some(n) => y == n,
+          None => false,
+        });
       }
 
       // Object-to-primitive conversions.
@@ -143,13 +167,22 @@ fn string_to_number(heap: &Heap, s: GcString) -> Result<f64, VmError> {
     }
   }
 
-  if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+  if let Some(hex) = trimmed
+    .strip_prefix("0x")
+    .or_else(|| trimmed.strip_prefix("0X"))
+  {
     return Ok(parse_ascii_int_radix(hex, 16).unwrap_or(f64::NAN));
   }
-  if let Some(bin) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+  if let Some(bin) = trimmed
+    .strip_prefix("0b")
+    .or_else(|| trimmed.strip_prefix("0B"))
+  {
     return Ok(parse_ascii_int_radix(bin, 2).unwrap_or(f64::NAN));
   }
-  if let Some(oct) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+  if let Some(oct) = trimmed
+    .strip_prefix("0o")
+    .or_else(|| trimmed.strip_prefix("0O"))
+  {
     return Ok(parse_ascii_int_radix(oct, 8).unwrap_or(f64::NAN));
   }
 
@@ -189,7 +222,8 @@ fn is_ecma_whitespace(c: char) -> bool {
     | '\u{0020}' // Space
     | '\u{00A0}' // No-break space
     | '\u{1680}' // Ogham space mark
-    | '\u{2000}'..='\u{200A}' // En quad..hair space
+    | '\u{2000}'
+      ..='\u{200A}' // En quad..hair space
     | '\u{2028}' // Line separator
     | '\u{2029}' // Paragraph separator
     | '\u{202F}' // Narrow no-break space

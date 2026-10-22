@@ -14,7 +14,11 @@ impl TestRealm {
     let mut heap = Heap::new(limits);
     let mut vm = Vm::new(VmOptions::default());
     let realm = Realm::new(&mut vm, &mut heap)?;
-    Ok(Self { _vm: vm, heap, realm })
+    Ok(Self {
+      _vm: vm,
+      heap,
+      realm,
+    })
   }
 }
 
@@ -54,7 +58,8 @@ fn assert_own_non_enumerable_string_data_property(
 }
 
 #[test]
-fn new_type_error_creates_error_instance_with_correct_proto_and_properties() -> Result<(), VmError> {
+fn new_type_error_creates_error_instance_with_correct_proto_and_properties() -> Result<(), VmError>
+{
   let mut rt = TestRealm::new(HeapLimits::new(1024 * 1024, 1024 * 1024))?;
 
   {
@@ -85,7 +90,8 @@ fn new_type_error_creates_error_instance_with_correct_proto_and_properties() -> 
 }
 
 #[test]
-fn new_syntax_error_creates_error_instance_with_correct_proto_and_properties() -> Result<(), VmError> {
+fn new_syntax_error_creates_error_instance_with_correct_proto_and_properties() -> Result<(), VmError>
+{
   let mut rt = TestRealm::new(HeapLimits::new(1024 * 1024, 1024 * 1024))?;
 
   {

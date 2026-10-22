@@ -1,17 +1,54 @@
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
+
+/// How to assign cases to shards.
+///
+/// - [`ShardStrategy::Index`]: partition by position in a deterministically ordered
+///   list (callers must sort before applying).
+/// - [`ShardStrategy::Hash`]: partition by a stable FNV-1a hash of the case id
+///   (order-independent; preferred for CI ratchets when discovery order may drift).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ShardStrategy {
+  Index,
+  Hash,
+}
+
 /// Deterministic sharding for test case lists.
 ///
-/// Sharding is based on the *index in a deterministic ordering* (e.g. sorted by
-/// test id), so callers should sort their case list before applying a shard.
+/// For [`ShardStrategy::Index`], sharding is based on the *index in a deterministic
+/// ordering* (e.g. sorted by test id), so callers should sort their case list before
+/// applying a shard. For [`ShardStrategy::Hash`], use [`Shard::includes_hash`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shard {
   pub index: usize,
   pub total: usize,
 }
 
+fn stable_hash64(input: &str) -> u64 {
+  const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+  const FNV_PRIME: u64 = 0x100000001b3;
+
+  let mut hash = FNV_OFFSET_BASIS;
+  for &byte in input.as_bytes() {
+    hash ^= u64::from(byte);
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  hash
+}
+
 impl Shard {
   /// Returns whether the shard includes the given 0-based index.
   pub fn includes(&self, idx: usize) -> bool {
     idx % self.total == self.index
+  }
+
+  /// Returns whether the shard includes `id` under stable hash partitioning.
+  pub fn includes_hash(&self, id: &str) -> bool {
+    if self.total == 0 {
+      return false;
+    }
+    (stable_hash64(id) % self.total as u64) as usize == self.index
   }
 }
 
@@ -90,5 +127,49 @@ mod tests {
     }
 
     assert!(seen.iter().all(|count| *count == 1));
+  }
+
+  #[test]
+  fn hash_shards_partition_ids() {
+    let ids = ["a/b.ts", "c/d.ts", "e/f.ts", "g/h.ts", "i/j.ts"];
+    let total = 3;
+    let mut seen = vec![0usize; ids.len()];
+
+    for index in 0..total {
+      let shard = Shard { index, total };
+      for (i, id) in ids.iter().enumerate() {
+        if shard.includes_hash(id) {
+          seen[i] += 1;
+        }
+      }
+    }
+
+    assert!(seen.iter().all(|count| *count == 1));
+  }
+
+  #[test]
+  fn stable_hash64_matches_reference_vectors() {
+    assert_eq!(stable_hash64(""), 0xcbf29ce484222325);
+    assert_eq!(stable_hash64("a"), 0xaf63dc4c8601ec8c);
+    assert_eq!(stable_hash64("foo"), 0xdcb27518fed9d577);
+  }
+
+  #[test]
+  fn hash_sharding_is_deterministic() {
+    let ids = [
+      "match/basic.ts",
+      "mismatch/type_error.ts",
+      "some/dir/file.ts",
+    ];
+    let total = 8;
+    let first: Vec<_> = ids
+      .iter()
+      .map(|id| (stable_hash64(id) % total as u64) as usize)
+      .collect();
+    let second: Vec<_> = ids
+      .iter()
+      .map(|id| (stable_hash64(id) % total as u64) as usize)
+      .collect();
+    assert_eq!(first, second);
   }
 }

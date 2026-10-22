@@ -1,1 +1,1 @@
-+new abc?.def;
++new (abc?.def);

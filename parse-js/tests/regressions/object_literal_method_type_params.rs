@@ -10,7 +10,9 @@ fn ts_script_opts() -> ParseOptions {
   }
 }
 
-fn with_object_members<F: FnOnce(&[parse_js::ast::node::Node<parse_js::ast::class_or_object::ObjMember>])>(
+fn with_object_members<
+  F: FnOnce(&[parse_js::ast::node::Node<parse_js::ast::class_or_object::ObjMember>]),
+>(
   src: &str,
   f: F,
 ) {

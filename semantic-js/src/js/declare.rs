@@ -16,7 +16,9 @@ use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::class_or_object::ClassOrObjMemberDirectKey;
 use parse_js::ast::class_or_object::ClassOrObjVal;
 use parse_js::ast::class_or_object::ClassStaticBlock;
+use parse_js::ast::class_or_object::ObjMemberType;
 use parse_js::ast::expr::lit::LitNumExpr;
+use parse_js::ast::expr::lit::LitObjExpr;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::pat::Pat;
@@ -26,11 +28,13 @@ use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::MemberExpr;
 use parse_js::ast::expr::NewTarget;
 use parse_js::ast::expr::UnaryExpr;
 use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
+use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::InvalidTemplateEscapeSequence;
 use parse_js::ast::node::LeadingZeroDecimalLiteral;
 use parse_js::ast::node::LegacyOctalEscapeSequence;
@@ -38,6 +42,7 @@ use parse_js::ast::node::LegacyOctalNumberLiteral;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::node::ParenthesizedExpr;
+use parse_js::ast::node::StringLiteralContainsEscapes;
 use parse_js::ast::stmt::decl::ClassDecl;
 use parse_js::ast::stmt::decl::FuncDecl;
 use parse_js::ast::stmt::decl::PatDecl;
@@ -48,6 +53,8 @@ use parse_js::ast::stmt::BreakStmt;
 use parse_js::ast::stmt::CatchBlock;
 use parse_js::ast::stmt::ContinueStmt;
 use parse_js::ast::stmt::DoWhileStmt;
+use parse_js::ast::stmt::ExportDefaultExprStmt;
+use parse_js::ast::stmt::ExportListStmt;
 use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
 use parse_js::ast::stmt::ForInStmt;
@@ -64,7 +71,9 @@ use parse_js::ast::stmt::WhileStmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
+use parse_js::token::TT;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 type BlockStmtNode = Node<BlockStmt>;
 type BinaryExprNode = Node<BinaryExpr>;
@@ -85,7 +94,10 @@ type ForInStmtNode = Node<ForInStmt>;
 type IfStmtNode = Node<IfStmt>;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
+type MemberExprNode = Node<MemberExpr>;
 type ImportStmtNode = Node<ImportStmt>;
+type ExportDefaultExprStmtNode = Node<ExportDefaultExprStmt>;
+type ExportListStmtNode = Node<ExportListStmt>;
 type ForOfStmtNode = Node<ForOfStmt>;
 type ForTripleStmtNode = Node<ForTripleStmt>;
 type LabelStmtNode = Node<LabelStmt>;
@@ -94,6 +106,7 @@ type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
 type DoWhileStmtNode = Node<DoWhileStmt>;
 type LitNumExprNode = Node<LitNumExpr>;
+type LitObjExprNode = Node<LitObjExpr>;
 type NewTargetNode = Node<NewTarget>;
 type UnaryExprNode = Node<UnaryExpr>;
 type UnaryPostfixExprNode = Node<UnaryPostfixExpr>;
@@ -134,6 +147,32 @@ fn ident_range(loc: parse_js::loc::Loc, name: &str) -> TextRange {
   TextRange::new(start, end)
 }
 
+/// PrivateBoundIdentifiers of a ClassBody (field/method/accessor keys).
+fn private_bound_names_of_members(members: &[ClassMemberNode]) -> BTreeSet<String> {
+  let mut names = BTreeSet::new();
+  for member in members {
+    if let ClassOrObjKey::Direct(key) = &member.stx.key {
+      if key.stx.tt == TT::PrivateMember || key.stx.key.starts_with('#') {
+        names.insert(key.stx.key.clone());
+      }
+    }
+  }
+  names
+}
+
+/// ECMA-262 Directive Prologue / Use Strict Directive (§11.2.1, §14.1.1):
+/// only the *unescaped* literals `"use strict"` / `'use strict'` count.
+/// Escapes like `'use\x20strict'` share the cooked SV `"use strict"` but are
+/// **not** Use Strict Directives.
+///
+/// `parse-js` attaches [`StringLiteralContainsEscapes`] when the raw literal
+/// body contains any EscapeSequence or LineContinuation; directive status
+/// requires cooked SV `"use strict"` and that marker's absence (same criterion
+/// as the parser's raw-text check at prologue scan time).
+fn is_use_strict_directive_literal(lit: &Node<parse_js::ast::expr::lit::LitStrExpr>) -> bool {
+  lit.stx.value == "use strict" && lit.assoc.get::<StringLiteralContainsEscapes>().is_none()
+}
+
 fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
   for stmt in stmts.iter() {
     let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
@@ -151,7 +190,7 @@ fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
     let Expr::LitStr(lit) = expr_stmt.stx.expr.stx.as_ref() else {
       break;
     };
-    if lit.stx.value == "use strict" {
+    if is_use_strict_directive_literal(lit) {
       return true;
     }
   }
@@ -635,6 +674,8 @@ enum ClassMemberPhase {
   ClassStaticBlockNode(enter, exit),
   ContinueStmtNode(enter),
   DoWhileStmtNode(enter, exit),
+  ExportDefaultExprStmtNode(enter),
+  ExportListStmtNode(enter),
   ForBodyNode,
   ForInStmtNode(enter, exit),
   ForInOfLhs,
@@ -646,6 +687,7 @@ enum ClassMemberPhase {
   FuncNode,
   IdExprNode(enter),
   IdPatNode(enter),
+  MemberExprNode(enter),
   IfStmtNode(enter, exit),
   ImportStmtNode,
   LabelStmtNode(enter, exit),
@@ -653,6 +695,7 @@ enum ClassMemberPhase {
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
   LitNumExprNode(enter),
+  LitObjExprNode(enter),
   NewTargetNode(enter),
   UnaryExprNode(enter),
   UnaryPostfixExprNode(enter),
@@ -668,6 +711,11 @@ struct DeclareVisitor {
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
   strict_stack: Vec<bool>,
+  // When set, the next Func entered is a method/getter/setter and must enforce
+  // UniqueFormalParameters — without making that function strict. Cleared on
+  // enter so nested functions inside the body do not inherit it.
+  next_func_unique_params: bool,
+  unique_params_stack: Vec<bool>,
   new_target_stack: Vec<bool>,
   stmt_context_stack: Vec<StmtContext>,
   class_member_phase_stack: Vec<ClassMemberPhase>,
@@ -678,6 +726,12 @@ struct DeclareVisitor {
   for_triple_scope_stack: Vec<bool>,
   for_triple_init_stack: Vec<bool>,
   annex_b_block_functions: Vec<AnnexBBlockFunction>,
+  // First span for each ExportedNames entry (module mode).
+  exported_names: BTreeMap<String, TextRange>,
+  // Local names required by non-`from` export lists (ExportedBindings).
+  exported_bindings: Vec<(String, TextRange)>,
+  // Stack of AllPrivateIdentifiersValid `names` lists (outer + class-own).
+  private_names_stack: Vec<BTreeSet<String>>,
 }
 
 impl DeclareVisitor {
@@ -691,6 +745,8 @@ impl DeclareVisitor {
       in_pattern_decl: vec![false],
       top_level_mode: mode,
       strict_stack: vec![strict],
+      next_func_unique_params: false,
+      unique_params_stack: vec![false],
       new_target_stack: vec![false],
       stmt_context_stack: vec![StmtContext::StatementList],
       class_member_phase_stack: Vec::new(),
@@ -701,10 +757,14 @@ impl DeclareVisitor {
       for_triple_scope_stack: Vec::new(),
       for_triple_init_stack: Vec::new(),
       annex_b_block_functions: Vec::new(),
+      exported_names: BTreeMap::new(),
+      exported_bindings: Vec::new(),
+      private_names_stack: Vec::new(),
     }
   }
 
   fn finish(mut self) -> (JsSemantics, Vec<Diagnostic>) {
+    self.validate_module_export_bindings();
     self.process_annex_b_block_functions();
     self.builder.finish()
   }
@@ -824,6 +884,10 @@ impl DeclareVisitor {
 
   fn is_strict(&self) -> bool {
     *self.strict_stack.last().unwrap_or(&false)
+  }
+
+  fn requires_unique_params(&self) -> bool {
+    *self.unique_params_stack.last().unwrap_or(&false)
   }
 
   fn new_target_allowed(&self) -> bool {
@@ -970,9 +1034,233 @@ impl DeclareVisitor {
     ));
   }
 
+  /// ECMA-262 §14.3.1 (LexicalDeclaration / VariableStatement static semantics):
+  /// a `const` (and `using`/`await using`) binding must have an initializer,
+  /// except in `for-in`/`for-of` heads (which are handled via `ForInOfLhs` and
+  /// never reach this path).
+  fn report_missing_const_initializer(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0015",
+      "Missing initializer in const declaration.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  /// ECMA-262 §14.3.1 (Static Semantics: Early Errors for LexicalDeclaration):
+  /// it is a Syntax Error if the BoundNames of a `let`/`const` declaration
+  /// contains `"let"`.
+  fn report_lexical_let_binding(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0016",
+      "`let` is disallowed as a lexically bound name.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  /// ECMA-262 §B.3.1 (`__proto__` Property Names in Object Initializers): it is
+  /// a Syntax Error if an object literal contains more than one
+  /// `PropertyDefinition : PropertyName : AssignmentExpression` whose PropertyName
+  /// is the (non-computed) name `__proto__`.
+  fn report_duplicate_proto(&mut self, range: TextRange, previous: TextRange) {
+    let mut diagnostic = Diagnostic::error(
+      "BIND0017",
+      "Duplicate __proto__ fields are not allowed in object literals.".to_string(),
+      Span::new(self.builder.file, range),
+    );
+    diagnostic.push_label(Label::secondary(
+      Span::new(self.builder.file, previous),
+      "previous __proto__ field here",
+    ));
+    self.builder.diagnostics.push(diagnostic);
+  }
+
+  /// ECMA-262 §16.2.1.1 (Module Semantics / Static Semantics: Early Errors):
+  /// it is a Syntax Error if `ExportedNames` of ModuleItemList contains any
+  /// duplicate entries (including multiple `default` exports).
+  fn report_duplicate_export(&mut self, name: &str, range: TextRange, previous: TextRange) {
+    let mut diagnostic = Diagnostic::error(
+      "BIND0018",
+      format!("Duplicate export of '{name}'."),
+      Span::new(self.builder.file, range),
+    );
+    diagnostic.push_label(Label::secondary(
+      Span::new(self.builder.file, previous),
+      "previous export here",
+    ));
+    self.builder.diagnostics.push(diagnostic);
+  }
+
+  /// ECMA-262 §16.2.1.1: it is a Syntax Error if any element of the
+  /// `ExportedBindings` of ModuleItemList does not also occur in the
+  /// `VarDeclaredNames` or `LexicallyDeclaredNames` of ModuleItemList
+  /// (local `export { … }` / `export { x as y }` without `from`).
+  fn report_undeclared_export_binding(&mut self, name: &str, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0019",
+      format!("Export '{name}' is not defined."),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  /// AllPrivateIdentifiersValid / AllPrivateNamesValid (§12.10.5 / Script early errors).
+  fn report_undeclared_private_name(&mut self, name: &str, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0020",
+      format!("Private name '{name}' is not defined in an enclosing class."),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn push_class_private_names(&mut self, members: &[ClassMemberNode]) {
+    let mut names = self.private_names_stack.last().cloned().unwrap_or_default();
+    names.extend(private_bound_names_of_members(members));
+    self.private_names_stack.push(names);
+  }
+
+  fn pop_class_private_names(&mut self) {
+    self.private_names_stack.pop();
+  }
+
+  fn check_private_name_use(&mut self, name: &str, range: TextRange) {
+    if !name.starts_with('#') {
+      return;
+    }
+    let declared = self
+      .private_names_stack
+      .last()
+      .is_some_and(|names| names.contains(name));
+    if !declared {
+      self.report_undeclared_private_name(name, range);
+    }
+  }
+
+  /// Records an entry of Module `ExportedNames`, emitting `BIND0018` on
+  /// duplicates. Module-mode only.
+  fn record_exported_name(&mut self, name: &str, range: TextRange) {
+    if self.top_level_mode != TopLevelMode::Module {
+      return;
+    }
+    if let Some(previous) = self.exported_names.get(name).copied() {
+      self.report_duplicate_export(name, range, previous);
+    } else {
+      self.exported_names.insert(name.to_string(), range);
+    }
+  }
+
+  /// Records a local name that must be declared in the module scope
+  /// (`ExportedBindings` of a non-`from` ExportDeclaration).
+  fn record_exported_binding(&mut self, name: &str, range: TextRange) {
+    if self.top_level_mode != TopLevelMode::Module {
+      return;
+    }
+    self.exported_bindings.push((name.to_string(), range));
+  }
+
+  /// After all module declarations are recorded, ensure every
+  /// `ExportedBindings` entry exists in the module scope.
+  fn validate_module_export_bindings(&mut self) {
+    if self.top_level_mode != TopLevelMode::Module {
+      return;
+    }
+    let module_scope = self.builder.top_scope;
+    let bindings = std::mem::take(&mut self.exported_bindings);
+    for (name, range) in bindings {
+      let declared = self
+        .builder
+        .name_lookup
+        .get(&name)
+        .and_then(|name_id| {
+          self
+            .builder
+            .scopes
+            .get(&module_scope)
+            .and_then(|scope| scope.symbols.get(name_id))
+        })
+        .is_some();
+      if !declared {
+        self.report_undeclared_export_binding(&name, range);
+      }
+    }
+  }
+
+  /// `export var/let/const …` — BoundNames are ExportedNames.
+  fn record_exported_var_decl_names(&mut self, node: &mut VarDeclNode) {
+    if !node.stx.export || self.top_level_mode != TopLevelMode::Module {
+      return;
+    }
+
+    #[derive(Default, VisitorMut)]
+    #[visitor(IdPatNode(enter))]
+    struct BoundNameCollector {
+      names: Vec<(String, TextRange)>,
+    }
+
+    impl BoundNameCollector {
+      fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+        self
+          .names
+          .push((node.stx.name.clone(), ident_range(node.loc, &node.stx.name)));
+      }
+    }
+
+    let mut collector = BoundNameCollector::default();
+    for declarator in node.stx.declarators.iter_mut() {
+      declarator.pattern.drive_mut(&mut collector);
+    }
+    for (name, range) in collector.names {
+      self.record_exported_name(&name, range);
+    }
+  }
+
+  /// `export function/class …` / `export default function/class …`.
+  fn record_exported_decl_name(
+    &mut self,
+    export: bool,
+    export_default: bool,
+    name: Option<&Node<ClassOrFuncName>>,
+    decl_range: TextRange,
+  ) {
+    if self.top_level_mode != TopLevelMode::Module {
+      return;
+    }
+    if export_default {
+      self.record_exported_name("default", decl_range);
+    } else if export {
+      if let Some(name) = name {
+        self.record_exported_name(&name.stx.name, ident_range(name.loc, &name.stx.name));
+      }
+    }
+  }
+
+  /// Reports `BIND0016` for every `let`-named `IdPat` bound by a lexical
+  /// declaration pattern.
+  fn report_lexical_let_names(&mut self, pat: &mut PatDeclNode) {
+    #[derive(Default, VisitorMut)]
+    #[visitor(IdPatNode(enter))]
+    struct LetNameCollector {
+      ranges: Vec<TextRange>,
+    }
+
+    impl LetNameCollector {
+      fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+        if node.stx.name == "let" {
+          self.ranges.push(ident_range(node.loc, &node.stx.name));
+        }
+      }
+    }
+
+    let mut collector = LetNameCollector::default();
+    pat.drive_mut(&mut collector);
+    for range in collector.ranges {
+      self.report_lexical_let_binding(range);
+    }
+  }
+
   fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
-    let disallow_duplicates =
-      strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
+    let disallow_duplicates = strict
+      || func.stx.arrow
+      || !func_has_simple_parameter_list(&func.stx)
+      || self.requires_unique_params();
     if !disallow_duplicates {
       return;
     }
@@ -1071,16 +1359,11 @@ impl DeclareVisitor {
   }
 
   fn nearest_closure(&self) -> Option<ScopeId> {
-    self
-      .scope_stack
-      .iter()
-      .rev()
-      .copied()
-      .find(|id| {
-        let kind = self.builder.scope_kind(*id);
-        kind.is_var_scope()
-          || (self.top_level_mode == TopLevelMode::Script && kind == ScopeKind::Global)
-      })
+    self.scope_stack.iter().rev().copied().find(|id| {
+      let kind = self.builder.scope_kind(*id);
+      kind.is_var_scope()
+        || (self.top_level_mode == TopLevelMode::Script && kind == ScopeKind::Global)
+    })
   }
 
   fn declare_with_target(
@@ -1252,11 +1535,17 @@ impl DeclareVisitor {
   }
 
   fn enter_class_or_obj_val(&mut self, node: &mut ClassOrObjVal) {
+    // Object-literal methods/getters/setters are NOT automatically strict
+    // (ECMA-262: only ClassBody is always strict). They do require unique
+    // formal parameter names (MethodDefinition / UniqueFormalParameters).
+    // Pushing `strict=true` here previously rejected legal sloppy programs like
+    // `({set a(yield){}})` and leaked strict/`yield`-as-Identifier restrictions
+    // into non-generator accessors nested inside generators.
     if matches!(
       node,
       ClassOrObjVal::Method(_) | ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_)
     ) {
-      self.strict_stack.push(true);
+      self.next_func_unique_params = true;
     }
 
     let Some(phase) = self.class_member_phase_stack.last_mut() else {
@@ -1275,7 +1564,7 @@ impl DeclareVisitor {
     }
   }
 
-  fn exit_class_or_obj_val(&mut self, node: &mut ClassOrObjVal) {
+  fn exit_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
     let phase = self.class_member_phase_stack.last_mut();
 
     if let Some(phase) = phase {
@@ -1291,18 +1580,41 @@ impl DeclareVisitor {
         _ => {}
       }
     }
-
-    if matches!(
-      node,
-      ClassOrObjVal::Method(_) | ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_)
-    ) {
-      self.strict_stack.pop();
-    }
   }
 
   fn enter_new_target_node(&mut self, node: &mut NewTargetNode) {
     if !self.new_target_allowed() {
       self.report_invalid_new_target(range_of(node));
+    }
+  }
+
+  fn enter_lit_obj_expr_node(&mut self, node: &mut LitObjExprNode) {
+    // Only colon-form data properties (`__proto__: value`) with a non-computed
+    // identifier/string key count toward the duplicate-`__proto__` early error.
+    // Shorthand (`{__proto__}`), methods/getters/setters, and computed keys
+    // (`{["__proto__"]: v}`) are excluded by construction (ECMA-262 §B.3.1).
+    let mut proto_spans: Vec<TextRange> = Vec::new();
+    for member in node.stx.members.iter() {
+      if let ObjMemberType::Valued {
+        key: ClassOrObjKey::Direct(direct),
+        val: ClassOrObjVal::Prop(Some(_)),
+      } = &member.stx.typ
+      {
+        if direct.stx.key == "__proto__"
+          && matches!(
+            direct.stx.tt,
+            parse_js::token::TT::Identifier | parse_js::token::TT::LiteralString
+          )
+        {
+          proto_spans.push(range_of(direct));
+        }
+      }
+    }
+    if proto_spans.len() >= 2 {
+      let first = proto_spans[0];
+      for span in proto_spans.into_iter().skip(1) {
+        self.report_duplicate_proto(span, first);
+      }
     }
   }
 
@@ -1386,11 +1698,25 @@ impl DeclareVisitor {
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    // `#name in expr` uses IdExpr for the PrivateIdentifier LHS.
+    if node.stx.name.starts_with('#') {
+      self.check_private_name_use(&node.stx.name, ident_range(node.loc, &node.stx.name));
+      return;
+    }
     if !self.is_strict() {
       return;
     }
     if is_strict_mode_reserved_word(&node.stx.name) {
       self.report_strict_reserved_word(ident_range(node.loc, &node.stx.name));
+    }
+  }
+
+  fn enter_member_expr_node(&mut self, node: &mut MemberExprNode) {
+    if node.stx.right.starts_with('#') {
+      // Prefer the private identifier span (suffix of the member expression).
+      let end = node.loc.end_u32();
+      let start = end.saturating_sub(node.stx.right.len() as u32);
+      self.check_private_name_use(&node.stx.right, TextRange::new(start, end));
     }
   }
 
@@ -1515,6 +1841,12 @@ impl DeclareVisitor {
     if !self.in_statement_list() {
       self.report_invalid_class_declaration(node);
     }
+    self.record_exported_decl_name(
+      node.stx.export,
+      node.stx.export_default,
+      node.stx.name.as_ref(),
+      range_of(node),
+    );
     // Class bodies are always strict mode, and restricted identifiers like
     // `eval`/`arguments` are invalid even when the surrounding script is
     // non-strict.
@@ -1532,17 +1864,20 @@ impl DeclareVisitor {
         },
       );
     }
+    self.push_class_private_names(&node.stx.members);
     self.push_scope(ScopeKind::Class, range_of(node));
   }
 
   fn exit_class_decl_node(&mut self, _node: &mut ClassDeclNode) {
     self.pop_scope();
+    self.pop_class_private_names();
     self.strict_stack.pop();
   }
 
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
     // Class bodies are always strict mode.
     self.strict_stack.push(true);
+    self.push_class_private_names(&node.stx.members);
     self.push_scope(ScopeKind::Class, range_of(node));
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
@@ -1561,6 +1896,7 @@ impl DeclareVisitor {
 
   fn exit_class_expr_node(&mut self, _node: &mut ClassExprNode) {
     self.pop_scope();
+    self.pop_class_private_names();
     self.strict_stack.pop();
   }
 
@@ -1748,6 +2084,15 @@ impl DeclareVisitor {
       }
     }
 
+    if let ForInOfLhs::Decl((mode, pat)) = node {
+      if matches!(
+        mode,
+        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+      ) {
+        self.report_lexical_let_names(pat);
+      }
+    }
+
     if let ForInOfLhs::Decl((mode, _)) = node {
       let target = match mode {
         VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
@@ -1797,6 +2142,13 @@ impl DeclareVisitor {
       self.report_invalid_function_declaration(node);
     }
 
+    self.record_exported_decl_name(
+      node.stx.export,
+      node.stx.export_default,
+      node.stx.name.as_ref(),
+      range_of(node),
+    );
+
     if let Some(name) = &mut node.stx.name {
       let scope_kind = self.builder.scope_kind(self.current_scope());
       let span = ident_range(name.loc, &name.stx.name);
@@ -1822,8 +2174,11 @@ impl DeclareVisitor {
         return;
       }
 
-      if scope_kind == ScopeKind::Block && self.is_strict() {
-        // Strict mode: block-level functions are block-scoped declarations.
+      if scope_kind == ScopeKind::Block && (self.is_strict() || !is_regular) {
+        // Strict mode: all block-level FunctionDeclarations are lexical.
+        // Sloppy mode: Annex B.3.2 applies only to *ordinary* FunctionDeclarations;
+        // Generator / Async / AsyncGenerator declarations remain LexicallyDeclaredNames
+        // of the enclosing Block / CaseBlock (ECMA-262 §14.2.1 / §14.12.1).
         self.declare_class_or_func_name(
           name,
           DeclContext {
@@ -1838,12 +2193,38 @@ impl DeclareVisitor {
         return;
       }
 
-      // Non-strict script: block-level functions are `var` scoped but still
-      // participate in block-level early errors (e.g. they conflict with
-      // `var`/`let`/`const` declarations in the same block). Annex B additionally
-      // creates a hoisted `var` binding in the nearest variable scope unless the
-      // name is shadowed by an enclosing lexical binding.
+      // Non-strict script, ordinary FunctionDeclaration: Annex B.3.2. The binding is
+      // `var`-scoped for instantiation but still participates in block-level early
+      // errors (conflicts with `var`/`let`/`const`/class/async/generator in the same
+      // Block / CaseBlock). Annex B additionally creates a hoisted `var` binding in
+      // the nearest variable scope unless suppressed by an enclosing lexical.
+      //
+      // Exception: Annex B function declarations in *single-statement* positions
+      // (`if (1) function a(){}`, labeled) are not block LexicallyDeclaredNames.
+      // They must not conflict with catch parameters / block lexicals the way a
+      // StatementList `function a(){}` does (web reality / V8; test262 pass
+      // `3dabeca76119d501.js`).
       if scope_kind == ScopeKind::Block {
+        if matches!(
+          stmt_ctx,
+          StmtContext::SingleStatement {
+            allow_regular_function: true
+          }
+        ) {
+          self.declare_class_or_func_name(
+            name,
+            DeclContext {
+              target: DeclTarget::NearestClosure,
+              flags: SymbolFlags::hoisted(),
+              lexical: false,
+              block_lexical: false,
+              block_var: false,
+              catch_param: false,
+            },
+          );
+          return;
+        }
+
         let block_scope = self.current_scope();
         let name_id = self.builder.intern_name(&name.stx.name);
 
@@ -1907,6 +2288,9 @@ impl DeclareVisitor {
   fn enter_func_node(&mut self, node: &mut FuncNode) {
     let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
     self.strict_stack.push(strict);
+    let unique_params = self.next_func_unique_params;
+    self.next_func_unique_params = false;
+    self.unique_params_stack.push(unique_params);
     let new_target_allowed = if node.stx.arrow {
       self.new_target_allowed()
     } else {
@@ -1929,6 +2313,7 @@ impl DeclareVisitor {
     self.pop_scope();
     self.pop_decl_target();
     self.new_target_stack.pop();
+    self.unique_params_stack.pop();
     self.strict_stack.pop();
     self.pop_stmt_context();
   }
@@ -1960,6 +2345,44 @@ impl DeclareVisitor {
     self.pop_decl_target();
   }
 
+  fn enter_export_list_stmt_node(&mut self, node: &mut ExportListStmtNode) {
+    // ECMA-262 §16.2.1.1 — ExportedNames / ExportedBindings for ExportDeclaration.
+    // Re-exports (`from`) contribute ExportedNames only; local export lists also
+    // require each local name to be a module-level binding.
+    if self.top_level_mode != TopLevelMode::Module || node.stx.type_only {
+      return;
+    }
+    let is_reexport = node.stx.from.is_some();
+    match &node.stx.names {
+      ExportNames::All(alias) => {
+        if let Some(alias) = alias {
+          self.record_exported_name(&alias.stx.name, ident_range(alias.loc, &alias.stx.name));
+        }
+      }
+      ExportNames::Specific(names) => {
+        for export_name in names {
+          if export_name.stx.type_only {
+            continue;
+          }
+          let exported = &export_name.stx.alias.stx.name;
+          let exported_range = ident_range(export_name.stx.alias.loc, exported);
+          self.record_exported_name(exported, exported_range);
+          if !is_reexport {
+            let local = export_name.stx.exportable.as_str();
+            // ExportName.loc starts at the local ModuleExportName / IdentifierName.
+            let local_range = ident_range(export_name.loc, local);
+            self.record_exported_binding(local, local_range);
+          }
+        }
+      }
+    }
+  }
+
+  fn enter_export_default_expr_stmt_node(&mut self, node: &mut ExportDefaultExprStmtNode) {
+    // `export default AssignmentExpression;` — ExportedNames contains "default".
+    self.record_exported_name("default", range_of(node));
+  }
+
   fn enter_pat_decl_node(&mut self, _node: &mut PatDeclNode) {
     self.enter_pattern_decl();
   }
@@ -1969,6 +2392,8 @@ impl DeclareVisitor {
   }
 
   fn enter_var_decl_node(&mut self, node: &mut VarDeclNode) {
+    self.record_exported_var_decl_names(node);
+
     let is_lexical = matches!(
       node.stx.mode,
       VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
@@ -1982,6 +2407,23 @@ impl DeclareVisitor {
         VarDeclMode::Var => "var",
       };
       self.report_invalid_lexical_declaration(node.loc, keyword);
+    }
+
+    if is_lexical {
+      for declarator in node.stx.declarators.iter_mut() {
+        self.report_lexical_let_names(&mut declarator.pattern);
+      }
+    }
+
+    if matches!(
+      node.stx.mode,
+      VarDeclMode::Const | VarDeclMode::Using | VarDeclMode::AwaitUsing
+    ) {
+      for declarator in node.stx.declarators.iter() {
+        if declarator.initializer.is_none() {
+          self.report_missing_const_initializer(range_of(&declarator.pattern));
+        }
+      }
     }
 
     let target = match node.stx.mode {

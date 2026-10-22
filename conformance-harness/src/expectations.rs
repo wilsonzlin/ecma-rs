@@ -81,8 +81,8 @@ impl Expectations {
   }
 
   pub fn from_path(path: &Path) -> Result<Self> {
-    let raw = std::fs::read_to_string(path)
-      .with_context(|| format!("read manifest {}", path.display()))?;
+    let raw =
+      std::fs::read_to_string(path).with_context(|| format!("read manifest {}", path.display()))?;
     Self::from_str(&raw).map_err(|err| anyhow!("{}: {err}", path.display()))
   }
 

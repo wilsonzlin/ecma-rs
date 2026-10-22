@@ -15,7 +15,11 @@ repo_root="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pattern_bytes='pub(?:\s*\([^)]*\))?(?:\s+(?:async|const|unsafe))*\s+fn\s+(?!fuzz_)[^(]+\([^)]*&\[u8\]'
 pattern_vec='pub(?:\s*\([^)]*\))?(?:\s+(?:async|const|unsafe))*\s+fn\s+(?!fuzz_)[^(]+\((?![^)]*&mut\s*Vec<u8>)[^)]*Vec<u8>'
 
-if rg --pcre2 --multiline -n "$pattern_bytes" "$repo_root" --glob '*.rs'; then
+# Vendored third-party code (e.g. third_party/socket2) legitimately exposes
+# byte-based APIs (sockets, not source text); the policy governs our own crates.
+RG_GLOBS=(--glob '*.rs' --glob '!third_party/**')
+
+if rg --pcre2 --multiline -n "$pattern_bytes" "$repo_root" "${RG_GLOBS[@]}"; then
   echo "error: UTF-8 source-text API policy violation: public API taking \`&[u8]\` found" >&2
   echo "help: accept source text as \`&str\` or \`Arc<str>\` and validate/convert bytes at IO boundaries" >&2
   echo "note: \`pub fn fuzz_*\` entrypoints are allowed to accept bytes" >&2
@@ -29,7 +33,7 @@ else
   fi
 fi
 
-if rg --pcre2 --multiline -n "$pattern_vec" "$repo_root" --glob '*.rs'; then
+if rg --pcre2 --multiline -n "$pattern_vec" "$repo_root" "${RG_GLOBS[@]}"; then
   echo "error: UTF-8 source-text API policy violation: public API taking \`Vec<u8>\` found" >&2
   echo "help: accept source text as \`&str\` or \`Arc<str>\` and validate/convert bytes at IO boundaries" >&2
   echo "note: \`pub fn fuzz_*\` entrypoints are allowed to accept bytes" >&2

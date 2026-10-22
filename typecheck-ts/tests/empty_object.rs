@@ -68,15 +68,14 @@ x = null;
   assert_eq!(mismatches.len(), 1, "diagnostics: {diagnostics:?}");
 
   let file_id = program.file_id(&file).expect("file id for file0.ts");
-  let null_offset = u32::try_from(source.find("= null").expect("bad null assignment"))
-    .expect("offset fits in u32")
-    + "= ".len() as u32;
+  // tsc anchors assignment-mismatch diagnostics on the LHS identifier (start,
+  // length 1), not the whole assignment or the RHS value.
+  let lhs_x_start = u32::try_from(source.rfind('x').expect("lhs x")).expect("offset fits in u32");
   assert!(
     mismatches.iter().any(|diag| {
       diag.primary.file == file_id
-        && diag.primary.range.start <= null_offset
-        && diag.primary.range.end >= null_offset + 1
+        && diag.primary.range == TextRange::new(lhs_x_start, lhs_x_start + 1)
     }),
-    "expected mismatch span to cover `null`; got {mismatches:?}",
+    "expected mismatch span on the LHS identifier `x` (tsc-aligned); got {mismatches:?}",
   );
 }

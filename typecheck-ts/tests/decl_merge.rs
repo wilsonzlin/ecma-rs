@@ -467,7 +467,10 @@ fn namespace_then_value_emits_ts2434_and_merges_members() {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
-  assert!(has_bar, "namespace member should be visible on merged value");
+  assert!(
+    has_bar,
+    "namespace member should be visible on merged value"
+  );
   let calls = program.call_signatures(ty);
   assert!(
     !calls.is_empty(),

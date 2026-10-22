@@ -1,0 +1,4236 @@
+{
+  "suite": "difftsc",
+  "summary": {
+    "total": 56,
+    "matched": 56,
+    "mismatched": 0,
+    "updated": 0,
+    "skipped": 0,
+    "errors": 0,
+    "expected_mismatches": 0,
+    "unexpected_mismatches": 0,
+    "flaky_mismatches": 0,
+    "xpass": 0
+  },
+  "results": [
+    {
+      "name": "add_event_listener",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "Target",
+            "type": "any"
+          },
+          {
+            "file": "/lib.d.ts",
+            "name": "target",
+            "type": "Target"
+          },
+          {
+            "file": "/main.ts",
+            "name": "result",
+            "type": "\"click\""
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "Target",
+            "type": "any"
+          },
+          {
+            "file": "/lib.d.ts",
+            "name": "target",
+            "type": "Target"
+          },
+          {
+            "file": "/main.ts",
+            "name": "result",
+            "type": "\"click\""
+          }
+        ]
+      }
+    },
+    {
+      "name": "array_reduce",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "MyArray",
+            "type": "any"
+          },
+          {
+            "file": "/lib.d.ts",
+            "name": "nums",
+            "type": "MyArray<number>"
+          },
+          {
+            "file": "/main.ts",
+            "name": "numberResult",
+            "type": "number"
+          },
+          {
+            "file": "/main.ts",
+            "name": "stringResult",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "MyArray",
+            "type": "any"
+          },
+          {
+            "file": "/lib.d.ts",
+            "name": "nums",
+            "type": "MyArray<number>"
+          },
+          {
+            "file": "/main.ts",
+            "name": "numberResult",
+            "type": "number"
+          },
+          {
+            "file": "/main.ts",
+            "name": "stringResult",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "assignability",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2345,
+          "file": "/assignability.ts",
+          "start": 48,
+          "end": 54,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2345",
+          "file": "/assignability.ts",
+          "start": 48,
+          "end": 54,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ]
+    },
+    {
+      "name": "await_using_invalid",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2851,
+          "file": "/await_using_invalid.ts",
+          "start": 62,
+          "end": 65,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TC2012",
+          "file": "/await_using_invalid.ts",
+          "start": 62,
+          "end": 65,
+          "severity": "error",
+          "message": "initializer must be assignable to `AsyncDisposable`"
+        }
+      ]
+    },
+    {
+      "name": "await_using_valid",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2416,
+          "file": "/await_using_valid.ts",
+          "start": 86,
+          "end": 107,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2851,
+          "file": "/await_using_valid.ts",
+          "start": 164,
+          "end": 176,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2416",
+          "file": "/await_using_valid.ts",
+          "start": 86,
+          "end": 107,
+          "severity": "error",
+          "message": "property not assignable to base type"
+        },
+        {
+          "engine": "rust",
+          "code": "TC2012",
+          "file": "/await_using_valid.ts",
+          "start": 164,
+          "end": 176,
+          "severity": "error",
+          "message": "initializer must be assignable to `AsyncDisposable`"
+        }
+      ],
+      "expected_types": {
+        "markers": [
+          {
+            "file": "/await_using_valid.ts",
+            "offset": 160,
+            "line": 9,
+            "column": 14,
+            "type": "AsyncD"
+          }
+        ]
+      },
+      "actual_types": {
+        "markers": [
+          {
+            "file": "/await_using_valid.ts",
+            "offset": 160,
+            "line": 9,
+            "column": 14,
+            "type": "AsyncD"
+          }
+        ]
+      }
+    },
+    {
+      "name": "compiler_options_types",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "types": [
+          "example"
+        ]
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "types": [
+          "example"
+        ],
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "const_type_params",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/const_type_params.ts",
+          "start": 565,
+          "end": 566,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/const_type_params.ts",
+          "start": 571,
+          "end": 572,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/const_type_params.ts",
+          "start": 565,
+          "end": 566,
+          "severity": "error",
+          "message": "type mismatch"
+        },
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/const_type_params.ts",
+          "start": 571,
+          "end": 572,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/const_type_params.ts",
+            "name": "bad",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "constObj",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "constTuple",
+            "type": "readonly [1, 2, 3]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "normalObj",
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "normalTuple",
+            "type": "number[]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "ok",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "unionTuple",
+            "type": "readonly [1, 2]"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/const_type_params.ts",
+            "offset": 126,
+            "line": 8,
+            "column": 23,
+            "type": "number[]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 193,
+            "line": 10,
+            "column": 22,
+            "type": "readonly [1, 2, 3]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 264,
+            "line": 13,
+            "column": 21,
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 334,
+            "line": 15,
+            "column": 20,
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 707,
+            "line": 27,
+            "column": 22,
+            "type": "readonly [1, 2]"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/const_type_params.ts",
+            "name": "bad",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "constObj",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "constTuple",
+            "type": "readonly [1, 2, 3]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "normalObj",
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "normalTuple",
+            "type": "number[]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "ok",
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "name": "unionTuple",
+            "type": "readonly [1, 2]"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/const_type_params.ts",
+            "offset": 126,
+            "line": 8,
+            "column": 23,
+            "type": "number[]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 193,
+            "line": 10,
+            "column": 22,
+            "type": "readonly [1, 2, 3]"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 264,
+            "line": 13,
+            "column": 21,
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 334,
+            "line": 15,
+            "column": 20,
+            "type": "{ readonly a: 1; readonly b: \"x\" }"
+          },
+          {
+            "file": "/const_type_params.ts",
+            "offset": 707,
+            "line": 27,
+            "column": 22,
+            "type": "readonly [1, 2]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "contextual_callbacks",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "contextual_overload_return",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/contextual_overload_return.ts",
+          "start": 92,
+          "end": 98,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/contextual_overload_return.ts",
+          "start": 92,
+          "end": 98,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/contextual_overload_return.ts",
+            "name": "chosen",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/contextual_overload_return.ts",
+            "name": "chosen",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "default_type_args",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/default_type_args.ts",
+            "name": "h",
+            "type": "<T = string>() => T"
+          },
+          {
+            "file": "/default_type_args.ts",
+            "name": "v",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/default_type_args.ts",
+            "name": "h",
+            "type": "<T = string>() => T"
+          },
+          {
+            "file": "/default_type_args.ts",
+            "name": "v",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dts_overloads",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "f",
+            "type": "{ (number) => 2; (string) => 1 }"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/main.ts",
+            "offset": 37,
+            "line": 2,
+            "column": 9,
+            "type": "any"
+          },
+          {
+            "file": "/main.ts",
+            "offset": 67,
+            "line": 4,
+            "column": 9,
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/lib.d.ts",
+            "name": "f",
+            "type": "{ (number) => 2; (string) => 1 }"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/main.ts",
+            "offset": 37,
+            "line": 2,
+            "column": 9,
+            "type": "any"
+          },
+          {
+            "file": "/main.ts",
+            "offset": 67,
+            "line": 4,
+            "column": 9,
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "export_assignment_mixed_exports",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 1203,
+          "file": "/export_assignment_mixed_exports.ts",
+          "start": 15,
+          "end": 28,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2309,
+          "file": "/export_assignment_mixed_exports.ts",
+          "start": 15,
+          "end": 28,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS1203",
+          "file": "/export_assignment_mixed_exports.ts",
+          "start": 15,
+          "end": 28,
+          "severity": "error",
+          "message": "Export assignment cannot be used when targeting ECMAScript modules."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2309",
+          "file": "/export_assignment_mixed_exports.ts",
+          "start": 15,
+          "end": 28,
+          "severity": "error",
+          "message": "an export assignment cannot be used in a module with other exported elements"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/export_assignment_mixed_exports.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/export_assignment_mixed_exports.ts",
+            "name": "x",
+            "type": "2"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/export_assignment_mixed_exports.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/export_assignment_mixed_exports.ts",
+            "name": "x",
+            "type": "2"
+          }
+        ]
+      }
+    },
+    {
+      "name": "export_assignment_qualified",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 1203,
+          "file": "/dep.ts",
+          "start": 50,
+          "end": 71,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 1202,
+          "file": "/main.ts",
+          "start": 0,
+          "end": 28,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS1203",
+          "file": "/dep.ts",
+          "start": 50,
+          "end": 71,
+          "severity": "error",
+          "message": "Export assignment cannot be used when targeting ECMAScript modules."
+        },
+        {
+          "engine": "rust",
+          "code": "TS1202",
+          "file": "/main.ts",
+          "start": 0,
+          "end": 28,
+          "severity": "error",
+          "message": "Import assignment cannot be used when targeting ECMAScript modules."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/main.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/main.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "export_assignment_require",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 1203,
+          "file": "/dep.ts",
+          "start": 18,
+          "end": 31,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 1202,
+          "file": "/main.ts",
+          "start": 0,
+          "end": 30,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS1203",
+          "file": "/dep.ts",
+          "start": 18,
+          "end": 31,
+          "severity": "error",
+          "message": "Export assignment cannot be used when targeting ECMAScript modules."
+        },
+        {
+          "engine": "rust",
+          "code": "TS1202",
+          "file": "/main.ts",
+          "start": 0,
+          "end": 30,
+          "severity": "error",
+          "message": "Import assignment cannot be used when targeting ECMAScript modules."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/main.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "export=",
+            "type": "1"
+          },
+          {
+            "file": "/main.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "function_namespace_export",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2395,
+          "file": "/function_namespace_export.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2434,
+          "file": "/function_namespace_export.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2395,
+          "file": "/function_namespace_export.ts",
+          "start": 59,
+          "end": 62,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2339,
+          "file": "/function_namespace_export.ts",
+          "start": 80,
+          "end": 83,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2395",
+          "file": "/function_namespace_export.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error",
+          "message": "Individual declarations in merged declaration 'foo' must be all exported or all local."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2434",
+          "file": "/function_namespace_export.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error",
+          "message": "A namespace declaration cannot be located prior to a class or function with which it is merged."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2395",
+          "file": "/function_namespace_export.ts",
+          "start": 59,
+          "end": 62,
+          "severity": "error",
+          "message": "Individual declarations in merged declaration 'foo' must be all exported or all local."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2339",
+          "file": "/function_namespace_export.ts",
+          "start": 80,
+          "end": 83,
+          "severity": "error",
+          "message": "Property 'bar' does not exist on type '() => any'."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/function_namespace_export.ts",
+            "name": "foo",
+            "type": "() => any"
+          },
+          {
+            "file": "/function_namespace_export.ts",
+            "name": "value",
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/function_namespace_export.ts",
+            "name": "foo",
+            "type": "() => any"
+          },
+          {
+            "file": "/function_namespace_export.ts",
+            "name": "value",
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "function_namespace_order",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2434,
+          "file": "/function_namespace_order.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2339,
+          "file": "/function_namespace_order.ts",
+          "start": 66,
+          "end": 69,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2434",
+          "file": "/function_namespace_order.ts",
+          "start": 10,
+          "end": 13,
+          "severity": "error",
+          "message": "A namespace declaration cannot be located prior to a class or function with which it is merged."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2339",
+          "file": "/function_namespace_order.ts",
+          "start": 66,
+          "end": 69,
+          "severity": "error",
+          "message": "Property 'bar' does not exist on type 'object & () => any'."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/function_namespace_order.ts",
+            "name": "value",
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/function_namespace_order.ts",
+            "name": "value",
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "generic_constraints",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2345,
+          "file": "/c.ts",
+          "start": 53,
+          "end": 54,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2345,
+          "file": "/c.ts",
+          "start": 59,
+          "end": 62,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2345",
+          "file": "/c.ts",
+          "start": 53,
+          "end": 54,
+          "severity": "error",
+          "message": "type mismatch"
+        },
+        {
+          "engine": "rust",
+          "code": "TS2345",
+          "file": "/c.ts",
+          "start": 59,
+          "end": 62,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/a.ts",
+            "name": "f",
+            "type": "<T extends string>(T) => T"
+          },
+          {
+            "file": "/b.ts",
+            "name": "g",
+            "type": "<T extends number>(T) => T"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/a.ts",
+            "name": "f",
+            "type": "<T extends string>(T) => T"
+          },
+          {
+            "file": "/b.ts",
+            "name": "g",
+            "type": "<T extends number>(T) => T"
+          }
+        ]
+      }
+    },
+    {
+      "name": "generic_defaults",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "id",
+            "type": "<T extends string = \"x\">(T) => T"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 36,
+            "line": 2,
+            "column": 9,
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "id",
+            "type": "<T extends string = \"x\">(T) => T"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 36,
+            "line": 2,
+            "column": 9,
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "generics",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/generics.ts",
+            "name": "genericValue",
+            "type": "{ a: number; b: string }"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/generics.ts",
+            "offset": 70,
+            "line": 4,
+            "column": 18,
+            "type": "{ a: number; b: string }"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/generics.ts",
+            "name": "genericValue",
+            "type": "{ a: number; b: string }"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/generics.ts",
+            "offset": 70,
+            "line": 4,
+            "column": 18,
+            "type": "{ a: number; b: string }"
+          }
+        ]
+      }
+    },
+    {
+      "name": "global_augmentation",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "import_equals_require",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 1202,
+          "file": "/main.ts",
+          "start": 0,
+          "end": 30,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2454,
+          "file": "/main.ts",
+          "start": 48,
+          "end": 49,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS1202",
+          "file": "/main.ts",
+          "start": 0,
+          "end": 30,
+          "severity": "error",
+          "message": "Import assignment cannot be used when targeting ECMAScript modules."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2454",
+          "file": "/main.ts",
+          "start": 48,
+          "end": 49,
+          "severity": "error",
+          "message": "v is used before being assigned"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/dep.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "intrinsic_string_mappings",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/intrinsic_string_mappings.ts",
+          "start": 404,
+          "end": 412,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/intrinsic_string_mappings.ts",
+          "start": 404,
+          "end": 412,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "capital",
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "loud",
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "mismatch",
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "quiet",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "uncapital",
+            "type": "\"hello\""
+          }
+        ],
+        "markers": [
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "offset": 158,
+            "line": 5,
+            "column": 16,
+            "type": "\"HELLO\""
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "capital",
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "loud",
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "mismatch",
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "quiet",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "name": "uncapital",
+            "type": "\"hello\""
+          }
+        ],
+        "markers": [
+          {
+            "file": "/intrinsic_string_mappings.ts",
+            "offset": 158,
+            "line": 5,
+            "column": 16,
+            "type": "\"HELLO\""
+          }
+        ]
+      }
+    },
+    {
+      "name": "intrinsics",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/intrinsics.ts",
+            "name": "builtinReturn",
+            "type": "any"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "capitalize",
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "lower",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "noInfer",
+            "type": "\"x\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "template",
+            "type": "`FOO${Uppercase<string>}BAR`"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "uncapitalize",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "union",
+            "type": "\"A\" | \"B\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "upper",
+            "type": "\"HELLO\""
+          }
+        ],
+        "markers": [
+          {
+            "file": "/intrinsics.ts",
+            "offset": 16,
+            "line": 0,
+            "column": 16,
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 86,
+            "line": 3,
+            "column": 16,
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 156,
+            "line": 6,
+            "column": 16,
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 232,
+            "line": 9,
+            "column": 16,
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 312,
+            "line": 12,
+            "column": 16,
+            "type": "\"A\" | \"B\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 408,
+            "line": 15,
+            "column": 16,
+            "type": "`FOO${Uppercase<string>}BAR`"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 493,
+            "line": 18,
+            "column": 16,
+            "type": "\"x\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 555,
+            "line": 21,
+            "column": 16,
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/intrinsics.ts",
+            "name": "builtinReturn",
+            "type": "any"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "capitalize",
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "lower",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "noInfer",
+            "type": "\"x\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "template",
+            "type": "`FOO${Uppercase<string>}BAR`"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "uncapitalize",
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "union",
+            "type": "\"A\" | \"B\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "name": "upper",
+            "type": "\"HELLO\""
+          }
+        ],
+        "markers": [
+          {
+            "file": "/intrinsics.ts",
+            "offset": 16,
+            "line": 0,
+            "column": 16,
+            "type": "\"HELLO\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 86,
+            "line": 3,
+            "column": 16,
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 156,
+            "line": 6,
+            "column": 16,
+            "type": "\"Hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 232,
+            "line": 9,
+            "column": 16,
+            "type": "\"hello\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 312,
+            "line": 12,
+            "column": 16,
+            "type": "\"A\" | \"B\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 408,
+            "line": 15,
+            "column": 16,
+            "type": "`FOO${Uppercase<string>}BAR`"
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 493,
+            "line": 18,
+            "column": 16,
+            "type": "\"x\""
+          },
+          {
+            "file": "/intrinsics.ts",
+            "offset": 555,
+            "line": 21,
+            "column": 16,
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mapped_types",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/mapped_types.ts",
+            "name": "partial",
+            "type": "ReadonlyPartial<Options>"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/mapped_types.ts",
+            "offset": 120,
+            "line": 3,
+            "column": 16,
+            "type": "ReadonlyPartial<Options>"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/mapped_types.ts",
+            "name": "partial",
+            "type": "ReadonlyPartial<Options>"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/mapped_types.ts",
+            "offset": 120,
+            "line": 3,
+            "column": 16,
+            "type": "ReadonlyPartial<Options>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "merged_function_namespace",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "Lib",
+            "type": "typeof Lib"
+          },
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "doubled",
+            "type": "number"
+          },
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "label",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "Lib",
+            "type": "typeof Lib"
+          },
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "doubled",
+            "type": "number"
+          },
+          {
+            "file": "/merged_function_namespace.ts",
+            "name": "label",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "module_augmentation_export",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/pkg.ts",
+            "name": "x",
+            "type": "1"
+          },
+          {
+            "file": "/pkg.ts",
+            "name": "y",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/pkg.ts",
+            "name": "x",
+            "type": "1"
+          },
+          {
+            "file": "/pkg.ts",
+            "name": "y",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "module_augmentation_global",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/m.ts",
+            "name": "extra",
+            "type": "number"
+          },
+          {
+            "file": "/m.ts",
+            "name": "v",
+            "type": "{ x: number }"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/m.ts",
+            "name": "extra",
+            "type": "number"
+          },
+          {
+            "file": "/m.ts",
+            "name": "v",
+            "type": "{ x: number }"
+          }
+        ]
+      }
+    },
+    {
+      "name": "module_augmentation_interface",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/pkg.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/pkg.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "module_types",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/m.ts",
+            "name": "v",
+            "type": "{ x: number }"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/m.ts",
+            "name": "v",
+            "type": "{ x: number }"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/use.ts",
+          "start": 70,
+          "end": 73,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/use.ts",
+          "start": 70,
+          "end": 73,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/types.ts",
+            "name": "Person",
+            "type": "any"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/types.ts",
+            "name": "Person",
+            "type": "any"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace_reexport",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2454,
+          "file": "/a.ts",
+          "start": 44,
+          "end": 45,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2454,
+          "file": "/a.ts",
+          "start": 47,
+          "end": 48,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2454",
+          "file": "/a.ts",
+          "start": 44,
+          "end": 45,
+          "severity": "error",
+          "message": "v is used before being assigned"
+        },
+        {
+          "engine": "rust",
+          "code": "TS2454",
+          "file": "/a.ts",
+          "start": 47,
+          "end": 48,
+          "severity": "error",
+          "message": "v is used before being assigned"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/re.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 49,
+            "line": 4,
+            "column": 2,
+            "type": "number"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.ts",
+            "name": "Foo",
+            "type": "any"
+          },
+          {
+            "file": "/re.ts",
+            "name": "Foo",
+            "type": "any"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 49,
+            "line": 4,
+            "column": 2,
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "name": "narrowing",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 18048,
+          "file": "/narrowing.ts",
+          "start": 1295,
+          "end": 1296,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS18048",
+          "file": "/narrowing.ts",
+          "start": 1295,
+          "end": 1296,
+          "severity": "error",
+          "message": "identifier is possibly undefined"
+        }
+      ]
+    },
+    {
+      "name": "narrowing_types",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 18048,
+          "file": "/narrowing_types.ts",
+          "start": 2073,
+          "end": 2074,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS18048",
+          "file": "/narrowing_types.ts",
+          "start": 2073,
+          "end": 2074,
+          "severity": "error",
+          "message": "identifier is possibly undefined"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/narrowing_types.ts",
+            "name": "pickValue",
+            "type": "(number | string) => number | string"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 105,
+            "line": 2,
+            "column": 18,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 378,
+            "line": 15,
+            "column": 17,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 428,
+            "line": 19,
+            "column": 15,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 564,
+            "line": 26,
+            "column": 19,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 618,
+            "line": 29,
+            "column": 19,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 739,
+            "line": 36,
+            "column": 13,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 769,
+            "line": 38,
+            "column": 13,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 921,
+            "line": 47,
+            "column": 9,
+            "type": "Box"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1036,
+            "line": 54,
+            "column": 7,
+            "type": "{ foo: string }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1139,
+            "line": 60,
+            "column": 10,
+            "type": "null | undefined"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1225,
+            "line": 64,
+            "column": 10,
+            "type": "number | undefined"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1317,
+            "line": 68,
+            "column": 12,
+            "type": "any"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1389,
+            "line": 72,
+            "column": 9,
+            "type": "any"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1510,
+            "line": 77,
+            "column": 7,
+            "type": "{ a: { b: number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1525,
+            "line": 79,
+            "column": 5,
+            "type": "null | { a: { b: number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1680,
+            "line": 87,
+            "column": 7,
+            "type": "{ a: { b: () => number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1721,
+            "line": 90,
+            "column": 7,
+            "type": "null | { a: { b: () => number } }"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/narrowing_types.ts",
+            "name": "pickValue",
+            "type": "(number | string) => number | string"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 105,
+            "line": 2,
+            "column": 18,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 378,
+            "line": 15,
+            "column": 17,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 428,
+            "line": 19,
+            "column": 15,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 564,
+            "line": 26,
+            "column": 19,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 618,
+            "line": 29,
+            "column": 19,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 739,
+            "line": 36,
+            "column": 13,
+            "type": "string"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 769,
+            "line": 38,
+            "column": 13,
+            "type": "number"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 921,
+            "line": 47,
+            "column": 9,
+            "type": "Box"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1036,
+            "line": 54,
+            "column": 7,
+            "type": "{ foo: string }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1139,
+            "line": 60,
+            "column": 10,
+            "type": "null | undefined"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1225,
+            "line": 64,
+            "column": 10,
+            "type": "number | undefined"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1317,
+            "line": 68,
+            "column": 12,
+            "type": "any"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1389,
+            "line": 72,
+            "column": 9,
+            "type": "any"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1510,
+            "line": 77,
+            "column": 7,
+            "type": "{ a: { b: number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1525,
+            "line": 79,
+            "column": 5,
+            "type": "null | { a: { b: number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1680,
+            "line": 87,
+            "column": 7,
+            "type": "{ a: { b: () => number } }"
+          },
+          {
+            "file": "/narrowing_types.ts",
+            "offset": 1721,
+            "line": 90,
+            "column": 7,
+            "type": "null | { a: { b: () => number } }"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no_error",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "overloads",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/overloads.ts",
+            "name": "overloadedResult",
+            "type": "string"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/overloads.ts",
+            "offset": 175,
+            "line": 6,
+            "column": 24,
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/overloads.ts",
+            "name": "overloadedResult",
+            "type": "string"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/overloads.ts",
+            "offset": 175,
+            "line": 6,
+            "column": 24,
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reference_lib",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "lib": [
+          "es5",
+          "dom"
+        ]
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "lib": [
+          "dom",
+          "es5"
+        ],
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "notes": [
+        "baseline option lib differs (computed=[\"dom\",\"es5\"], baseline=[\"lib.dom.d.ts\",\"lib.es5.d.ts\"])"
+      ]
+    },
+    {
+      "name": "reference_path",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "reference_types",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "types": [
+          "example"
+        ]
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "types": [
+          "example"
+        ],
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "rest_inference",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2345,
+          "file": "/rest_inference.ts",
+          "start": 100,
+          "end": 113,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2345",
+          "file": "/rest_inference.ts",
+          "start": 100,
+          "end": 113,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/rest_inference.ts",
+            "name": "collected",
+            "type": "number[]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "fromArray",
+            "type": "number[]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "fromTuple",
+            "type": "[number, string]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "paired",
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "tuple",
+            "type": "[number, string]"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/rest_inference.ts",
+            "name": "collected",
+            "type": "number[]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "fromArray",
+            "type": "number[]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "fromTuple",
+            "type": "[number, string]"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "paired",
+            "type": "{ a: number; b: string }"
+          },
+          {
+            "file": "/rest_inference.ts",
+            "name": "tuple",
+            "type": "[number, string]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "skip_lib_check",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "this_param_call",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "strict": true
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": true,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strict": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/a.ts",
+          "start": 73,
+          "end": 74,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/a.ts",
+          "start": 73,
+          "end": 74,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.d.ts",
+            "name": "f",
+            "type": "({ x: number }, number) => number"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.d.ts",
+            "name": "f",
+            "type": "({ x: number }, number) => number"
+          }
+        ]
+      }
+    },
+    {
+      "name": "this_param_dts",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "strict": true
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": true,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strict": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/m.d.ts",
+            "name": "m",
+            "type": "({ x: number }, number) => number"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 50,
+            "line": 3,
+            "column": 7,
+            "type": "number"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/m.d.ts",
+            "name": "m",
+            "type": "({ x: number }, number) => number"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/a.ts",
+            "offset": 50,
+            "line": 3,
+            "column": 7,
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triple_slash_lib_imported",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "module_resolution": "node"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "Disposable"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "Disposable"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "Disposable"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "Disposable"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triple_slash_no_default_lib",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2318,
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'Array'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'Boolean'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'Function'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'IArguments'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'Number'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'Object'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'RegExp'."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2318",
+          "file": null,
+          "start": 0,
+          "end": 0,
+          "severity": "error",
+          "message": "Cannot find global type 'String'."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/triple_slash_no_default_lib.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/triple_slash_no_default_lib.ts",
+            "name": "x",
+            "type": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triple_slash_path_imported",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "module_resolution": "node"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "string"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "string"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triple_slash_references",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 6053,
+          "file": "/triple_slash_references.ts",
+          "start": 63,
+          "end": 75,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2688,
+          "file": "/triple_slash_references.ts",
+          "start": 102,
+          "end": 128,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS6053",
+          "file": "/triple_slash_references.ts",
+          "start": 63,
+          "end": 75,
+          "severity": "error",
+          "message": "file \"./missing.ts\" not found"
+        },
+        {
+          "engine": "rust",
+          "code": "TS2688",
+          "file": "/triple_slash_references.ts",
+          "start": 102,
+          "end": 128,
+          "severity": "error",
+          "message": "cannot find type definition file for \"missing-triple-slash-types\""
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/triple_slash_references.ts",
+            "name": "disposable",
+            "type": "Disposable | null"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/triple_slash_references.ts",
+            "offset": 150,
+            "line": 4,
+            "column": 16,
+            "type": "Disposable | null"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/triple_slash_references.ts",
+            "name": "disposable",
+            "type": "Disposable | null"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/triple_slash_references.ts",
+            "offset": 150,
+            "line": 4,
+            "column": 16,
+            "type": "Disposable | null"
+          }
+        ]
+      }
+    },
+    {
+      "name": "triple_slash_types_imported",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "module_resolution": "node",
+        "types": [
+          "example2"
+        ]
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "types": [
+          "example2"
+        ],
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "string"
+          },
+          {
+            "file": "/main.ts",
+            "name": "from_example2",
+            "type": "string"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "string"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/main.ts",
+            "name": "from_dep",
+            "type": "string"
+          },
+          {
+            "file": "/main.ts",
+            "name": "from_example2",
+            "type": "string"
+          },
+          {
+            "file": "/node_modules/dep/index.ts",
+            "name": "value",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unions",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [],
+      "actual": [],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/unions.ts",
+            "name": "unionValue",
+            "type": "\"a\" | 1"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/unions.ts",
+            "offset": 15,
+            "line": 0,
+            "column": 15,
+            "type": "\"a\" | 1"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/unions.ts",
+            "name": "unionValue",
+            "type": "\"a\" | 1"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/unions.ts",
+            "offset": 15,
+            "line": 0,
+            "column": 15,
+            "type": "\"a\" | 1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "use_define_for_class_fields_false",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext",
+        "use_define_for_class_fields": false
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": false
+      },
+      "expected": [],
+      "actual": []
+    },
+    {
+      "name": "use_define_for_class_fields_true",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext",
+        "use_define_for_class_fields": true
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2729,
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 76,
+          "end": 79,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2729,
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 186,
+          "end": 187,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2729,
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 233,
+          "end": 236,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2612,
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 342,
+          "end": 343,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2729",
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 76,
+          "end": 79,
+          "severity": "error",
+          "message": "Property 'bar' is used before its initialization."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2729",
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 186,
+          "end": 187,
+          "severity": "error",
+          "message": "Property 'x' is used before its initialization."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2729",
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 233,
+          "end": 236,
+          "severity": "error",
+          "message": "Property 'baz' is used before its initialization."
+        },
+        {
+          "engine": "rust",
+          "code": "TS2612",
+          "file": "/use_define_for_class_fields_true.ts",
+          "start": 342,
+          "end": 343,
+          "severity": "error",
+          "message": "Property 'x' will overwrite the base property in 'BaseOverwrite'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration."
+        }
+      ]
+    },
+    {
+      "name": "using_declarations",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2852,
+          "file": "/using_declarations.ts",
+          "start": 354,
+          "end": 359,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2852",
+          "file": "/using_declarations.ts",
+          "start": 354,
+          "end": 359,
+          "severity": "error",
+          "message": "'await using' statements are only allowed within async functions and at the top levels of modules."
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/using_declarations.ts",
+            "name": "invalidAwaitUsing",
+            "type": "() => Resource"
+          },
+          {
+            "file": "/using_declarations.ts",
+            "name": "useResource",
+            "type": "() => Resource"
+          },
+          {
+            "file": "/using_declarations.ts",
+            "name": "value",
+            "type": "Resource"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/using_declarations.ts",
+            "offset": 198,
+            "line": 9,
+            "column": 16,
+            "type": "Resource"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/using_declarations.ts",
+            "name": "invalidAwaitUsing",
+            "type": "() => Resource"
+          },
+          {
+            "file": "/using_declarations.ts",
+            "name": "useResource",
+            "type": "() => Resource"
+          },
+          {
+            "file": "/using_declarations.ts",
+            "name": "value",
+            "type": "Resource"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/using_declarations.ts",
+            "offset": 198,
+            "line": 9,
+            "column": 16,
+            "type": "Resource"
+          }
+        ]
+      }
+    },
+    {
+      "name": "using_invalid",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2850,
+          "file": "/using_invalid.ts",
+          "start": 30,
+          "end": 33,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TC2012",
+          "file": "/using_invalid.ts",
+          "start": 30,
+          "end": 33,
+          "severity": "error",
+          "message": "initializer must be assignable to `Disposable`"
+        }
+      ]
+    },
+    {
+      "name": "using_valid",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "target": "ESNext"
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ESNext",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 1492,
+          "file": "/using_valid.ts",
+          "start": 233,
+          "end": 242,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS1492",
+          "file": "/using_valid.ts",
+          "start": 233,
+          "end": 242,
+          "severity": "error",
+          "message": "'using' declarations may not have binding patterns."
+        }
+      ],
+      "expected_types": {
+        "markers": [
+          {
+            "file": "/using_valid.ts",
+            "offset": 113,
+            "line": 8,
+            "column": 6,
+            "type": "D"
+          },
+          {
+            "file": "/using_valid.ts",
+            "offset": 235,
+            "line": 17,
+            "column": 8,
+            "type": "number"
+          }
+        ]
+      },
+      "actual_types": {
+        "markers": [
+          {
+            "file": "/using_valid.ts",
+            "offset": 113,
+            "line": 8,
+            "column": 6,
+            "type": "D"
+          },
+          {
+            "file": "/using_valid.ts",
+            "offset": 235,
+            "line": 17,
+            "column": 8,
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "name": "variance",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2636,
+          "file": "/variance.ts",
+          "start": 283,
+          "end": 288,
+          "severity": "error"
+        },
+        {
+          "engine": "tsc",
+          "code": 2636,
+          "file": "/variance.ts",
+          "start": 342,
+          "end": 346,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TC3004",
+          "file": "/variance.ts",
+          "start": 283,
+          "end": 288,
+          "severity": "error",
+          "message": "Type parameter 'T' is declared as 'out', but it is only used contravariantly."
+        },
+        {
+          "engine": "rust",
+          "code": "TC3004",
+          "file": "/variance.ts",
+          "start": 342,
+          "end": 346,
+          "severity": "error",
+          "message": "Type parameter 'T' is declared as 'in', but it is only used covariantly."
+        }
+      ]
+    },
+    {
+      "name": "variance_annotations",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {},
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": false,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/variance_annotations.ts",
+          "start": 318,
+          "end": 327,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/variance_annotations.ts",
+          "start": 318,
+          "end": 327,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ],
+      "expected_types": {
+        "exports": [
+          {
+            "file": "/variance_annotations.ts",
+            "name": "Box",
+            "type": "any"
+          },
+          {
+            "file": "/variance_annotations.ts",
+            "name": "animalBox",
+            "type": "Box<Animal>"
+          },
+          {
+            "file": "/variance_annotations.ts",
+            "name": "dogBox",
+            "type": "Box<Dog>"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/variance_annotations.ts",
+            "offset": 163,
+            "line": 12,
+            "column": 16,
+            "type": "Box<Dog>"
+          }
+        ]
+      },
+      "actual_types": {
+        "exports": [
+          {
+            "file": "/variance_annotations.ts",
+            "name": "Box",
+            "type": "any"
+          },
+          {
+            "file": "/variance_annotations.ts",
+            "name": "animalBox",
+            "type": "Box<Animal>"
+          },
+          {
+            "file": "/variance_annotations.ts",
+            "name": "dogBox",
+            "type": "Box<Dog>"
+          }
+        ],
+        "markers": [
+          {
+            "file": "/variance_annotations.ts",
+            "offset": 163,
+            "line": 12,
+            "column": 16,
+            "type": "Box<Dog>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "win_paths",
+      "status": "matched",
+      "expectation": {
+        "expectation": "pass",
+        "expected": true
+      },
+      "harness_options": {
+        "strict": true
+      },
+      "tsc_options": {
+        "exactOptionalPropertyTypes": false,
+        "moduleResolution": "node",
+        "noEmit": true,
+        "noImplicitAny": true,
+        "noUncheckedIndexedAccess": false,
+        "pretty": false,
+        "skipLibCheck": true,
+        "strict": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "target": "ES2015",
+        "useDefineForClassFields": true
+      },
+      "expected": [
+        {
+          "engine": "tsc",
+          "code": 2345,
+          "file": "/work/input.ts",
+          "start": 65,
+          "end": 71,
+          "severity": "error"
+        }
+      ],
+      "actual": [
+        {
+          "engine": "rust",
+          "code": "TS2345",
+          "file": "/work/input.ts",
+          "start": 65,
+          "end": 71,
+          "severity": "error",
+          "message": "type mismatch"
+        }
+      ]
+    }
+  ]
+}

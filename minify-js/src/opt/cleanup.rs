@@ -1,9 +1,11 @@
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
+use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::ExportNames;
-use parse_js::ast::node::{Node, NodeAssocData};
+use parse_js::ast::node::{Node, NodeAssocData, ParenthesizedExpr};
+use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
-use parse_js::ast::stmt::{ExportListStmt, ForBody, ImportStmt, SwitchBranch, TryStmt};
+use parse_js::ast::stmt::{BlockStmt, ExportListStmt, ForBody, ImportStmt, SwitchBranch, TryStmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 
@@ -33,29 +35,33 @@ where
 fn clean_stmts(stmts: Vec<Node<Stmt>>, changed: &mut bool) -> Vec<Node<Stmt>> {
   let mut out = Vec::with_capacity(stmts.len());
   for stmt in stmts {
-    if let Some(stmt) = clean_stmt_in_list(stmt, changed) {
-      out.push(stmt);
-    }
+    append_cleaned_in_list(stmt, &mut out, changed);
   }
   out
 }
 
-fn clean_stmt_in_list(stmt: Node<Stmt>, changed: &mut bool) -> Option<Node<Stmt>> {
+fn append_cleaned_in_list(stmt: Node<Stmt>, out: &mut Vec<Node<Stmt>>, changed: &mut bool) {
   let stmt = clean_stmt(stmt, changed);
   match stmt.stx.as_ref() {
     Stmt::Empty(_) => {
       *changed = true;
-      None
     }
     Stmt::Block(block) if block.stx.body.is_empty() => {
       *changed = true;
-      None
+    }
+    Stmt::Block(block) if can_unwrap_block(block, /* in_list */ true) => {
+      // Safe bare-block unwrap: splice the cleaned body into the parent list.
+      *changed = true;
+      let Node { stx, .. } = stmt;
+      let Stmt::Block(block) = *stx else {
+        unreachable!("matched Stmt::Block above");
+      };
+      out.extend(block.stx.body);
     }
     Stmt::VarDecl(decl) if decl.stx.declarators.is_empty() => {
       *changed = true;
-      None
     }
-    _ => Some(stmt),
+    _ => out.push(stmt),
   }
 }
 
@@ -65,6 +71,18 @@ fn clean_single_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
     Stmt::Block(block) if block.stx.body.is_empty() => {
       *changed = true;
       empty_stmt()
+    }
+    // `if (t) { stmt; }` → `if (t) stmt;` when the block introduces no scope and
+    // has exactly one statement (multi-statement bodies must keep the braces).
+    Stmt::Block(block)
+      if block.stx.body.len() == 1 && can_unwrap_block(block, /* in_list */ false) =>
+    {
+      *changed = true;
+      let Node { stx, .. } = stmt;
+      let Stmt::Block(mut block) = *stx else {
+        unreachable!("matched Stmt::Block above");
+      };
+      block.stx.body.pop().expect("len == 1")
     }
     Stmt::VarDecl(decl) if decl.stx.declarators.is_empty() => {
       *changed = true;
@@ -187,6 +205,59 @@ fn clean_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool) {
     let finally_body = std::mem::take(&mut finally.stx.body);
     finally.stx.body = clean_stmts(finally_body, changed);
   }
+}
+
+/// Whether a bare `{ … }` may be flattened into its parent.
+///
+/// Refuse when the block introduces block-scoped bindings (`let`/`const`/`class`/
+/// `using`/`await using`), contains a function declaration (Annex B block-function
+/// hoisting differs from a bare `function` in if/sloppy contexts), or — in list
+/// position — starts with a string-literal expression statement (which would be
+/// promoted into the parent's directive prologue and can flip sloppy→strict).
+fn can_unwrap_block(block: &Node<BlockStmt>, in_list: bool) -> bool {
+  if block.stx.body.is_empty() {
+    return false;
+  }
+  if in_list && has_leading_string_literal_expr(&block.stx.body) {
+    return false;
+  }
+  !block_body_has_scope_bindings(&block.stx.body)
+}
+
+fn block_body_has_scope_bindings(stmts: &[Node<Stmt>]) -> bool {
+  stmts.iter().any(stmt_introduces_block_scope_binding)
+}
+
+fn stmt_introduces_block_scope_binding(stmt: &Node<Stmt>) -> bool {
+  match stmt.stx.as_ref() {
+    // `var` is function-scoped; unwrapping does not change its binding contour.
+    Stmt::VarDecl(decl) => !matches!(decl.stx.mode, VarDeclMode::Var),
+    Stmt::ClassDecl(_) | Stmt::FunctionDecl(_) => true,
+    // Labels do not create a scope; a labeled lexical/function still belongs to
+    // the enclosing block and must keep that block intact.
+    Stmt::Label(label) => stmt_introduces_block_scope_binding(&label.stx.statement),
+    _ => false,
+  }
+}
+
+fn has_leading_string_literal_expr(stmts: &[Node<Stmt>]) -> bool {
+  let Some(first) = stmts.first() else {
+    return false;
+  };
+  let Stmt::Expr(expr_stmt) = first.stx.as_ref() else {
+    return false;
+  };
+  // Parenthesized string literals are never directives.
+  if expr_stmt
+    .stx
+    .expr
+    .assoc
+    .get::<ParenthesizedExpr>()
+    .is_some()
+  {
+    return false;
+  }
+  matches!(expr_stmt.stx.expr.stx.as_ref(), Expr::LitStr(_))
 }
 
 fn empty_stmt() -> Node<Stmt> {

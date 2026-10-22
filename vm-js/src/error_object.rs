@@ -97,6 +97,13 @@ pub fn throw_type_error(scope: &mut Scope<'_>, intr: Intrinsics, message: &str) 
   }
 }
 
+pub fn throw_range_error(scope: &mut Scope<'_>, intr: Intrinsics, message: &str) -> VmError {
+  match new_range_error(scope, intr, message) {
+    Ok(value) => VmError::Throw(value),
+    Err(err) => err,
+  }
+}
+
 pub fn new_reference_error(
   scope: &mut Scope<'_>,
   intr: Intrinsics,

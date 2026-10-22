@@ -1,4 +1,6 @@
-use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+};
 
 #[derive(Debug, Default)]
 struct Host {
@@ -34,8 +36,13 @@ fn native_handlers_can_downcast_and_mutate_embedder_host_context() -> Result<(),
 
   let mut host = Host::default();
   assert_eq!(host.counter, 0);
-  vm.call(&mut host, &mut scope, Value::Object(func), Value::Undefined, &[])?;
+  vm.call(
+    &mut host,
+    &mut scope,
+    Value::Object(func),
+    Value::Undefined,
+    &[],
+  )?;
   assert_eq!(host.counter, 1);
   Ok(())
 }
-

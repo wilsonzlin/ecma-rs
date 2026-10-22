@@ -160,14 +160,26 @@ pub struct Parser<'a> {
   allow_bare_ts_type_args: bool,
   strict_mode: u32,
   in_function: u32,
+  /// Depth of non-arrow function / method / class-field binding environments that
+  /// provide a `new.target` binding (ECMA-262). Arrows must never modify this:
+  /// they inherit the enclosing value. Parameter-binding helpers save/restore it;
+  /// they must not reset it to zero on exit.
   new_target_allowed: u32,
   super_prop_allowed: u32,
   super_call_allowed: u32,
+  /// Set once an arrow-function parse has consumed `=>`. Callers that speculate
+  /// "arrow vs grouping" must not backtrack after this point — body errors
+  /// (including `new.target` early errors) must propagate.
+  arrow_parse_committed: bool,
   class_is_derived: Vec<bool>,
   in_iteration: u32,
   in_switch: u32,
   labels: Vec<LabelInfo>,
   cancel: Option<Arc<AtomicBool>>,
+  /// Recoverable diagnostics accumulated while `should_recover()` is true.
+  /// Hard failures still return `Err`; soft errors keep a usable AST so
+  /// downstream typechecking can continue (tsc-style multi-diagnostic parse).
+  soft_errors: Vec<SyntaxError>,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -183,10 +195,12 @@ impl<'a> Parser<'a> {
   }
 
   pub fn new_cancellable(
-    lexer: Lexer<'a>,
+    mut lexer: Lexer<'a>,
     options: ParseOptions,
     cancel: Option<Arc<AtomicBool>>,
   ) -> Parser<'a> {
+    // Annex B HTML-like comments are script-only (ECMA-262 §B.1.1).
+    lexer.set_allow_html_comments(matches!(options.source_type, SourceType::Script));
     Parser {
       lexer,
       buf: Vec::new(),
@@ -198,11 +212,45 @@ impl<'a> Parser<'a> {
       new_target_allowed: 0,
       super_prop_allowed: 0,
       super_call_allowed: 0,
+      arrow_parse_committed: false,
       class_is_derived: Vec::new(),
       in_iteration: 0,
       in_switch: 0,
       labels: Vec::new(),
       cancel,
+      soft_errors: Vec::new(),
+    }
+  }
+
+  /// Drain recoverable diagnostics collected during this parse.
+  pub fn take_soft_errors(&mut self) -> Vec<SyntaxError> {
+    std::mem::take(&mut self.soft_errors)
+  }
+
+  pub(crate) fn report_soft(&mut self, err: SyntaxError) {
+    // Mirror tsc `parseErrorAtCurrentToken`: suppress a soft error whose start
+    // coincides with the previous parse diagnostic (keeps multi-error recovery
+    // aligned without flooding the same span).
+    if self
+      .soft_errors
+      .last()
+      .is_some_and(|prev| prev.loc.0 == err.loc.0)
+    {
+      return;
+    }
+    self.soft_errors.push(err);
+  }
+
+  /// Bare `#` PrivateIdentifier → soft TS1127 (`InvalidCharacter`) under recovery.
+  ///
+  /// TypeScript's scanner yields a PrivateIdentifier for `#` alone; the parser
+  /// reports one Invalid character diagnostic per occurrence and continues.
+  pub(crate) fn report_bare_private_hash_if_needed(&mut self, tok: &crate::token::Token) {
+    if tok.typ != crate::token::TT::PrivateMember || !self.should_recover() {
+      return;
+    }
+    if self.str(tok.loc) == "#" {
+      self.report_soft(tok.error(SyntaxErrorType::InvalidCharacter));
     }
   }
 
@@ -334,6 +382,26 @@ impl<'a> Parser<'a> {
     }
   }
 
+  /// IsValidSimpleAssignmentTarget (ECMA-262) for update / assignment operands.
+  pub(crate) fn is_simple_assignment_target(expr: &Node<Expr>) -> bool {
+    use crate::ast::node::ParenthesizedExpr;
+    // Look through ParenthesizedExpression markers (same node, marker only).
+    let _ = expr.assoc.get::<ParenthesizedExpr>();
+    match expr.stx.as_ref() {
+      Expr::Id(_) | Expr::IdPat(_) => true,
+      Expr::Member(m) if !m.stx.optional_chaining => true,
+      Expr::ComputedMember(m) if !m.stx.optional_chaining => true,
+      _ => false,
+    }
+  }
+
+  pub(crate) fn validate_update_operand(&self, expr: &Node<Expr>) -> SyntaxResult<()> {
+    if self.is_strict_ecmascript() && !Self::is_simple_assignment_target(expr) {
+      return Err(expr.error(SyntaxErrorType::InvalidUpdateOperand));
+    }
+    self.validate_strict_assignment_target_expr(expr)
+  }
+
   pub(crate) fn validate_strict_assignment_target_pat(&self, pat: &Node<Pat>) -> SyntaxResult<()> {
     if !self.is_strict_ecmascript() || !self.is_strict_mode() {
       return Ok(());
@@ -389,12 +457,17 @@ impl<'a> Parser<'a> {
       if t.typ != TT::LiteralString {
         break;
       }
-      let value = self.lit_str_val_with_mode(LexMode::Standard)?;
+      // Use Strict Directive: only the *unescaped* literals `"use strict"` /
+      // `'use strict'` count (ECMA-262 Directive Prologue). Escapes like
+      // `'use\x20strict'` decode to the same SV but are not Use Strict Directives.
+      let raw = self.str(t.loc);
+      let is_use_strict_directive = raw == "\"use strict\"" || raw == "'use strict'";
+      let _value = self.lit_str_val_with_mode(LexMode::Standard)?;
       let next = self.peek();
       if Self::token_continues_expression_after_directive_string(&next) {
         break;
       }
-      if value == "use strict" {
+      if is_use_strict_directive {
         found = true;
       }
       if next.typ == TT::Semicolon {
@@ -440,6 +513,13 @@ impl<'a> Parser<'a> {
 
   pub fn string(&self, loc: Loc) -> String {
     self.str(loc).to_string()
+  }
+
+  /// ECMA-262 StringValue of an IdentifierName: Unicode escapes (`\uXXXX` / `\u{…}`)
+  /// are decoded. Used for reserved-word early errors where the lexer kept the
+  /// raw escape spelling in the token span (escaped keywords are `TT::Identifier`).
+  pub(crate) fn identifier_string_value(&self, loc: Loc) -> String {
+    decode_identifier_string_value(self.str(loc)).unwrap_or_else(|| self.string(loc))
   }
 
   pub fn checkpoint(&self) -> ParserCheckpoint {
@@ -828,4 +908,51 @@ impl<'a> Parser<'a> {
         .unwrap_or_else(|| body.to_string()),
     )
   }
+}
+
+/// Decode IdentifierName Unicode escapes to the ECMA-262 StringValue.
+fn decode_identifier_string_value(raw: &str) -> Option<String> {
+  if !raw.contains('\\') {
+    return Some(raw.to_string());
+  }
+  let mut out = String::with_capacity(raw.len());
+  let mut chars = raw.chars().peekable();
+  while let Some(c) = chars.next() {
+    if c != '\\' {
+      out.push(c);
+      continue;
+    }
+    if chars.next()? != 'u' {
+      return None;
+    }
+    let cp = if chars.peek() == Some(&'{') {
+      chars.next();
+      let mut hex = String::new();
+      while let Some(&h) = chars.peek() {
+        if h == '}' {
+          break;
+        }
+        if !h.is_ascii_hexdigit() {
+          return None;
+        }
+        hex.push(chars.next()?);
+      }
+      if chars.next()? != '}' || hex.is_empty() {
+        return None;
+      }
+      u32::from_str_radix(&hex, 16).ok()?
+    } else {
+      let mut hex = String::new();
+      for _ in 0..4 {
+        let h = chars.next()?;
+        if !h.is_ascii_hexdigit() {
+          return None;
+        }
+        hex.push(h);
+      }
+      u32::from_str_radix(&hex, 16).ok()?
+    };
+    out.push(char::from_u32(cp)?);
+  }
+  Some(out)
 }

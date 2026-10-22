@@ -1,5 +1,6 @@
 use super::*;
 
+mod expando;
 mod hir_align;
 mod libs;
 mod sem_diagnostics;

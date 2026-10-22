@@ -230,10 +230,11 @@ impl ProgramTypeResolver {
       };
     }
     if ns.contains(sem_ts::Namespace::TYPE) {
+      // Prefer `class` over `interface` for same-name merges (see ProgramState).
       return match kind {
-        DefKind::Interface(_) => 0,
-        DefKind::TypeAlias(_) => 1,
-        DefKind::Class(_) => 2,
+        DefKind::Class(_) => 0,
+        DefKind::Interface(_) => 1,
+        DefKind::TypeAlias(_) => 2,
         DefKind::Enum(_) => 3,
         DefKind::Import(_) | DefKind::ImportAlias(_) => 4,
         DefKind::VarDeclarator(_) => 5,

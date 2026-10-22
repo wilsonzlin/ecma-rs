@@ -45,4 +45,3 @@ fn stack_trace_formatting_is_stable() {
   let expected = "at foo (script.js:1:5)\nat script.js:2:1";
   assert_eq!(rendered, expected);
 }
-

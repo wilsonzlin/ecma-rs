@@ -64,4 +64,3 @@ fn host_slots_cleared_on_gc_and_reuse() -> Result<(), VmError> {
 
   Ok(())
 }
-

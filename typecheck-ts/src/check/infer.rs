@@ -316,8 +316,27 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
       return;
     }
 
-    // Covariant inference distributes unions to gather candidates.
-    if variance == Variance::Covariant {
+    // tsc `inferFromTypes` for `T | Concrete`: infer T from source constituents
+    // that are *not* assignable to the non-naked union arms
+    // (`unionAndIntersectionInference2`: `f1(e1)` → T = number | boolean).
+    // Must run before covariant arg-union distribution, which would otherwise
+    // split `number | string | boolean` into incompatible lowers and first-win
+    // `number`, rejecting `boolean` (false TS2345).
+    if variance == Variance::Covariant
+      && self.try_constrain_union_with_naked_type_param(param_ty, arg)
+    {
+      return;
+    }
+
+    // Covariant inference distributes unions to gather candidates — but only
+    // when the target is itself a union (or structured): for a *naked* type
+    // parameter tsc keeps the source union as a single candidate
+    // (`inferFromTypes`: `const candidate = propagationType || source`), so
+    // `boxify(x)` with `x: A | B | undefined` infers `T = A | B | undefined`
+    // instead of first-winning one member (`mappedTypes4`).
+    if variance == Variance::Covariant
+      && !matches!(self.store.type_kind(param_ty), TypeKind::TypeParam(_))
+    {
       match (
         self.store.type_kind(arg.regular),
         self.store.type_kind(arg.const_),
@@ -638,6 +657,86 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
     );
   }
 
+  /// tsc union-target inference with a single naked type variable.
+  ///
+  /// Returns `true` when this path handled `param_ty` (caller must not fall
+  /// through to ordinary union / arg-distribution logic).
+  fn try_constrain_union_with_naked_type_param(&mut self, param_ty: TypeId, arg: ArgPair) -> bool {
+    let TypeKind::Union(options) = self.store.type_kind(param_ty) else {
+      return false;
+    };
+
+    let mut naked: Option<(TypeParamId, TypeId)> = None;
+    let mut fixed = Vec::new();
+    for opt in options {
+      match self.store.type_kind(opt) {
+        TypeKind::TypeParam(id) if self.decls.contains_key(&id) => {
+          if naked.is_some() {
+            // Multiple naked type variables — leave to the generic union path.
+            return false;
+          }
+          naked = Some((id, opt));
+        }
+        _ => fixed.push(opt),
+      }
+    }
+    let Some((naked_id, _naked_ty)) = naked else {
+      return false;
+    };
+    if fixed.is_empty() {
+      return false;
+    }
+
+    let regular_sources = flatten_union_constituents(self.store.as_ref(), arg.regular);
+    let const_sources = flatten_union_constituents(self.store.as_ref(), arg.const_);
+
+    let mut unmatched_regular = Vec::new();
+    let mut unmatched_const = Vec::new();
+    for (idx, &src) in regular_sources.iter().enumerate() {
+      let const_src = const_sources.get(idx).copied().unwrap_or(src);
+      let mut matched = false;
+      for &fixed_ty in &fixed {
+        // Nested inference into non-naked arms (e.g. `Promise<U>` in `T | Promise<U>`).
+        self.constrain(
+          fixed_ty,
+          ArgPair {
+            regular: src,
+            const_: const_src,
+          },
+          Variance::Covariant,
+        );
+        if self.relate.is_assignable(src, fixed_ty) {
+          matched = true;
+        }
+      }
+      if !matched {
+        unmatched_regular.push(src);
+        unmatched_const.push(const_src);
+      }
+    }
+
+    let use_const = self.decls.get(&naked_id).is_some_and(|decl| decl.const_);
+    let bound_ty = if !unmatched_regular.is_empty() {
+      let regular = union_or_single(self.store.as_ref(), unmatched_regular);
+      let const_ = union_or_single(self.store.as_ref(), unmatched_const);
+      if use_const {
+        const_
+      } else {
+        regular
+      }
+    } else {
+      // Every source constituent matched a fixed arm — infer the full source
+      // into the naked variable (tsc NakedTypeVariable priority path).
+      if use_const {
+        arg.const_
+      } else {
+        arg.regular
+      }
+    };
+    self.add_bound(naked_id, Variance::Covariant, bound_ty);
+    true
+  }
+
   fn contains_inferable_type_param(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
     if !visited.insert(ty) {
       return false;
@@ -706,7 +805,7 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
       let bounds = self.bounds.get(tp).cloned().unwrap_or_default();
 
       let mut substituter = Substituter::new(Arc::clone(&self.store), result.substitutions.clone());
-      let mut lowers: Vec<TypeId> = bounds
+      let lowers: Vec<TypeId> = bounds
         .lower
         .into_iter()
         .map(|ty| substituter.substitute_type(ty))
@@ -717,8 +816,8 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
         .map(|ty| substituter.substitute_type(ty))
         .collect();
 
-      lowers.sort_unstable();
-      lowers.dedup();
+      // Upper bounds are order-insensitive; lower bounds keep encounter order
+      // for first-wins when combining (see below).
       uppers.sort_unstable();
       uppers.dedup();
 
@@ -727,21 +826,40 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
 
       let mut candidate: Option<TypeId> = None;
       if !lowers.is_empty() {
-        let mut lowers = lowers;
-        if lowers.len() > 1 {
-          let has_specific = lowers
-            .iter()
-            .any(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
-          if has_specific {
-            lowers
-              .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
-          }
-        }
-        candidate = Some(if lowers.len() == 1 {
-          lowers[0]
+        // Preserve encounter order (argument order). Sorting would break
+        // tsc's "first candidate wins" when there is no common supertype
+        // (`f('', 0)` → T = `""`, not `"" | 0`).
+        let mut lowers = dedup_preserve_order(lowers);
+        // `any` among covariant lowers wins the whole inference (tsc:
+        // `f(7, anyVar, 4)` → T = any). Do this before stripping unknown.
+        let any_lower = lowers
+          .iter()
+          .copied()
+          .find(|b| matches!(self.store.type_kind(*b), TypeKind::Any));
+        if let Some(any_ty) = any_lower {
+          candidate = Some(any_ty);
         } else {
-          self.store.union(lowers)
-        });
+          if lowers.len() > 1 {
+            let has_specific = lowers
+              .iter()
+              .any(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown));
+            if has_specific {
+              lowers.retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown));
+            }
+          }
+          candidate = Some(if lowers.len() == 1 {
+            lowers[0]
+          } else if inference_lower_bounds_compatible(self.store.as_ref(), self.relate, &lowers) {
+            let mut sorted = lowers;
+            sorted.sort_unstable();
+            self.store.union(sorted)
+          } else {
+            // No best common type among incompatible candidates (e.g. `""` vs
+            // `0` vs `[]`): keep the first inference site and let later argument
+            // checks report TS2345 against that instantiation.
+            lowers[0]
+          });
+        }
       }
       if candidate.is_none() && !uppers.is_empty() {
         candidate = Some(if uppers.len() == 1 {
@@ -793,9 +911,121 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
   }
 }
 
+fn dedup_preserve_order(values: Vec<TypeId>) -> Vec<TypeId> {
+  let mut seen = HashSet::new();
+  let mut out = Vec::with_capacity(values.len());
+  for ty in values {
+    if seen.insert(ty) {
+      out.push(ty);
+    }
+  }
+  out
+}
+
+fn flatten_union_constituents(store: &TypeStore, ty: TypeId) -> Vec<TypeId> {
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => members,
+    _ => vec![ty],
+  }
+}
+
+fn union_or_single(store: &TypeStore, members: Vec<TypeId>) -> TypeId {
+  match members.len() {
+    0 => store.primitive_ids().never,
+    1 => members[0],
+    _ => store.union(members),
+  }
+}
+
+/// Whether multiple covariant lower bounds may be unioned for inference.
+///
+/// Matches tsc's practical split: nullish / object-like / same primitive domain
+/// candidates combine; unrelated literals/primitives keep only the first site
+/// (`""` vs `0` → first wins).
+fn inference_lower_bounds_compatible(
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  bounds: &[TypeId],
+) -> bool {
+  for (i, &a) in bounds.iter().enumerate() {
+    for &b in bounds.iter().skip(i + 1) {
+      if !inference_candidate_pair_compatible(store, relate, a, b) {
+        return false;
+      }
+    }
+  }
+  true
+}
+
+fn inference_candidate_pair_compatible(
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  a: TypeId,
+  b: TypeId,
+) -> bool {
+  if a == b {
+    return true;
+  }
+  let ka = store.type_kind(a);
+  let kb = store.type_kind(b);
+  if matches!(
+    ka,
+    TypeKind::Null | TypeKind::Undefined | TypeKind::Any | TypeKind::Unknown
+  ) || matches!(
+    kb,
+    TypeKind::Null | TypeKind::Undefined | TypeKind::Any | TypeKind::Unknown
+  ) {
+    return true;
+  }
+  if inference_object_like(&ka) && inference_object_like(&kb) {
+    return true;
+  }
+  if inference_same_primitive_domain(&ka, &kb) {
+    return true;
+  }
+  relate.is_assignable(a, b) || relate.is_assignable(b, a)
+}
+
+fn inference_object_like(kind: &TypeKind) -> bool {
+  matches!(
+    kind,
+    TypeKind::Object(_)
+      | TypeKind::Array { .. }
+      | TypeKind::Tuple(_)
+      | TypeKind::EmptyObject
+      | TypeKind::Callable { .. }
+  )
+}
+
+fn inference_same_primitive_domain(a: &TypeKind, b: &TypeKind) -> bool {
+  fn stringy(k: &TypeKind) -> bool {
+    matches!(k, TypeKind::String | TypeKind::StringLiteral(_))
+  }
+  fn numbery(k: &TypeKind) -> bool {
+    matches!(k, TypeKind::Number | TypeKind::NumberLiteral(_))
+  }
+  fn booly(k: &TypeKind) -> bool {
+    matches!(k, TypeKind::Boolean | TypeKind::BooleanLiteral(_))
+  }
+  fn biginty(k: &TypeKind) -> bool {
+    matches!(k, TypeKind::BigInt | TypeKind::BigIntLiteral(_))
+  }
+  (stringy(a) && stringy(b))
+    || (numbery(a) && numbery(b))
+    || (booly(a) && booly(b))
+    || (biginty(a) && biginty(b))
+}
+
 fn widen_inferred_candidate(store: &TypeStore, ty: TypeId) -> TypeId {
   let prim = store.primitive_ids();
   match store.type_kind(ty) {
+    // Non-`const` type parameters widen naked literals (`new C(3)` → `C<number>`,
+    // not `C<3>`). Leaving a singleton literal made property writes like
+    // `a.baz = 5` fail TS2322 against inferred `3`.
+    TypeKind::NumberLiteral(_) => prim.number,
+    TypeKind::StringLiteral(_) => prim.string,
+    TypeKind::BooleanLiteral(_) => prim.boolean,
+    TypeKind::BigIntLiteral(_) => prim.bigint,
     TypeKind::Union(members) => {
       let mut all_number = true;
       let mut all_string = true;

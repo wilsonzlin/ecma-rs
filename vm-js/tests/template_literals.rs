@@ -21,4 +21,3 @@ fn tagged_template_literal_calls_tag_with_template_object() {
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
-

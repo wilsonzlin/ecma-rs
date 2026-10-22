@@ -222,8 +222,7 @@ pub fn compare_reports(baseline: &Report, current: &Report) -> Result<Comparison
             baseline: baseline_outcome,
             current: current_outcome,
           });
-        } else if baseline_outcome.is_fail_like()
-          && matches!(current_outcome, TestOutcome::Passed)
+        } else if baseline_outcome.is_fail_like() && matches!(current_outcome, TestOutcome::Passed)
         {
           comparison.improvements.push(OutcomeChange {
             key,
@@ -264,11 +263,13 @@ pub fn run_cli(args: CompareArgs) -> Result<ExitCode> {
   print_summary(&comparison);
   print_details(&comparison);
 
-  Ok(if args.fail_on_regression && !comparison.regressions.is_empty() {
-    ExitCode::FAILURE
-  } else {
-    ExitCode::SUCCESS
-  })
+  Ok(
+    if args.fail_on_regression && !comparison.regressions.is_empty() {
+      ExitCode::FAILURE
+    } else {
+      ExitCode::SUCCESS
+    },
+  )
 }
 
 fn read_report(path: &Path) -> Result<Report> {
@@ -306,7 +307,10 @@ fn print_details(comparison: &Comparison) {
     println!();
     println!("Improvements:");
     for change in &comparison.improvements {
-      println!("  {}: {} -> {}", change.key, change.baseline, change.current);
+      println!(
+        "  {}: {} -> {}",
+        change.key, change.baseline, change.current
+      );
     }
   }
 
@@ -322,7 +326,10 @@ fn print_details(comparison: &Comparison) {
     eprintln!();
     eprintln!("Regressions:");
     for change in &comparison.regressions {
-      eprintln!("  {}: {} -> {}", change.key, change.baseline, change.current);
+      eprintln!(
+        "  {}: {} -> {}",
+        change.key, change.baseline, change.current
+      );
     }
   }
 }

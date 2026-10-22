@@ -102,7 +102,7 @@ impl ProgramState {
 
   pub(super) fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
     if self.snapshot_loaded {
-      if self.body_results.is_empty() {
+      if self.local_body_results.is_empty() {
         return None;
       }
 
@@ -115,7 +115,7 @@ impl ProgramState {
         (BodyId, ExprId, TextRange),
       )> = None;
 
-      for (body_id, result) in self.body_results.iter() {
+      for (body_id, result) in self.local_body_results.iter() {
         let Some(meta) = self.body_map.get(body_id) else {
           continue;
         };
@@ -194,7 +194,7 @@ impl ProgramState {
         (BodyId, PatId, TextRange),
       )> = None;
 
-      for (body_id, result) in self.body_results.iter() {
+      for (body_id, result) in self.local_body_results.iter() {
         let Some(meta) = self.body_map.get(body_id) else {
           continue;
         };

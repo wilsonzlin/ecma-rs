@@ -39,7 +39,9 @@ pub fn promise_resolve(
 
   // Fast path: if `value` is already a %Promise% instance, return it.
   if let Value::Object(obj) = value {
-    if scope.heap().is_promise_object(obj) && scope.heap().object_prototype(obj)? == Some(intr.promise_prototype()) {
+    if scope.heap().is_promise_object(obj)
+      && scope.heap().object_prototype(obj)? == Some(intr.promise_prototype())
+    {
       return Ok(Value::Object(obj));
     }
   }

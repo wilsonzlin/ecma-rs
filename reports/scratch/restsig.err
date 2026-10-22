@@ -1,0 +1,23 @@
+warning: field `prop_name` is never read
+   --> typecheck-ts/src/program/../check/hir_body/mod.rs:439:14
+    |
+435 | pub(crate) struct ClassFieldInitializerContext {
+    |                   ---------------------------- field in this struct
+...
+439 |   pub(crate) prop_name: String,
+    |              ^^^^^^^^^
+    |
+    = note: `ClassFieldInitializerContext` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `async_` is never read
+  --> typecheck-ts/src/program/../check/hir_body/../ast_index.rs:99:14
+   |
+80 | pub(crate) struct PrivateNameDecl {
+   |                   --------------- field in this struct
+...
+99 |   pub(crate) async_: bool,
+   |              ^^^^^^
+   |
+   = note: `PrivateNameDecl` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+

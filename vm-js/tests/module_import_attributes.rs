@@ -9,7 +9,8 @@ fn assert_syntax_error(source: &str) {
 
 #[test]
 fn parses_import_with_attributes() {
-  let module = SourceTextModuleRecord::parse(r#"import x from "m" with { type: "json" };"#).unwrap();
+  let module =
+    SourceTextModuleRecord::parse(r#"import x from "m" with { type: "json" };"#).unwrap();
   assert_eq!(
     module.requested_modules,
     vec![ModuleRequest::new(

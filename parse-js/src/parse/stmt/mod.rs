@@ -4,6 +4,7 @@ use super::expr::pat::is_valid_pattern_identifier;
 use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::expr::pat::Pat;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::BlockStmt;
@@ -36,6 +37,92 @@ use crate::token::TT;
 use decl::VarDeclParseMode;
 
 impl<'a> Parser<'a> {
+  /// Whether the next token sequence starts a Declaration that is illegal where only
+  /// Statement is produced (if/while/for/with/do bodies, LabelledItem).
+  ///
+  /// Annex B.3.3 allows a (non-async, non-generator) FunctionDeclaration as an IfStatement
+  /// clause in non-strict code; B.3.1 similarly allows a labelled FunctionDeclaration in
+  /// non-strict code. Pass `allow_sloppy_function` to enable those exceptions.
+  ///
+  /// `let` / `using` disambiguation (ECMA-262 ExpressionStatement lookahead + ASI):
+  /// - LexicalDeclaration has **no** `[no LineTerminator here]` between `let`/`const` and
+  ///   BindingList, so at StatementListItem `let\nx` / `let\n[a]=…` / `let\n{a}=…` are
+  ///   declarations.
+  /// - ExpressionStatement forbids only the two-token lookahead `let [` (§14.11 / §13.5),
+  ///   not `let {` or `let BindingIdentifier`. With a LineTerminator before `{` or a
+  ///   BindingIdentifier, ASI ends an ExpressionStatement `let;` and the rest is a
+  ///   separate statement — legal in Statement position (test262 `*-let-*-with-newline`).
+  /// - `let [` remains forbidden as ExpressionStatement even across a LineTerminator, so
+  ///   `if (c) let\n[a]=…` is still PS0018.
+  fn peek_disallowed_in_statement_position(
+    &mut self,
+    ctx: ParseCtx,
+    allow_sloppy_function: bool,
+  ) -> Option<crate::token::Token> {
+    if !self.is_strict_ecmascript() {
+      return None;
+    }
+    let [t0, t1] = self.peek_n();
+    match t0.typ {
+      TT::KeywordClass | TT::KeywordConst => Some(t0),
+      TT::KeywordLet | TT::KeywordUsing if Self::let_or_using_starts_lexical_decl(&t1, ctx) => {
+        Some(t0)
+      }
+      TT::KeywordAwait if t1.typ == TT::KeywordUsing => Some(t0),
+      // `async function` is never permitted by Annex B if/label extensions.
+      TT::KeywordAsync if t1.typ == TT::KeywordFunction && !t1.preceded_by_line_terminator => {
+        Some(t0)
+      }
+      TT::KeywordFunction => {
+        let is_generator = t1.typ == TT::Asterisk;
+        if is_generator || self.is_strict_mode() || !allow_sloppy_function {
+          Some(t0)
+        } else {
+          None
+        }
+      }
+      _ => None,
+    }
+  }
+
+  /// True when `let`/`using` + `t1` would start a LexicalDeclaration rather than an
+  /// IdentifierReference ExpressionStatement (see peek_disallowed docs).
+  fn let_or_using_starts_lexical_decl(t1: &crate::token::Token, ctx: ParseCtx) -> bool {
+    match t1.typ {
+      // ExpressionStatement lookahead set includes `let [` with no LT restriction.
+      TT::BracketOpen => true,
+      TT::BraceOpen => !t1.preceded_by_line_terminator,
+      _ if is_valid_pattern_identifier(t1.typ, ctx.rules) => !t1.preceded_by_line_terminator,
+      _ => false,
+    }
+  }
+
+  /// True when Statement-position `let`/`using` + LineTerminator + `{`|BindingIdentifier
+  /// must parse as ExpressionStatement (ASI), not LexicalDeclaration. `stmt()` would
+  /// otherwise eagerly treat it as a declaration (correct for StatementListItem only).
+  fn peek_let_asi_expression_in_statement_position(&mut self, ctx: ParseCtx) -> bool {
+    let [t0, t1] = self.peek_n();
+    matches!(t0.typ, TT::KeywordLet | TT::KeywordUsing)
+      && t1.preceded_by_line_terminator
+      && (t1.typ == TT::BraceOpen || is_valid_pattern_identifier(t1.typ, ctx.rules))
+  }
+
+  fn stmt_in_statement_position(
+    &mut self,
+    ctx: ParseCtx,
+    allow_sloppy_function: bool,
+  ) -> SyntaxResult<Node<Stmt>> {
+    if let Some(tok) = self.peek_disallowed_in_statement_position(ctx, allow_sloppy_function) {
+      return Err(tok.error(SyntaxErrorType::DeclarationInSingleStatementPosition));
+    }
+    // StatementListItem may parse `let\nx` as LexicalDeclaration; Statement may not.
+    // After the PS0018 gate, force the ASI ExpressionStatement path.
+    if self.is_strict_ecmascript() && self.peek_let_asi_expression_in_statement_position(ctx) {
+      return Ok(self.expr_stmt(ctx)?.into_wrapped());
+    }
+    self.stmt(ctx)
+  }
+
   fn starts_with_type_alias_decl(&mut self, ctx: ParseCtx) -> bool {
     // `type` is a contextual/unreserved keyword in many positions, so only treat it as a
     // type-alias declaration when it is followed by a plausible name and an `=` token.
@@ -83,9 +170,11 @@ impl<'a> Parser<'a> {
       TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
       // TypeScript: `let identifier :` is a variable declaration with type annotation, not a labeled statement
-      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // `await`/`yield` keywords still start LexicalDeclaration grammatically when forbidden
+      // as bindings (no ASI before them); `id_pat` then rejects (test262 let-newline-await-*).
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) || matches!(t1.typ, TT::KeywordAwait | TT::KeywordYield) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `using` is a contextual keyword for resource management
-      TT::KeywordUsing if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      TT::KeywordUsing if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) || matches!(t1.typ, TT::KeywordAwait | TT::KeywordYield) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `await using` for async resource management
       TT::KeywordAwait if t1.typ == TT::KeywordUsing => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
@@ -245,20 +334,18 @@ impl<'a> Parser<'a> {
           .wrap(Stmt::ClassDecl),
       ),
       // TypeScript: declare var, declare const, declare let, declare using
-      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(
-        self
-          .var_decl(ctx, VarDeclParseMode::Asi)?
-          .wrap(Stmt::VarDecl),
-      ),
+      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => {
+        let mut decl = self.var_decl(ctx, VarDeclParseMode::Asi)?;
+        decl.stx.declare = true;
+        Ok(decl.wrap(Stmt::VarDecl))
+      }
       // TypeScript: declare await using
       TT::KeywordAwait => {
         let [_, next] = self.peek_n::<2>();
         if next.typ == TT::KeywordUsing {
-          Ok(
-            self
-              .var_decl(ctx, VarDeclParseMode::Asi)?
-              .wrap(Stmt::VarDecl),
-          )
+          let mut decl = self.var_decl(ctx, VarDeclParseMode::Asi)?;
+          decl.stx.declare = true;
+          Ok(decl.wrap(Stmt::VarDecl))
         } else {
           Err(
             self
@@ -344,7 +431,10 @@ impl<'a> Parser<'a> {
         name: label_name.clone(),
         is_iteration,
       });
-      let statement = p.stmt(ctx.non_top_level());
+      // LabelledItem is Statement | FunctionDeclaration; LexicalDeclaration/ClassDecl are out.
+      // Annex B.3.1 permits labelled FunctionDeclaration in non-strict code.
+      let allow_sloppy_function = !p.is_strict_mode();
+      let statement = p.stmt_in_statement_position(ctx.non_top_level(), allow_sloppy_function);
       p.labels.truncate(prev_labels_len);
       let statement = statement?;
       Ok(LabelStmt {
@@ -393,13 +483,23 @@ impl<'a> Parser<'a> {
       Some(self.id_name(ctx)?)
     } else if t.typ == TT::Semicolon {
       self.consume();
-      None
-    } else if t.preceded_by_line_terminator || t.typ == TT::BraceClose {
-      // ASI.
-      None
+      return Ok(None);
+    } else if t.preceded_by_line_terminator || matches!(t.typ, TT::BraceClose | TT::EOF) {
+      // ASI — line terminator, `}`, or EOF (ECMA-262 §12.10 rule 2).
+      return Ok(None);
     } else {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax("label")));
     };
+
+    // Labeled break/continue: consume terminating `;` into this statement (same
+    // convention as unlabeled break/continue and debugger). Under ASI — line
+    // terminator, `}`, or EOF — the span ends at the label.
+    let t = self.peek();
+    if t.typ == TT::Semicolon {
+      self.consume();
+    } else if !(t.preceded_by_line_terminator || matches!(t.typ, TT::BraceClose | TT::EOF)) {
+      self.require(TT::Semicolon)?;
+    }
     Ok(label)
   }
 
@@ -462,7 +562,19 @@ impl<'a> Parser<'a> {
   }
 
   pub fn debugger_stmt(&mut self) -> SyntaxResult<Node<DebuggerStmt>> {
-    self.with_loc(|p| p.require(TT::KeywordDebugger).map(|_| DebuggerStmt {}))
+    self.with_loc(|p| {
+      p.require(TT::KeywordDebugger)?;
+      // Statement spans include the terminating semicolon when present (same
+      // convention as break/return/throw/expr). Under ASI — line terminator,
+      // `}`, or EOF — the span ends at the keyword.
+      let t = p.peek();
+      if t.typ == TT::Semicolon {
+        p.consume();
+      } else if !(t.preceded_by_line_terminator || matches!(t.typ, TT::BraceClose | TT::EOF)) {
+        p.require(TT::Semicolon)?;
+      }
+      Ok(DebuggerStmt {})
+    })
   }
 
   // WARNING: Do not reuse this functions for other statements, as this will output a statement node, not an expression, which can lead to double semicolons that cause invalid code when outputting.
@@ -474,9 +586,9 @@ impl<'a> Parser<'a> {
         if p.should_recover() {
           // TypeScript-style recovery: allow certain keywords to terminate the
           // current expression statement even when a semicolon is missing.
-          let next = p.peek().typ;
-          if !matches!(
-            next,
+          let next = p.peek();
+          if matches!(
+            next.typ,
             TT::KeywordClass
               | TT::KeywordInterface
               | TT::KeywordEnum
@@ -486,6 +598,15 @@ impl<'a> Parser<'a> {
               | TT::KeywordDeclare
               | TT::KeywordAbstract
           ) {
+            // fall through — outer list continues with the keyword
+          } else if Self::is_assignment_operator_token(next.typ) {
+            // `'prop' in v = 10` / `a + b = 10`: Pratt stopped before `=` because
+            // the left is not a LeftHandSideExpression. Report ';' expected on
+            // `=` (tsc TS1005), skip `=`, and let the RHS become the next stmt
+            // (`10;`) — matching tsc's emit tree.
+            p.report_soft(next.error(SyntaxErrorType::RequiredTokenNotFound(TT::Semicolon)));
+            p.consume();
+          } else {
             p.require(TT::Semicolon)?;
           }
         } else {
@@ -494,6 +615,28 @@ impl<'a> Parser<'a> {
       };
       Ok(ExprStmt { expr })
     })
+  }
+
+  fn is_assignment_operator_token(typ: TT) -> bool {
+    matches!(
+      typ,
+      TT::Equals
+        | TT::PlusEquals
+        | TT::HyphenEquals
+        | TT::AsteriskEquals
+        | TT::SlashEquals
+        | TT::PercentEquals
+        | TT::AsteriskAsteriskEquals
+        | TT::AmpersandEquals
+        | TT::BarEquals
+        | TT::CaretEquals
+        | TT::ChevronLeftChevronLeftEquals
+        | TT::ChevronRightChevronRightEquals
+        | TT::ChevronRightChevronRightChevronRightEquals
+        | TT::AmpersandAmpersandEquals
+        | TT::BarBarEquals
+        | TT::QuestionQuestionEquals
+    )
   }
 
   fn for_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForBody>> {
@@ -508,9 +651,9 @@ impl<'a> Parser<'a> {
           p.require(TT::BraceClose)?;
           Ok(ForBody { body })
         } else {
-          // Single statement.
+          // Single statement (Statement, not StatementListItem / Declaration).
           Ok(ForBody {
-            body: vec![p.stmt(ctx.non_top_level())?],
+            body: vec![p.stmt_in_statement_position(ctx.non_top_level(), false)?],
           })
         }
       })();
@@ -594,7 +737,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
-    let [t0, t1] = self.peek_n();
+    let [t0, t1, t2] = self.peek_n();
     Ok(match t0.typ {
       TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
@@ -635,13 +778,15 @@ impl<'a> Parser<'a> {
 
         (mode, pat)
       }),
-      // `let` is contextual - only a declaration if followed by a pattern
+      // `let` is contextual - only a declaration if followed by a pattern.
+      // - `for (let in …)`: `in` is reserved, so this is IdentifierReference `let` (for-in).
+      // - `for (let of of x)` / `for (let of in x)`: declaration with binding name `of`.
+      // - `for (let of x)`: IdentifierReference `let` for for-of (early error), not a decl.
       TT::KeywordLet
         if t1.typ == TT::BraceOpen
           || t1.typ == TT::BracketOpen
-          || is_valid_pattern_identifier(t1.typ, ctx.rules)
-          || t1.typ == TT::KeywordIn
-          || t1.typ == TT::KeywordOf =>
+          || (is_valid_pattern_identifier(t1.typ, ctx.rules) && t1.typ != TT::KeywordOf)
+          || (t1.typ == TT::KeywordOf && matches!(t2.typ, TT::KeywordOf | TT::KeywordIn)) =>
       {
         ForInOfLhs::Decl({
           let mode = self.var_decl_mode()?;
@@ -760,10 +905,21 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(header_ctx)?;
       // Special case: if variable name is 'of', the keyword was already consumed
-      // e.g., `for (let of x)` - the 'of' serves as both variable name and keyword
+      // e.g., `for (var of of x)` / `for (let of of x)` — binding name `of`, then `of`.
       if !p.consume_if(TT::KeywordOf).is_match() {
         // 'of' keyword was already consumed as the variable name
-        // This is fine - just continue parsing
+      }
+      // Early error: for-of LHS must not be the IdentifierReference `let`
+      // (ECMA-262 ForOfStatement). `for (let of x)` is therefore a SyntaxError;
+      // `for (let of of x)` is a LexicalDeclaration instead.
+      if p.is_strict_ecmascript() {
+        if let ForInOfLhs::Assign(pat) = &lhs {
+          if Parser::for_of_lhs_starts_with_let(pat) {
+            return Err(pat.error(SyntaxErrorType::ExpectedSyntax(
+              "for-of left-hand side must not start with IdentifierReference `let`",
+            )));
+          }
+        }
       }
       let rhs = p.expr(header_ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
@@ -888,6 +1044,17 @@ impl<'a> Parser<'a> {
             // Only for(;;) loops have semicolons in the header.
             Self::Triple
           }
+          // Bare PrivateIdentifier is not a PrimaryExpression; `#id in` / `#id of`
+          // are for-in/of with an illegal LHS (not for(;;)). Classify before
+          // expression parsing so the error is not swallowed into Triple.
+          TT::PrivateMember => {
+            let [_, next] = p.peek_n::<2>();
+            match next.typ {
+              TT::KeywordIn => Self::In,
+              TT::KeywordOf => Self::Of,
+              _ => Self::Triple,
+            }
+          }
           _ => {
             // for-in and for-of loops must have an assignment target or variable declarator at the beginning of its header. We've already handled var decl before, so if it's for-in or for-of there must be an expression/pattern now, followed by the keyword.
             match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
@@ -914,16 +1081,42 @@ impl<'a> Parser<'a> {
     })
   }
 
+  /// for-of LHS must not start with IdentifierReference `let` (ECMA-262 ForOfStatement).
+  fn for_of_lhs_starts_with_let(pat: &Node<Pat>) -> bool {
+    fn expr_starts_with_let(expr: &Node<crate::ast::expr::Expr>) -> bool {
+      use crate::ast::expr::Expr;
+      match expr.stx.as_ref() {
+        Expr::Id(id) => id.stx.name == "let",
+        Expr::IdPat(id) => id.stx.name == "let",
+        Expr::Member(m) => expr_starts_with_let(&m.stx.left),
+        Expr::ComputedMember(m) => expr_starts_with_let(&m.stx.object),
+        Expr::Call(c) => expr_starts_with_let(&c.stx.callee),
+        Expr::TaggedTemplate(t) => expr_starts_with_let(&t.stx.function),
+        Expr::Unary(u) if u.stx.operator == crate::operator::OperatorName::New => {
+          expr_starts_with_let(&u.stx.argument)
+        }
+        _ => false,
+      }
+    }
+    match pat.stx.as_ref() {
+      Pat::Id(id) => id.stx.name == "let",
+      Pat::AssignTarget(expr) => expr_starts_with_let(expr),
+      _ => false,
+    }
+  }
+
   pub fn if_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<IfStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordIf)?;
       p.require(TT::ParenthesisOpen)?;
       let test = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let consequent = p.stmt(ctx.non_top_level())?;
+      // Annex B.3.3: FunctionDeclaration allowed in if clauses in non-strict code.
+      let allow_sloppy_function = !p.is_strict_mode();
+      let consequent = p.stmt_in_statement_position(ctx.non_top_level(), allow_sloppy_function)?;
       let alternate = p
         .consume_if(TT::KeywordElse)
-        .and_then(|| p.stmt(ctx.non_top_level()))?;
+        .and_then(|| p.stmt_in_statement_position(ctx.non_top_level(), allow_sloppy_function))?;
       Ok(IfStmt {
         test,
         consequent,
@@ -940,8 +1133,10 @@ impl<'a> Parser<'a> {
           "return statement not allowed outside functions",
         )));
       }
-      let value = if p.peek().preceded_by_line_terminator || p.peek().typ == TT::BraceClose {
-        // Automatic Semicolon Insertion.
+      let value = if p.peek().preceded_by_line_terminator
+        || matches!(p.peek().typ, TT::BraceClose | TT::EOF)
+      {
+        // Automatic Semicolon Insertion (including EOF — ECMA-262 §12.10 rule 2).
         None
       } else if p.consume_if(TT::Semicolon).is_match() {
         None
@@ -1028,7 +1223,7 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisClose)?;
       let prev_in_iteration = p.in_iteration;
       p.in_iteration += 1;
-      let body = p.stmt(ctx.non_top_level());
+      let body = p.stmt_in_statement_position(ctx.non_top_level(), false);
       p.in_iteration = prev_in_iteration;
       let body = body?;
       Ok(WhileStmt { condition, body })
@@ -1046,7 +1241,7 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let object = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.stmt(ctx.non_top_level())?;
+      let body = p.stmt_in_statement_position(ctx.non_top_level(), false)?;
       Ok(WithStmt { object, body })
     })
   }
@@ -1056,11 +1251,13 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordDo)?;
       let prev_in_iteration = p.in_iteration;
       p.in_iteration += 1;
-      let body = p.stmt(ctx.non_top_level());
+      let body = p.stmt_in_statement_position(ctx.non_top_level(), false);
       p.in_iteration = prev_in_iteration;
       let body = body?;
-      // Consume optional semicolon after body statement (ASI)
-      let _ = p.consume_if(TT::Semicolon);
+      // ECMA-262 DoWhileStatement: `do Statement while (…) ;` — no semicolon is
+      // permitted between Statement and `while` (test262 asi/S7.9_A9_T8). A `;`
+      // that belongs to EmptyStatement / ExpressionStatement is already consumed
+      // inside `body`.
       p.require(TT::KeywordWhile)?;
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
@@ -1099,6 +1296,22 @@ impl<'a> Parser<'a> {
       });
       p.in_switch = prev_in_switch;
       let branches = branches?;
+      // ECMA-262 §14.12: CaseBlock may contain at most one DefaultClause
+      // (test262 statements/switch/S12.11_A2_T1).
+      if p.is_strict_ecmascript() {
+        let default_count = branches.iter().filter(|b| b.stx.case.is_none()).count();
+        if default_count > 1 {
+          let loc = branches
+            .iter()
+            .find(|b| b.stx.case.is_none())
+            .map(|b| b.loc)
+            .unwrap_or(test.loc);
+          return Err(loc.error(
+            SyntaxErrorType::ExpectedSyntax("at most one default clause"),
+            None,
+          ));
+        }
+      }
       p.require(TT::BraceClose)?;
       Ok(SwitchStmt { test, branches })
     })

@@ -27,7 +27,9 @@
 
 use crate::heap::{Trace, Tracer};
 use crate::{GcObject, RootId, Value, VmError};
-use crate::{HostDefined, ModuleLoadPayload, ModuleReferrer, ModuleRequest, VmModuleLoadingContext};
+use crate::{
+  HostDefined, ModuleLoadPayload, ModuleReferrer, ModuleRequest, VmModuleLoadingContext,
+};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -169,7 +171,9 @@ pub trait VmJobContext {
 pub struct Job {
   kind: JobKind,
   roots: Vec<RootId>,
-  run: Option<Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>>,
+  run: Option<
+    Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>,
+  >,
 }
 
 impl Job {
@@ -646,13 +650,9 @@ pub trait VmHostHooks {
         host_defined: HostDefined,
         payload: ModuleLoadPayload,
       ) {
-        self.0.host_load_imported_module(
-          ctx,
-          referrer,
-          module_request,
-          host_defined,
-          payload,
-        );
+        self
+          .0
+          .host_load_imported_module(ctx, referrer, module_request, host_defined, payload);
       }
     }
 

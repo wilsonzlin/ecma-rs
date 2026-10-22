@@ -1,0 +1,310 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 1,
+      "rust_missing_diagnostics": 0,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithDiscriminatedUnion.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithDiscriminatedUnion.ts",
+      "outcome": "rust_extra_diagnostics",
+      "duration_ms": 2275,
+      "rust_ms": 1581,
+      "tsc_ms": 694,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 424,
+            "end": 425,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 811,
+            "end": 812,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 1254,
+            "end": 1255,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 1692,
+            "end": 1693,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 2470,
+            "end": 2471,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 2873,
+            "end": 2874,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 2899,
+            "end": 2900,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2304",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 3259,
+            "end": 3263,
+            "severity": "error",
+            "message": "Cannot find name 'draw'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 3766,
+            "end": 3769,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2304",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 3787,
+            "end": 3798,
+            "severity": "error",
+            "message": "Cannot find name 'getAxisType'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 3831,
+            "end": 3835,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 4249,
+            "end": 4290,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2345",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 4563,
+            "end": 4610,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 4863,
+            "end": 4867,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 5135,
+            "end": 5136,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2304",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 5604,
+            "end": 5613,
+            "severity": "error",
+            "message": "Cannot find name 'something'."
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 5855,
+            "end": 5857,
+            "severity": "error",
+            "message": "type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 5883,
+            "end": 5885,
+            "severity": "error",
+            "message": "type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 1254,
+            "end": 1255,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 1692,
+            "end": 1693,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 2470,
+            "end": 2471,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 2873,
+            "end": 2874,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+            "start": 3831,
+            "end": 3835,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust produced 13 extra diagnostic(s); first extra: /assignmentCompatWithDiscriminatedUnion.ts:424-425 [TS2322]",
+        "rust": {
+          "engine": "rust",
+          "code": "TS2322",
+          "file": "/assignmentCompatWithDiscriminatedUnion.ts",
+          "start": 424,
+          "end": 425,
+          "severity": "error",
+          "message": "assignment type mismatch"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 10/64) rust=[TC2008,TC2008,TS2454,TC2008,TC2008,TS2454,TC2008,TC2008,TS2454,TC2008,TC2008,TS2454,TC2008,TC2008,TS2454,TC2008,TC2008,TS2454,TC2008,TC2008,TS2304,TC2008,TC2008,TS2304,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TS2304,TC2008,TC2008] tsc=[2322,2322,2322,2454,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

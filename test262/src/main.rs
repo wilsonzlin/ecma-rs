@@ -5,10 +5,11 @@ use conformance_harness::{
   Expectations, FailOn, ReportRef, Shard, TimeoutManager,
 };
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
+use diagnostics::{host_error, Diagnostic, FileId, Severity, Span, TextRange};
 use parse_js::error::SyntaxErrorType;
 use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
+use semantic_js::js::{bind_js, TopLevelMode};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -423,7 +424,34 @@ fn run_single_case(
 
   let parsed = parse_with_options_cancellable(&source, parse_opts, cancel);
   let (outcome, diagnostic) = match parsed {
-    Ok(_) => (TestOutcome::Passed, None),
+    Ok(mut ast) => {
+      // The test262-parser corpus treats `early/` as programs that parse but are
+      // rejected by an *early error* (ECMA-262 static semantics), and `pass`/
+      // `pass-explicit` as programs that must parse *and* have no early errors.
+      // The parser alone only models syntactic productions; the scope-dependent
+      // early errors (duplicate lexical declarations, strict-mode restrictions,
+      // duplicate parameters, `new.target` placement, …) are owned by the
+      // JS-mode binder in `semantic-js`. Run it so those rules are enforced,
+      // mirroring how the spec distinguishes parse errors from early errors.
+      //
+      // `fail/` must fail to *parse*, so binding is intentionally not run there.
+      //
+      // Binding runs on `early/`, `pass/`, and `pass-explicit/`:
+      // - `early/`: any non-TDZ BIND#### error is a correct rejection.
+      // - `pass`/`pass-explicit/`: any non-TDZ BIND#### error is a harness
+      //   failure (binder over-strictness regression). False positives were
+      //   cleared 2026-07-23 (`semantic-js/tests/pass_corpus_bind.rs`).
+      if matches!(
+        case.category,
+        TestCategory::Early | TestCategory::Pass | TestCategory::PassExplicit
+      ) {
+        early_error_from_binding(&mut ast, case.source_type)
+          .map(|d| (TestOutcome::Failed, Some(d)))
+          .unwrap_or((TestOutcome::Passed, None))
+      } else {
+        (TestOutcome::Passed, None)
+      }
+    }
     Err(err) => {
       if err.typ == SyntaxErrorType::Cancelled {
         (
@@ -472,6 +500,26 @@ fn run_single_case(
     },
     raw_diagnostic,
   }
+}
+
+/// Runs JS-mode binding and returns the first *early-error* diagnostic, if any.
+///
+/// ECMA-262 early errors are static semantics: they are the binder's job here.
+/// TDZ diagnostics (`BIND0003`) are deliberately excluded — a temporal dead zone
+/// violation is a runtime `ReferenceError`, not an early error, so it must not
+/// cause the parser corpus to treat an otherwise-valid program as rejected.
+fn early_error_from_binding(
+  ast: &mut parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
+  source_type: SourceMode,
+) -> Option<Diagnostic> {
+  let mode = match source_type {
+    SourceMode::Module => TopLevelMode::Module,
+    SourceMode::Script => TopLevelMode::Script,
+  };
+  let (_sem, diagnostics) = bind_js(ast, mode, FileId(0));
+  diagnostics
+    .into_iter()
+    .find(|d| d.severity == Severity::Error && d.code.as_str() != "BIND0003")
 }
 
 fn summarize_diagnostic(diagnostic: &Diagnostic) -> DiagnosticSummary {

@@ -28,6 +28,35 @@ impl ProgramState {
     });
   }
 
+  /// tsc `checkJs` semantics: a `.js` / `.jsx` file included via `allowJs`
+  /// without `checkJs` is parsed (and can join the module graph) but produces
+  /// **no semantic diagnostics** — not even TS2307 module-resolution errors
+  /// (verified against tsc 5.9). Only parse/grammar diagnostics survive.
+  fn filter_check_js_diagnostics(&self, diagnostics: &mut Vec<Diagnostic>) {
+    if self.compiler_options.check_js == Some(true) {
+      return;
+    }
+
+    diagnostics.retain(|diag| {
+      let kind = self.file_kinds.get(&diag.primary.file);
+      if !matches!(kind, Some(FileKind::Js) | Some(FileKind::Jsx)) {
+        return true;
+      }
+      // Keep parse-level diagnostics only (mirrors the parse-error detection in
+      // `db::queries::aggregate_program_diagnostics`). tsc also reports its
+      // *grammar* diagnostics on private identifiers regardless of `checkJs`
+      // (they are parser errors upstream): TS18016 (private name outside a
+      // class), TS18028 (target too low), TS18030 (optional chain + private
+      // identifier).
+      let code = diag.code.as_str();
+      code.starts_with("PS")
+        || code == "TS1005"
+        || code == "TS18016"
+        || code == "TS18028"
+        || code == "TS18030"
+    });
+  }
+
   pub(super) fn program_diagnostics(
     &mut self,
     host: &Arc<dyn Host>,
@@ -36,13 +65,15 @@ impl ProgramState {
     if self.snapshot_loaded {
       let mut diagnostics = self.diagnostics.clone();
       self.filter_skip_lib_check_diagnostics(&mut diagnostics);
+      self.filter_check_js_diagnostics(&mut diagnostics);
       return Ok(Arc::from(diagnostics));
     }
     self.check_cancelled()?;
     self.ensure_analyzed_result(host, roots)?;
     self.ensure_interned_types(host, roots)?;
-    self.body_results.clear();
+    self.local_body_results.clear();
     self.set_extra_diagnostics_input();
+    self.publish_body_context();
 
     let body_ids: Vec<_> = {
       let db = self.typecheck_db.clone();
@@ -57,13 +88,20 @@ impl ProgramState {
       body_ids
     };
 
+    // Warm the tracked body-check query for every body. Results are memoized
+    // by salsa, so bodies untouched since the previous revision are cache hits
+    // and everything downstream (`db::program_diagnostics`, `type_at`, span
+    // queries) reuses the same memos.
+    //
+    // Parent body results (especially top-level bodies) seed bindings for many
+    // child bodies, so check those sequentially first; salsa's cross-thread
+    // memoization then shares them with all parallel workers (a worker hitting
+    // an in-flight body blocks on the first computation instead of duplicating
+    // it).
     let shared_context = self.body_check_context();
-    // Parent body results (especially top-level bodies) are needed to seed bindings for many
-    // child bodies. Compute these sequentially once and seed each parallel worker with the
-    // results to avoid redundant work (and pathological contention) during parallel checking.
-    let mut seed_results: Vec<(BodyId, Arc<BodyCheckResult>)> = Vec::new();
+    let db = self.typecheck_db.clone();
+    let mut results: Vec<(BodyId, Arc<BodyCheckResult>)> = Vec::new();
     let mut remaining: Vec<BodyId> = Vec::with_capacity(body_ids.len());
-    let seed_db = BodyCheckDb::from_shared_context(Arc::clone(&shared_context));
     for body in body_ids.iter().copied() {
       let is_top_level = shared_context
         .body_info
@@ -71,70 +109,69 @@ impl ProgramState {
         .map(|info| matches!(info.kind, HirBodyKind::TopLevel))
         .unwrap_or(false);
       if is_top_level {
-        seed_results.push((body, db::queries::body_check::check_body(&seed_db, body)));
+        results.push((body, db::check_body(&db, body)));
       } else {
         remaining.push(body);
       }
     }
-    let seed_cache_stats = seed_db.into_cache_stats();
-    let seed_results = Arc::new(seed_results);
     use rayon::prelude::*;
-    let (cache_stats, mut results): (CheckerCacheStats, Vec<(BodyId, Arc<BodyCheckResult>)>) =
-      remaining
-        .par_iter()
-        .fold(
-          || {
-            (
-              BodyCheckDb::from_shared_context_with_seed_results(
-                Arc::clone(&shared_context),
-                seed_results.as_slice(),
-              ),
-              Vec::new(),
-            )
-          },
-          |(db, mut results), body| {
-            results.push((*body, db::queries::body_check::check_body(&db, *body)));
-            (db, results)
-          },
-        )
-        .map(|(db, results)| (db.into_cache_stats(), results))
-        .reduce(
-          || (CheckerCacheStats::default(), Vec::new()),
-          |(mut stats, mut merged), (thread_stats, results)| {
-            stats.merge(&thread_stats);
-            merged.extend(results);
-            (stats, merged)
-          },
-        );
-    results.extend(seed_results.iter().map(|(id, res)| (*id, Arc::clone(res))));
-    let mut cache_stats = cache_stats;
-    cache_stats.merge(&seed_cache_stats);
+    // `map_with` clones the database handle per rayon split (salsa handles are
+    // Send + Clone but not Sync); memoized state is shared through storage.
+    let parallel_results: Vec<(BodyId, Arc<BodyCheckResult>)> = remaining
+      .par_iter()
+      .map_with(db.snapshot(), |db, body| (*body, db::check_body(db, *body)))
+      .collect();
+    results.extend(parallel_results);
 
     // Preserve determinism regardless of parallel scheduling.
     results.sort_by_key(|(id, _)| id.0);
     for (body, res) in results {
-      self.body_results.insert(body, Arc::clone(&res));
-      self.typecheck_db.set_body_result(body, res);
+      self.local_body_results.insert(body, res);
     }
 
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
-      self.cache_stats.merge(&cache_stats);
+      let drained = {
+        let mut sink = self
+          .body_cache_stats_sink
+          .lock()
+          .unwrap_or_else(|err| err.into_inner());
+        std::mem::take(&mut *sink)
+      };
+      self.cache_stats.merge(&drained);
     }
 
     let db = self.typecheck_db.clone();
     let mut diagnostics: Vec<_> = db::program_diagnostics(&db).as_ref().to_vec();
     diagnostics.extend(self.diagnostics.clone());
+    // Dedupe rules: TS2352 by code+span (not message) — the same assertion may
+    // be checked more than once via different paths with differently-displayed
+    // but equivalent types, which would otherwise yield duplicates
+    // (`typeAssertionsWithUnionTypes01`). All other codes dedupe by
+    // code+span+message so legitimately distinct same-span diagnostics survive
+    // (TS2318 emits one "Cannot find global type" per missing global at the
+    // same file-level span — `triple_slash_no_default_lib`).
     let mut seen = HashSet::new();
     diagnostics.retain(|diag| {
-      seen.insert((
-        diag.code.clone(),
-        diag.severity,
-        diag.message.clone(),
-        diag.primary,
-      ))
+      let key = if diag.code.as_str() == "TS2352" {
+        (
+          diag.code.clone(),
+          diag.severity,
+          diag.primary,
+          String::new(),
+        )
+      } else {
+        (
+          diag.code.clone(),
+          diag.severity,
+          diag.primary,
+          diag.message.clone(),
+        )
+      };
+      seen.insert(key)
     });
     codes::normalize_diagnostics(&mut diagnostics);
     self.filter_skip_lib_check_diagnostics(&mut diagnostics);
+    self.filter_check_js_diagnostics(&mut diagnostics);
     Ok(Arc::from(diagnostics))
   }
 }

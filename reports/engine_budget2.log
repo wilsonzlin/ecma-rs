@@ -1,0 +1,21 @@
+warning: patch `socket2 v0.6.1 (/root/r/ecma-rs/third_party/socket2)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling types-ts-interned v0.1.0 (/root/r/ecma-rs/types-ts-interned)
+   Compiling typecheck-ts v0.1.0 (/root/r/ecma-rs/typecheck-ts)
+    Finished `release` profile [optimized] target(s) in 1m 59s
+     Running tests/engine_budget.rs (target/release/deps/engine_budget-5f2616e54d4e731b)
+
+running 3 tests
+
+thread '<unnamed>' (1451371) panicked at parse-js/src/parse/mod.rs:521:9:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread '<unnamed>' (1451371) panicked at typecheck-ts/src/db/queries.rs:557:9:
+Box<dyn Any>
+test pathological_case_honors_cancellation_promptly ... ok
+test pathological_indexed_unresolved_assigns_terminate_quickly ... ok
+test real_parser_real_source12_terminates_without_libs has been running for over 60 seconds

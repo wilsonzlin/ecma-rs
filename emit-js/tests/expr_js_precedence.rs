@@ -7,7 +7,8 @@ use parse_js::ast::stx::TopLevel;
 mod util;
 
 fn parse_expr(source: &str) -> Node<Expr> {
-  let parsed = parse_js::parse(source).unwrap_or_else(|err| panic!("parse failed for {source:?}: {err:?}"));
+  let parsed =
+    parse_js::parse(source).unwrap_or_else(|err| panic!("parse failed for {source:?}: {err:?}"));
   let TopLevel { mut body } = *parsed.stx;
   assert_eq!(body.len(), 1, "expected a single statement for {source:?}");
   match *body.pop().unwrap().stx {
@@ -25,7 +26,10 @@ fn emit_expr_to_string(expr: &Node<Expr>) -> String {
 fn assert_roundtrip(source: &str, expected_emitted: &str) {
   let expr = parse_expr(source);
   let emitted = emit_expr_to_string(&expr);
-  assert_eq!(emitted, expected_emitted, "unexpected emission for {source:?}");
+  assert_eq!(
+    emitted, expected_emitted,
+    "unexpected emission for {source:?}"
+  );
 
   let emitted_again = emit_expr_to_string(&expr);
   assert_eq!(
@@ -51,4 +55,3 @@ fn expr_js_precedence_regressions() {
   assert_roundtrip("(a ?? b) || c", "(a??b)||c");
   assert_roundtrip("(-a) ** b", "(-a)**b");
 }
-

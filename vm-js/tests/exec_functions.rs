@@ -1,6 +1,6 @@
 use vm_js::{
-  GcObject, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError, VmHostHooks,
-  VmHost, VmOptions,
+  GcObject, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError, VmHost,
+  VmHostHooks, VmOptions,
 };
 
 fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
@@ -92,8 +92,7 @@ fn method_call_sets_this() {
 fn native_function_call_from_script() {
   let vm = Vm::new(VmOptions::default());
   let mut rt = new_runtime_with_vm(vm);
-  rt
-    .register_global_native_function("__host_add", host_add, 2)
+  rt.register_global_native_function("__host_add", host_add, 2)
     .unwrap();
   let value = rt.exec_script("__host_add(1,2)").unwrap();
   assert_eq!(value, Value::Number(3.0));
@@ -103,8 +102,7 @@ fn native_function_call_from_script() {
 fn native_can_call_ecma_callback_via_vm_call() {
   let vm = Vm::new(VmOptions::default());
   let mut rt = new_runtime_with_vm(vm);
-  rt
-    .register_global_native_function("__host_call", host_call, 2)
+  rt.register_global_native_function("__host_call", host_call, 2)
     .unwrap();
 
   let value = rt
@@ -128,7 +126,9 @@ fn bind_on_ecma_constructor_forwards_new_target() {
   let vm = Vm::new(VmOptions::default());
   let mut rt = new_runtime_with_vm(vm);
   let value = rt
-    .exec_script("function C(){ return new.target; } var D = C.bind(null); var x = new D(); x === C")
+    .exec_script(
+      "function C(){ return new.target; } var D = C.bind(null); var x = new D(); x === C",
+    )
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
@@ -163,9 +163,7 @@ fn promise_then_handler_runs_in_microtask_checkpoint() {
   // `then` schedules the handler as a microtask, so the initial script evaluation should see the
   // old value.
   let value = rt
-    .exec_script(
-      "var result = 0; Promise.resolve(1).then(function(x){ result = x; }); result",
-    )
+    .exec_script("var result = 0; Promise.resolve(1).then(function(x){ result = x; }); result")
     .unwrap();
   assert_eq!(value, Value::Number(0.0));
 

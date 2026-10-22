@@ -2703,31 +2703,14 @@ function h(x: string | null) {
 
 #[test]
 fn member_access_on_intersection_intersects_property_types() {
-  let src = "function pick(x) { return x.value; }";
-  let lowered = lower_from_source(src).expect("lower");
-  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let left = obj_type(&store, &[("value", prim.string)]);
   let right = obj_type(&store, &[("value", prim.number)]);
-  let mut initial = HashMap::new();
-  initial.insert(
-    name_id(lowered.names.as_ref(), "x"),
-    store.intersection(vec![left, right]),
-  );
-
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    Arc::clone(&store),
-    &initial,
-  );
-  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
-  // Intersecting incompatible primitive property types collapses to `never`.
-  assert_eq!(ty, "never");
+  // tsc getIntersectionType: required property conflict → whole type is never
+  // (not `{ value: never }`). TS2339 on `never.prop` is covered by
+  // `tests/never_intersection.rs`.
+  assert_eq!(store.intersection(vec![left, right]), prim.never);
 }
 
 #[test]

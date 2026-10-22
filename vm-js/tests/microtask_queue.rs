@@ -197,7 +197,9 @@ fn checkpoint_continues_after_errors_and_collects_them() -> Result<(), VmError> 
   let log_for_ok = log.clone();
 
   queue.enqueue_promise_job(
-    Job::new(JobKind::Promise, |_ctx, _host| Err(VmError::Unimplemented("job1 failed"))),
+    Job::new(JobKind::Promise, |_ctx, _host| {
+      Err(VmError::Unimplemented("job1 failed"))
+    }),
     None,
   );
 
@@ -210,7 +212,9 @@ fn checkpoint_continues_after_errors_and_collects_them() -> Result<(), VmError> 
   );
 
   queue.enqueue_promise_job(
-    Job::new(JobKind::Promise, |_ctx, _host| Err(VmError::Unimplemented("job3 failed"))),
+    Job::new(JobKind::Promise, |_ctx, _host| {
+      Err(VmError::Unimplemented("job3 failed"))
+    }),
     None,
   );
 

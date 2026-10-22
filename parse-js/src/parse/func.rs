@@ -17,124 +17,149 @@ impl<'a> Parser<'a> {
   // `scope` should be a newly created closure scope for this function.
   pub fn func_params(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<ParamDecl>>> {
     self.require(TT::ParenthesisOpen)?;
-    let parameters = self.list_with_loc(TT::Comma, TT::ParenthesisClose, |p| {
-      // TypeScript: check for `this` parameter (can only be first parameter)
-      // Syntax: `this: Type`
-      if !p.is_strict_ecmascript() && p.peek().typ == TT::KeywordThis {
-        let [_, next] = p.peek_n::<2>();
-        if next.typ == TT::Colon {
-          // This is a `this` parameter
-          p.consume(); // consume 'this'
-          p.require(TT::Colon)?;
-          let type_annotation = Some(p.type_expr(ctx)?);
-          // Create a pseudo-pattern for the `this` parameter
-          use crate::ast::expr::pat::IdPat;
-          use crate::ast::expr::pat::Pat;
-          use crate::ast::stmt::decl::PatDecl;
-          use crate::loc::Loc;
-          let this_pattern = Node::new(
-            Loc(0, 0),
-            PatDecl {
-              pat: Node::new(
-                Loc(0, 0),
-                Pat::Id(Node::new(
-                  Loc(0, 0),
-                  IdPat {
-                    name: String::from("this"),
-                  },
-                )),
-              ),
-            },
-          );
-          return Ok(ParamDecl {
-            decorators: Vec::new(),
-            rest: false,
-            optional: false,
-            accessibility: None,
-            readonly: false,
-            pattern: this_pattern,
-            type_annotation,
-            default_value: None,
-          });
-        }
-      }
-
-      // TypeScript: parse decorators for parameters (before modifiers)
-      let mut decorators = if p.is_typescript() {
-        p.decorators(ctx)?
-      } else {
-        Vec::new()
-      };
-
-      // TypeScript: accessibility modifiers and readonly can appear in either order
-      // e.g. `readonly public x` or `public readonly x` are both valid
-      // Error recovery: allow duplicate modifiers
-      let mut accessibility = None;
-      let mut readonly = false;
-
-      // Parse modifiers in a loop to allow duplicates
+    let mut parameters = Vec::new();
+    if !self.consume_if(TT::ParenthesisClose).is_match() {
       loop {
-        let mut found_modifier = false;
-
-        // Try readonly
-        if p.consume_if(TT::KeywordReadonly).is_match() {
-          readonly = true;
-          found_modifier = true;
+        let param = self.with_loc(|p| p.parse_one_func_param(ctx))?;
+        let is_rest = param.stx.rest;
+        if self.is_strict_ecmascript() && is_rest && param.stx.default_value.is_some() {
+          return Err(param.error(SyntaxErrorType::InvalidRestParameter));
         }
-
-        // Try accessibility
-        if p.consume_if(TT::KeywordPublic).is_match() {
-          accessibility = Some(Accessibility::Public);
-          found_modifier = true;
-        } else if p.consume_if(TT::KeywordPrivate).is_match() {
-          accessibility = Some(Accessibility::Private);
-          found_modifier = true;
-        } else if p.consume_if(TT::KeywordProtected).is_match() {
-          accessibility = Some(Accessibility::Protected);
-          found_modifier = true;
+        parameters.push(param);
+        if self.consume_if(TT::Comma).is_match() {
+          // Rest must be last and cannot be followed by a trailing comma (ECMA-262 §15.1).
+          if self.is_strict_ecmascript() && is_rest {
+            return Err(self.peek().error(SyntaxErrorType::InvalidRestParameter));
+          }
+          if self.peek().typ == TT::ParenthesisClose {
+            self.require(TT::ParenthesisClose)?;
+            break;
+          }
+          continue;
         }
-
-        if !found_modifier {
-          break;
-        }
+        self.require(TT::ParenthesisClose)?;
+        break;
       }
-
-      // TypeScript: Also allow decorators after modifiers for error recovery
-      // e.g. `public @dec p` in addition to `@dec public p`
-      if p.is_typescript() && p.peek().typ == TT::At {
-        let post_modifiers_decorators = p.decorators(ctx)?;
-        decorators.extend(post_modifiers_decorators);
-      }
-
-      let rest = p.consume_if(TT::DotDotDot).is_match();
-      let pattern = p.pat_decl(ctx)?;
-
-      // TypeScript: optional parameter
-      let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
-
-      // TypeScript: type annotation
-      let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
-      } else {
-        None
-      };
-
-      let default_value = p
-        .consume_if(TT::Equals)
-        .and_then(|| p.expr(ctx, [TT::Comma, TT::ParenthesisClose]))?;
-
-      Ok(ParamDecl {
-        decorators,
-        rest,
-        optional,
-        accessibility,
-        readonly,
-        pattern,
-        type_annotation,
-        default_value,
-      })
-    })?;
+    }
     Ok(parameters)
+  }
+
+  fn parse_one_func_param(&mut self, ctx: ParseCtx) -> SyntaxResult<ParamDecl> {
+    // TypeScript: check for `this` parameter (can only be first parameter)
+    // Syntax: `this: Type`
+    if !self.is_strict_ecmascript() && self.peek().typ == TT::KeywordThis {
+      let [_, next] = self.peek_n::<2>();
+      if next.typ == TT::Colon {
+        // This is a `this` parameter
+        self.consume(); // consume 'this'
+        self.require(TT::Colon)?;
+        let type_annotation = Some(self.type_expr(ctx)?);
+        // Create a pseudo-pattern for the `this` parameter
+        use crate::ast::expr::pat::IdPat;
+        use crate::ast::expr::pat::Pat;
+        use crate::ast::stmt::decl::PatDecl;
+        use crate::loc::Loc;
+        let this_pattern = Node::new(
+          Loc(0, 0),
+          PatDecl {
+            pat: Node::new(
+              Loc(0, 0),
+              Pat::Id(Node::new(
+                Loc(0, 0),
+                IdPat {
+                  name: String::from("this"),
+                },
+              )),
+            ),
+          },
+        );
+        return Ok(ParamDecl {
+          decorators: Vec::new(),
+          rest: false,
+          optional: false,
+          accessibility: None,
+          readonly: false,
+          pattern: this_pattern,
+          type_annotation,
+          default_value: None,
+        });
+      }
+    }
+
+    // TypeScript: parse decorators for parameters (before modifiers)
+    let mut decorators = if self.is_typescript() {
+      self.decorators(ctx)?
+    } else {
+      Vec::new()
+    };
+
+    // TypeScript: accessibility modifiers and readonly can appear in either order
+    // e.g. `readonly public x` or `public readonly x` are both valid
+    // Error recovery: allow duplicate modifiers
+    let mut accessibility = None;
+    let mut readonly = false;
+
+    // Parse modifiers in a loop to allow duplicates
+    loop {
+      let mut found_modifier = false;
+
+      // Try readonly
+      if self.consume_if(TT::KeywordReadonly).is_match() {
+        readonly = true;
+        found_modifier = true;
+      }
+
+      // Try accessibility
+      if self.consume_if(TT::KeywordPublic).is_match() {
+        accessibility = Some(Accessibility::Public);
+        found_modifier = true;
+      } else if self.consume_if(TT::KeywordPrivate).is_match() {
+        accessibility = Some(Accessibility::Private);
+        found_modifier = true;
+      } else if self.consume_if(TT::KeywordProtected).is_match() {
+        accessibility = Some(Accessibility::Protected);
+        found_modifier = true;
+      }
+
+      if !found_modifier {
+        break;
+      }
+    }
+
+    // TypeScript: Also allow decorators after modifiers for error recovery
+    // e.g. `public @dec p` in addition to `@dec public p`
+    if self.is_typescript() && self.peek().typ == TT::At {
+      let post_modifiers_decorators = self.decorators(ctx)?;
+      decorators.extend(post_modifiers_decorators);
+    }
+
+    let rest = self.consume_if(TT::DotDotDot).is_match();
+    let pattern = self.pat_decl(ctx)?;
+
+    // TypeScript: optional parameter
+    let optional = !self.is_strict_ecmascript() && self.consume_if(TT::Question).is_match();
+
+    // TypeScript: type annotation
+    let type_annotation = if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
+      Some(self.type_expr(ctx)?)
+    } else {
+      None
+    };
+
+    let default_value = self
+      .consume_if(TT::Equals)
+      .and_then(|| self.expr(ctx, [TT::Comma, TT::ParenthesisClose]))?;
+
+    Ok(ParamDecl {
+      decorators,
+      rest,
+      optional,
+      accessibility,
+      readonly,
+      pattern,
+      type_annotation,
+      default_value,
+    })
   }
 
   pub fn parse_func_block_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<Stmt>>> {
@@ -147,7 +172,12 @@ impl<'a> Parser<'a> {
     self.in_switch = 0;
     let res = (|| {
       self.require(TT::BraceOpen)?;
-      let body = self.stmts(ctx.non_top_level(), TT::BraceClose)?;
+      // Nested function bodies are StatementLists: always allow ASI, even when the
+      // function expression sits inside a for/while header (`AsiContext::StatementHeader`).
+      // Otherwise `for ((function(){ throw "x" })();;)` rejects the body's `}`
+      // (test262 `for/S12.6.3_A2*`).
+      let body_ctx = ctx.non_top_level().with_asi(super::AsiContext::Statements);
+      let body = self.stmts(body_ctx, TT::BraceClose)?;
       self.require(TT::BraceClose)?;
       Ok(body)
     })();
@@ -158,29 +188,44 @@ impl<'a> Parser<'a> {
     res
   }
 
-  pub fn parse_non_arrow_func_block_body(
+  /// Enter the binding environment of a non-arrow function for the duration of `f`.
+  ///
+  /// Default-parameter initialisers evaluate in this environment (ECMA-262), so
+  /// `new.target` must be available while parsing parameters — not only the body.
+  /// Regular functions do not have a `super` binding.
+  ///
+  /// Invariant: save/restore `new_target_allowed` (increment on entry); never leave
+  /// it permanently reset. Arrows must not call this — they inherit the flag.
+  pub fn with_non_arrow_func_bindings<R>(
     &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Vec<Node<Stmt>>> {
+    f: impl FnOnce(&mut Self) -> SyntaxResult<R>,
+  ) -> SyntaxResult<R> {
     let prev_new_target_allowed = self.new_target_allowed;
     let prev_super_prop_allowed = self.super_prop_allowed;
     let prev_super_call_allowed = self.super_call_allowed;
     self.new_target_allowed += 1;
-    // Regular functions do not have a `super` binding.
+    // Nested non-arrow functions do not inherit an outer `super` binding.
     self.super_prop_allowed = 0;
     self.super_call_allowed = 0;
-    let res = self.parse_func_block_body(ctx);
+    let res = f(self);
     self.new_target_allowed = prev_new_target_allowed;
     self.super_prop_allowed = prev_super_prop_allowed;
     self.super_call_allowed = prev_super_call_allowed;
     res
   }
 
-  pub fn parse_method_block_body(
+  /// Enter the binding environment of a method / constructor for the duration of `f`.
+  ///
+  /// Same rationale as [`Self::with_non_arrow_func_bindings`]: parameter default
+  /// initialisers see `new.target` and (when applicable) `super`.
+  ///
+  /// Invariant: save/restore `new_target_allowed` (increment on entry); never leave
+  /// it permanently reset. Arrows must not call this — they inherit the flag.
+  pub fn with_method_bindings<R>(
     &mut self,
-    ctx: ParseCtx,
     allow_super_call: bool,
-  ) -> SyntaxResult<Vec<Node<Stmt>>> {
+    f: impl FnOnce(&mut Self) -> SyntaxResult<R>,
+  ) -> SyntaxResult<R> {
     let prev_new_target_allowed = self.new_target_allowed;
     let prev_super_prop_allowed = self.super_prop_allowed;
     let prev_super_call_allowed = self.super_call_allowed;
@@ -193,11 +238,26 @@ impl<'a> Parser<'a> {
       // within them); it is never valid in methods/fields/static blocks.
       self.super_call_allowed = 0;
     }
-    let res = self.parse_func_block_body(ctx);
+    let res = f(self);
     self.new_target_allowed = prev_new_target_allowed;
     self.super_prop_allowed = prev_super_prop_allowed;
     self.super_call_allowed = prev_super_call_allowed;
     res
+  }
+
+  pub fn parse_non_arrow_func_block_body(
+    &mut self,
+    ctx: ParseCtx,
+  ) -> SyntaxResult<Vec<Node<Stmt>>> {
+    self.with_non_arrow_func_bindings(|p| p.parse_func_block_body(ctx))
+  }
+
+  pub fn parse_method_block_body(
+    &mut self,
+    ctx: ParseCtx,
+    allow_super_call: bool,
+  ) -> SyntaxResult<Vec<Node<Stmt>>> {
+    self.with_method_bindings(allow_super_call, |p| p.parse_func_block_body(ctx))
   }
 
   pub(crate) fn is_simple_parameter_list(params: &[Node<ParamDecl>]) -> bool {

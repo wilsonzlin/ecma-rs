@@ -1,0 +1,2147 @@
+{
+  "summary": {
+    "total": 1,
+    "outcomes": {
+      "match": 0,
+      "rust_extra_diagnostics": 0,
+      "rust_missing_diagnostics": 1,
+      "span_mismatch": 0,
+      "code_mismatch": 0,
+      "rust_ice": 0,
+      "tsc_crashed": 0,
+      "timeout": 0
+    },
+    "mismatches": {
+      "expected": 1,
+      "unexpected": 0,
+      "flaky": 0,
+      "xpass": 0
+    }
+  },
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+      "path": "parse-js/tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+      "outcome": "rust_missing_diagnostics",
+      "duration_ms": 2478,
+      "rust_ms": 1681,
+      "tsc_ms": 797,
+      "diff_ms": 0,
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 182,
+            "end": 184,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 203,
+            "end": 205,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 209,
+            "end": 211,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 229,
+            "end": 231,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 235,
+            "end": 237,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 255,
+            "end": 257,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 262,
+            "end": 264,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 268,
+            "end": 270,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 289,
+            "end": 291,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 296,
+            "end": 298,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 302,
+            "end": 304,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 425,
+            "end": 427,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 483,
+            "end": 489,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 496,
+            "end": 498,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 641,
+            "end": 643,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 699,
+            "end": 706,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 713,
+            "end": 715,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 848,
+            "end": 850,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 916,
+            "end": 918,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 974,
+            "end": 981,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 988,
+            "end": 990,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 994,
+            "end": 996,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1136,
+            "end": 1138,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1143,
+            "end": 1145,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1211,
+            "end": 1213,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1269,
+            "end": 1276,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1283,
+            "end": 1285,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1289,
+            "end": 1291,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1427,
+            "end": 1429,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1434,
+            "end": 1436,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1488,
+            "end": 1495,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1502,
+            "end": 1504,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1559,
+            "end": 1566,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1573,
+            "end": 1575,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TC2008",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1579,
+            "end": 1581,
+            "severity": "error",
+            "message": "unresolved type 'T'"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2152,
+            "end": 2153,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2152,
+            "end": 2155,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2158,
+            "end": 2159,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2172,
+            "end": 2173,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2172,
+            "end": 2175,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2178,
+            "end": 2179,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2193,
+            "end": 2194,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2193,
+            "end": 2196,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2199,
+            "end": 2200,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2214,
+            "end": 2215,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2214,
+            "end": 2217,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2220,
+            "end": 2221,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2235,
+            "end": 2236,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2235,
+            "end": 2238,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2241,
+            "end": 2242,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2258,
+            "end": 2259,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2258,
+            "end": 2262,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2265,
+            "end": 2266,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2279,
+            "end": 2280,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2279,
+            "end": 2283,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2286,
+            "end": 2287,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2301,
+            "end": 2302,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2301,
+            "end": 2305,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2308,
+            "end": 2309,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2323,
+            "end": 2324,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2323,
+            "end": 2327,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2330,
+            "end": 2331,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2345,
+            "end": 2346,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2345,
+            "end": 2349,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2352,
+            "end": 2353,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2369,
+            "end": 2370,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2369,
+            "end": 2373,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2376,
+            "end": 2377,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2390,
+            "end": 2391,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2390,
+            "end": 2394,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2397,
+            "end": 2398,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2412,
+            "end": 2413,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2412,
+            "end": 2416,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2419,
+            "end": 2420,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2434,
+            "end": 2435,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2434,
+            "end": 2438,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2441,
+            "end": 2442,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2456,
+            "end": 2457,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2456,
+            "end": 2460,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2463,
+            "end": 2464,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2480,
+            "end": 2481,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2480,
+            "end": 2484,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2487,
+            "end": 2488,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2501,
+            "end": 2502,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2501,
+            "end": 2505,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2508,
+            "end": 2509,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2523,
+            "end": 2524,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2523,
+            "end": 2527,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2530,
+            "end": 2531,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2545,
+            "end": 2546,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2545,
+            "end": 2549,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2552,
+            "end": 2553,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2567,
+            "end": 2568,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2567,
+            "end": 2571,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2574,
+            "end": 2575,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2591,
+            "end": 2592,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2591,
+            "end": 2595,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2598,
+            "end": 2599,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2612,
+            "end": 2613,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2612,
+            "end": 2616,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2619,
+            "end": 2620,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2634,
+            "end": 2635,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2634,
+            "end": 2638,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2641,
+            "end": 2642,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2656,
+            "end": 2657,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2656,
+            "end": 2660,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2663,
+            "end": 2664,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2678,
+            "end": 2679,
+            "severity": "error",
+            "message": "b is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2678,
+            "end": 2682,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2454",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2685,
+            "end": 2686,
+            "severity": "error",
+            "message": "t is used before being assigned"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2955,
+            "end": 2961,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3025,
+            "end": 3031,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3100,
+            "end": 3106,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3178,
+            "end": 3185,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3249,
+            "end": 3256,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3325,
+            "end": 3332,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3398,
+            "end": 3405,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3465,
+            "end": 3472,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3537,
+            "end": 3544,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3612,
+            "end": 3619,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3698,
+            "end": 3705,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3765,
+            "end": 3772,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3844,
+            "end": 3851,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3919,
+            "end": 3926,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4001,
+            "end": 4008,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4068,
+            "end": 4075,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4147,
+            "end": 4154,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          },
+          {
+            "engine": "rust",
+            "code": "TS2322",
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4221,
+            "end": 4228,
+            "severity": "error",
+            "message": "assignment type mismatch"
+          }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 359,
+            "end": 363,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 411,
+            "end": 417,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 483,
+            "end": 489,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 574,
+            "end": 578,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 626,
+            "end": 633,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 699,
+            "end": 706,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 785,
+            "end": 789,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 833,
+            "end": 840,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 902,
+            "end": 909,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 974,
+            "end": 981,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1073,
+            "end": 1077,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1121,
+            "end": 1128,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1197,
+            "end": 1204,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1269,
+            "end": 1276,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1364,
+            "end": 1368,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1412,
+            "end": 1419,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1488,
+            "end": 1495,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 1559,
+            "end": 1566,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2152,
+            "end": 2153,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2152,
+            "end": 2155,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2158,
+            "end": 2159,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2172,
+            "end": 2173,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2172,
+            "end": 2175,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2178,
+            "end": 2179,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2193,
+            "end": 2194,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2193,
+            "end": 2196,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2199,
+            "end": 2200,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2214,
+            "end": 2215,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2214,
+            "end": 2217,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2220,
+            "end": 2221,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2235,
+            "end": 2236,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2235,
+            "end": 2238,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2241,
+            "end": 2242,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2258,
+            "end": 2259,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2258,
+            "end": 2262,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2265,
+            "end": 2266,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2279,
+            "end": 2280,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2279,
+            "end": 2283,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2286,
+            "end": 2287,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2301,
+            "end": 2302,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2301,
+            "end": 2305,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2308,
+            "end": 2309,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2323,
+            "end": 2324,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2323,
+            "end": 2327,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2330,
+            "end": 2331,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2345,
+            "end": 2346,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2345,
+            "end": 2349,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2352,
+            "end": 2353,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2369,
+            "end": 2370,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2369,
+            "end": 2373,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2376,
+            "end": 2377,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2390,
+            "end": 2391,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2390,
+            "end": 2394,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2397,
+            "end": 2398,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2412,
+            "end": 2413,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2412,
+            "end": 2416,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2419,
+            "end": 2420,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2434,
+            "end": 2435,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2434,
+            "end": 2438,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2441,
+            "end": 2442,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2456,
+            "end": 2457,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2456,
+            "end": 2460,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2463,
+            "end": 2464,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2480,
+            "end": 2481,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2480,
+            "end": 2484,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2487,
+            "end": 2488,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2501,
+            "end": 2502,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2501,
+            "end": 2505,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2508,
+            "end": 2509,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2523,
+            "end": 2524,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2523,
+            "end": 2527,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2530,
+            "end": 2531,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2545,
+            "end": 2546,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2545,
+            "end": 2549,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2552,
+            "end": 2553,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2567,
+            "end": 2568,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2567,
+            "end": 2571,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2574,
+            "end": 2575,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2591,
+            "end": 2592,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2591,
+            "end": 2595,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2598,
+            "end": 2599,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2612,
+            "end": 2613,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2612,
+            "end": 2616,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2619,
+            "end": 2620,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2634,
+            "end": 2635,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2634,
+            "end": 2638,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2641,
+            "end": 2642,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2656,
+            "end": 2657,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2656,
+            "end": 2660,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2663,
+            "end": 2664,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2678,
+            "end": 2679,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2678,
+            "end": 2682,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2454,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2685,
+            "end": 2686,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 2973,
+            "end": 2977,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3025,
+            "end": 3031,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3100,
+            "end": 3106,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3197,
+            "end": 3201,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3249,
+            "end": 3256,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3325,
+            "end": 3332,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3417,
+            "end": 3421,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3465,
+            "end": 3472,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3537,
+            "end": 3544,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3612,
+            "end": 3619,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3717,
+            "end": 3721,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3765,
+            "end": 3772,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3844,
+            "end": 3851,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 3919,
+            "end": 3926,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4020,
+            "end": 4024,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4068,
+            "end": 4075,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4147,
+            "end": 4154,
+            "severity": "error"
+          },
+          {
+            "engine": "tsc",
+            "code": 2322,
+            "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+            "start": 4221,
+            "end": 4228,
+            "severity": "error"
+          }
+        ]
+      },
+      "options": {
+        "harness": {},
+        "rust": {
+          "target": "Es2015",
+          "module": null,
+          "no_default_lib": false,
+          "libs": [],
+          "skip_lib_check": true,
+          "no_emit": true,
+          "no_emit_on_error": false,
+          "declaration": false,
+          "module_resolution": null,
+          "types": [],
+          "strict_null_checks": true,
+          "no_implicit_any": false,
+          "strict_function_types": true,
+          "exact_optional_property_types": false,
+          "no_unchecked_indexed_access": false,
+          "use_define_for_class_fields": true,
+          "strict_property_initialization": false,
+          "jsx": null,
+          "cache": {
+            "max_relation_cache_entries": 4096,
+            "max_eval_cache_entries": 4096,
+            "max_instantiation_cache_entries": 2048,
+            "max_body_cache_entries": 4096,
+            "max_def_cache_entries": 4096,
+            "cache_shards": 8,
+            "mode": "Shared"
+          }
+        },
+        "tsc": {
+          "exactOptionalPropertyTypes": false,
+          "moduleResolution": "node",
+          "noEmit": true,
+          "noImplicitAny": false,
+          "noUncheckedIndexedAccess": false,
+          "pretty": false,
+          "skipLibCheck": true,
+          "strictFunctionTypes": true,
+          "strictNullChecks": true,
+          "strictPropertyInitialization": false,
+          "target": "ES2015",
+          "useDefineForClassFields": true
+        }
+      },
+      "detail": {
+        "message": "rust missing 12 diagnostic(s); first missing: /assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts:833-840 [2322]",
+        "tsc": {
+          "engine": "tsc",
+          "code": 2322,
+          "file": "/assignmentCompatWithGenericCallSignaturesWithOptionalParameters.ts",
+          "start": 833,
+          "end": 840,
+          "severity": "error"
+        }
+      },
+      "expectation": {
+        "expectation": "xfail",
+        "expected": true,
+        "from_manifest": true,
+        "reason": "rust_missing_diagnostics (shard 29/64) rust=[TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TC2008,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454,TS2454] tsc=[2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2454,2322,2454,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322,2322]"
+      },
+      "mismatched": true
+    }
+  ]
+}

@@ -76,6 +76,10 @@ pub struct PatDecl {
 pub struct VarDecl {
   #[drive(skip)]
   pub export: bool,
+  /// True when preceded by TypeScript `declare` (`declare let` / `export declare const`).
+  /// Ambient bindings are assumed initialized for definite-assignment analysis.
+  #[drive(skip)]
+  pub declare: bool,
   pub mode: VarDeclMode,
   pub declarators: Vec<VarDeclarator>,
 }

@@ -66,7 +66,10 @@ pub enum VmError {
   ///
   /// This is catchable from JS and is surfaced when an exception escapes to the host.
   #[error("uncaught exception")]
-  ThrowWithStack { value: Value, stack: Vec<StackFrame> },
+  ThrowWithStack {
+    value: Value,
+    stack: Vec<StackFrame>,
+  },
 
   /// A non-catchable termination condition (fuel exhausted, deadline exceeded, host interrupt,
   /// etc).

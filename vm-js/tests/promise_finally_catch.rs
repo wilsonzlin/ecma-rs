@@ -2,9 +2,9 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 use vm_js::{
-  GcObject, Heap, HeapLimits, Job, PromiseHandle, PromiseRejectionOperation, PromiseState, PropertyKey,
-  PropertyDescriptor, PropertyKind, Realm, RealmId, RootId, Scope, Value, Vm, VmError, VmHost,
-  VmHostHooks, VmJobContext, VmOptions,
+  GcObject, Heap, HeapLimits, Job, PromiseHandle, PromiseRejectionOperation, PromiseState,
+  PropertyDescriptor, PropertyKey, PropertyKind, Realm, RealmId, RootId, Scope, Value, Vm, VmError,
+  VmHost, VmHostHooks, VmJobContext, VmOptions,
 };
 
 thread_local! {
@@ -34,7 +34,11 @@ impl VmHostHooks for TestHost {
     self.queue.push_back(job);
   }
 
-  fn host_promise_rejection_tracker(&mut self, promise: PromiseHandle, operation: PromiseRejectionOperation) {
+  fn host_promise_rejection_tracker(
+    &mut self,
+    promise: PromiseHandle,
+    operation: PromiseRejectionOperation,
+  ) {
     self.rejection_tracker.push((promise, operation));
   }
 }
@@ -131,7 +135,10 @@ fn on_rejected_returns_42(
   args: &[Value],
 ) -> Result<Value, VmError> {
   CATCH_CALLS.with(|c| c.set(c.get() + 1));
-  assert_eq!(args.get(0).copied().unwrap_or(Value::Undefined), Value::Number(1.0));
+  assert_eq!(
+    args.get(0).copied().unwrap_or(Value::Undefined),
+    Value::Number(1.0)
+  );
   Ok(Value::Number(42.0))
 }
 
@@ -146,8 +153,14 @@ fn borrowed_then_returns_123(
 ) -> Result<Value, VmError> {
   BORROWED_THEN_CALLS.with(|c| c.set(c.get() + 1));
   assert_eq!(this, Value::Number(1.0));
-  assert_eq!(args.get(0).copied().unwrap_or(Value::Undefined), Value::Undefined);
-  assert_eq!(args.get(1).copied().unwrap_or(Value::Undefined), Value::Number(99.0));
+  assert_eq!(
+    args.get(0).copied().unwrap_or(Value::Undefined),
+    Value::Undefined
+  );
+  assert_eq!(
+    args.get(1).copied().unwrap_or(Value::Undefined),
+    Value::Number(99.0)
+  );
   Ok(Value::Number(123.0))
 }
 
@@ -187,7 +200,9 @@ fn on_finally_returns_promise(
   _args: &[Value],
 ) -> Result<Value, VmError> {
   FINALLY_CALLS.with(|c| c.set(c.get() + 1));
-  let promise = FINALLY_RETURN_PROMISE.with(|c| c.get()).expect("missing finally return promise");
+  let promise = FINALLY_RETURN_PROMISE
+    .with(|c| c.get())
+    .expect("missing finally return promise");
   Ok(Value::Object(promise))
 }
 
@@ -249,7 +264,9 @@ fn promise_catch_transforms_rejection_into_fulfillment() -> Result<(), VmError> 
       &[Value::Object(on_rejected)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.catch returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.catch returned non-object",
+      ));
     };
 
     (p, q)
@@ -346,7 +363,9 @@ fn promise_finally_throws_on_non_object_receiver_even_if_then_exists() -> Result
 
     // Number.prototype.then is callable, but `Promise.prototype.finally` should still throw because
     // it requires an Object receiver (ECMA-262).
-    let call_id = ctx.vm.register_native_call(borrowed_then_should_not_be_called)?;
+    let call_id = ctx
+      .vm
+      .register_native_call(borrowed_then_should_not_be_called)?;
     let name = scope.alloc_string("then")?;
     let then_fn = scope.alloc_native_function(call_id, None, name, 2)?;
     scope.push_root(Value::Object(then_fn))?;
@@ -376,7 +395,10 @@ fn promise_finally_throws_on_non_object_receiver_even_if_then_exists() -> Result
     )
   };
 
-  if !matches!(result, Err(VmError::Throw(_)) | Err(VmError::ThrowWithStack { .. })) {
+  if !matches!(
+    result,
+    Err(VmError::Throw(_)) | Err(VmError::ThrowWithStack { .. })
+  ) {
     return Err(VmError::Unimplemented(
       "expected Promise.prototype.finally to throw on non-object receiver",
     ));
@@ -413,7 +435,9 @@ fn promise_finally_on_fulfill_runs_callback_and_preserves_value() -> Result<(), 
       &[Value::Number(1.0)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.resolve returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.resolve returned non-object",
+      ));
     };
 
     let call_id = ctx.vm.register_native_call(on_finally_increments)?;
@@ -429,7 +453,9 @@ fn promise_finally_on_fulfill_runs_callback_and_preserves_value() -> Result<(), 
       &[Value::Object(on_finally)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.finally returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.finally returned non-object",
+      ));
     };
 
     q
@@ -486,7 +512,9 @@ fn promise_finally_on_reject_runs_callback_and_preserves_reason() -> Result<(), 
       &[Value::Object(on_finally)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.finally returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.finally returned non-object",
+      ));
     };
 
     q
@@ -529,7 +557,9 @@ fn promise_finally_waits_for_returned_promise_before_continuing() -> Result<(), 
       &[Value::Number(1.0)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.resolve returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.resolve returned non-object",
+      ));
     };
 
     // gate = Promise.withResolvers()
@@ -541,22 +571,38 @@ fn promise_finally_waits_for_returned_promise_before_continuing() -> Result<(), 
       &[],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.withResolvers returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.withResolvers returned non-object",
+      ));
     };
 
     // Root `record` while allocating property keys (which may trigger GC).
     scope.push_root(Value::Object(record))?;
 
     let promise_key = PropertyKey::from_string(scope.alloc_string("promise")?);
-    let gate_promise = match scope.heap().object_get_own_data_property_value(record, &promise_key)? {
+    let gate_promise = match scope
+      .heap()
+      .object_get_own_data_property_value(record, &promise_key)?
+    {
       Some(Value::Object(p)) => p,
-      _ => return Err(VmError::Unimplemented("record.promise missing or not object")),
+      _ => {
+        return Err(VmError::Unimplemented(
+          "record.promise missing or not object",
+        ))
+      }
     };
 
     let resolve_key = PropertyKey::from_string(scope.alloc_string("resolve")?);
-    let gate_resolve = match scope.heap().object_get_own_data_property_value(record, &resolve_key)? {
+    let gate_resolve = match scope
+      .heap()
+      .object_get_own_data_property_value(record, &resolve_key)?
+    {
       Some(Value::Object(f)) => f,
-      _ => return Err(VmError::Unimplemented("record.resolve missing or not object")),
+      _ => {
+        return Err(VmError::Unimplemented(
+          "record.resolve missing or not object",
+        ))
+      }
     };
 
     FINALLY_RETURN_PROMISE.with(|c| c.set(Some(gate_promise)));
@@ -574,7 +620,9 @@ fn promise_finally_waits_for_returned_promise_before_continuing() -> Result<(), 
       &[Value::Object(on_finally)],
     )?
     else {
-      return Err(VmError::Unimplemented("Promise.prototype.finally returned non-object"));
+      return Err(VmError::Unimplemented(
+        "Promise.prototype.finally returned non-object",
+      ));
     };
 
     // Attach a handler to q before running jobs.
@@ -621,7 +669,10 @@ fn promise_finally_waits_for_returned_promise_before_continuing() -> Result<(), 
 
   ctx.run_jobs(&mut host)?;
 
-  assert_eq!(ctx.heap.promise_state(gate_promise)?, PromiseState::Fulfilled);
+  assert_eq!(
+    ctx.heap.promise_state(gate_promise)?,
+    PromiseState::Fulfilled
+  );
   assert_eq!(ctx.heap.promise_state(q)?, PromiseState::Fulfilled);
   assert_eq!(ctx.heap.promise_result(q)?, Some(Value::Number(1.0)));
   assert_eq!(THEN_ARG.with(|c| c.get()), Some(1.0));

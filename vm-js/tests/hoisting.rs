@@ -9,9 +9,7 @@ fn new_runtime() -> JsRuntime {
 #[test]
 fn function_declarations_are_hoisted() {
   let mut rt = new_runtime();
-  let value = rt
-    .exec_script("f(); function f() { return 1; }")
-    .unwrap();
+  let value = rt.exec_script("f(); function f() { return 1; }").unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
 
@@ -35,4 +33,3 @@ fn lexical_declarations_have_tdz() {
     other => panic!("expected ReferenceError/TDZ throw, got {other:?}"),
   }
 }
-

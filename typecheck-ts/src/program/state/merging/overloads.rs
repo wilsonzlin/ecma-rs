@@ -1,6 +1,22 @@
 use super::*;
 
 impl ProgramState {
+  /// Whether a def is a static class member. Static and instance members with
+  /// the same name are distinct declaration spaces (tsc): they must never
+  /// merge into one overload set (`superPropertyAccessNoError.ts`, where
+  /// instance `func()` and `static func()` merged into
+  /// `{ (): string; (): number }` on both sides).
+  fn def_is_static(&self, def: DefId) -> bool {
+    let Some(data) = self.def_data.get(&def) else {
+      return false;
+    };
+    self
+      .hir_lowered
+      .get(&data.file)
+      .and_then(|lowered| lowered.def(def))
+      .is_some_and(|hir_def| hir_def.is_static)
+  }
+
   pub(in super::super) fn rebuild_callable_overloads(&mut self) {
     self.callable_overloads.clear();
     if let Some(semantics) = self.semantics.as_ref() {
@@ -37,7 +53,11 @@ impl ProgramState {
             if let Some(def_data) = self.def_data.get(&def) {
               self
                 .callable_overloads
-                .entry((def_data.file, def_data.name.clone()))
+                .entry((
+                  def_data.file,
+                  def_data.name.clone(),
+                  self.def_is_static(def),
+                ))
                 .or_insert_with(|| defs.clone());
             }
           }
@@ -45,21 +65,21 @@ impl ProgramState {
       }
     }
 
-    let mut grouped: BTreeMap<(FileId, String), Vec<(DefId, TextRange)>> = BTreeMap::new();
+    let mut grouped: BTreeMap<(FileId, String, bool), Vec<(DefId, TextRange)>> = BTreeMap::new();
     for (id, data) in self
       .def_data
       .iter()
       .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
     {
       grouped
-        .entry((data.file, data.name.clone()))
+        .entry((data.file, data.name.clone(), self.def_is_static(*id)))
         .or_default()
         .push((*id, data.span));
     }
-    for ((file, name), mut defs) in grouped.into_iter() {
+    for ((file, name, is_static), mut defs) in grouped.into_iter() {
       defs.sort_by_key(|(id, span)| (span.start, span.end, id.0));
       let mut ordered: Vec<_> = defs.into_iter().map(|(id, _)| id).collect();
-      let key = (file, name.clone());
+      let key = (file, name.clone(), is_static);
       if let Some(existing) = self.callable_overloads.get(&key).cloned() {
         ordered.extend(existing);
       }
@@ -87,7 +107,7 @@ impl ProgramState {
     if self.callable_overloads.is_empty() {
       self.rebuild_callable_overloads();
     }
-    let key = (file, name);
+    let key = (file, name, self.def_is_static(def));
     Some(
       self
         .callable_overloads
@@ -114,7 +134,9 @@ impl ProgramState {
         if skip_bodies && has_overloads {
           if let Some(def_data) = state.def_data.get(&def) {
             if let DefKind::Function(func) = &def_data.kind {
-              if func.body.is_some() && func.return_ann.is_none() {
+              if func.body.is_some() && !state.function_has_return_annotation(def, func) {
+                // Skip implementation signatures without a return annotation
+                // (incl. HIR-only binder seeds where `return_ann` is unset).
                 continue;
               }
             }
@@ -169,7 +191,7 @@ impl ProgramState {
       self.rebuild_callable_overloads();
     }
     let mut keys: Vec<_> = self.callable_overloads.keys().cloned().collect();
-    keys.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
+    keys.sort();
     for key in keys.into_iter() {
       let Some(defs) = self.callable_overloads.get(&key).cloned() else {
         continue;

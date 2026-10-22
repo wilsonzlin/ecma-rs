@@ -24,8 +24,8 @@ the tool cannot continue and should bubble up as `Result::Err`.
 
 ## Code prefix registry
 
-Reserved, non-exhaustive prefixes (see `docs/diagnostic-codes.md` for the full
-repo-wide policy and registry):
+Reserved, non-exhaustive prefixes (see `wiki/architecture/diagnostics.md` for the
+full repo-wide policy and registry):
 
 - `PS####`: `parse-js` parser
 - `BIND####`: `semantic-js` binder
@@ -38,6 +38,7 @@ repo-wide policy and registry):
 - `EMIT####`: `emit-js` emitter
 - `CONF####`: parser conformance tooling
 - `T262####`: test262 tooling
+- `VMJS####`: `vm-js` VM-surfaced diagnostics
 - `HOST####`: Host/environment failures
 - `ICE####`: Internal compiler errors
 - `CANCEL####`: Cancellation

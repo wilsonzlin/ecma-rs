@@ -165,6 +165,10 @@ const PRECEDENCE_LEVELS: &[&[(OperatorName, Arity, Associativity)]] = &[
     (In, Binary, Left),
     (Instanceof, Binary, Left),
   ],
+  // TypeScript `as` / `satisfies` sit between relational (`in`) and equality:
+  // `a in b as T` → `(a in b) as T`, but `a == b as T` → `a == (b as T)`.
+  // (Handled in the parser with this precedence; not a runtime operator.)
+  &[],
   &[
     (Equality, Binary, Left),
     (Inequality, Binary, Left),

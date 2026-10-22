@@ -352,6 +352,7 @@ fn class_hooks<'a>(expander: &'a dyn RelateTypeExpander) -> RelateHooks<'a> {
   RelateHooks {
     expander: Some(expander),
     is_same_origin_private_member: Some(&same_origin_private_member),
+    should_stop: None,
   }
 }
 

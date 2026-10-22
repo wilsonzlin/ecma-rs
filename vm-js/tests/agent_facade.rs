@@ -1,4 +1,6 @@
-use vm_js::{Agent, Budget, Heap, HeapLimits, PersistentRoot, TerminationReason, Value, VmError, VmOptions};
+use vm_js::{
+  Agent, Budget, Heap, HeapLimits, PersistentRoot, TerminationReason, Value, VmError, VmOptions,
+};
 
 fn new_agent() -> Agent {
   Agent::with_options(

@@ -384,7 +384,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
 
   let filter = build_filter(args.filter.as_deref()).map_err(|err| anyhow!(err.to_string()))?;
   let shard = match args.shard.as_deref() {
-    Some(raw) => Some(Shard::parse(raw).map_err(|err| anyhow!(err.to_string()))?),
+    Some(raw) => Some(crate::parse_shard(raw).map_err(|err| anyhow!(err.to_string()))?),
     None => None,
   };
 
@@ -2447,7 +2447,7 @@ mod tests {
     ];
 
     let filter = build_filter(None).unwrap();
-    let shard = Shard::parse("0/2").unwrap();
+    let shard = crate::parse_shard("0/2").unwrap();
     let planned = plan_tests("difftsc", tests, &filter, None, Some(shard)).unwrap();
     let ids: Vec<_> = planned.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(ids, vec!["difftsc/a", "difftsc/c"]);

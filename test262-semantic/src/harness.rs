@@ -62,10 +62,18 @@ pub fn assemble_source(
       for include in &frontmatter.includes {
         maybe_push(include);
       }
+      // test262 INTERPRETING.md: `flags: [async]` requires `doneprintHandle.js` after the
+      // Test262-defined bindings (assert/sta + frontmatter includes), before the test body.
+      if frontmatter.flags.iter().any(|f| f == "async") {
+        maybe_push("doneprintHandle.js");
+      }
     }
     HarnessMode::Includes => {
       for include in &frontmatter.includes {
         maybe_push(include);
+      }
+      if frontmatter.flags.iter().any(|f| f == "async") {
+        maybe_push("doneprintHandle.js");
       }
     }
     HarnessMode::None => {}
@@ -73,7 +81,8 @@ pub fn assemble_source(
 
   for include in includes {
     let path = harness_dir.join(&include);
-    let content = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let content =
+      std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     out.push_str(&content);
     if !content.ends_with('\n') {
       out.push('\n');
@@ -132,6 +141,30 @@ mod tests {
     assert!(assert_pos < sta_pos);
     assert!(sta_pos < helper_pos);
     assert!(helper_pos < body_pos);
+  }
+
+  #[test]
+  fn async_flag_appends_doneprint_handle_after_includes() {
+    let temp = setup_test262_dir();
+    fs::write(temp.path().join("harness/doneprintHandle.js"), "/*done*/\n").unwrap();
+    let frontmatter = Frontmatter {
+      flags: vec!["async".to_string()],
+      includes: vec!["helper.js".to_string()],
+      ..Frontmatter::default()
+    };
+    let source = assemble_source(
+      temp.path(),
+      &frontmatter,
+      Variant::NonStrict,
+      "/*body*/\n",
+      HarnessMode::Test262,
+    )
+    .unwrap();
+    let helper_pos = source.find("/*helper*/").unwrap();
+    let done_pos = source.find("/*done*/").unwrap();
+    let body_pos = source.find("/*body*/").unwrap();
+    assert!(helper_pos < done_pos);
+    assert!(done_pos < body_pos);
   }
 
   #[test]
@@ -270,7 +303,9 @@ mod tests {
     )
     .unwrap_err();
     assert!(
-      err.to_string().contains("test262 harness directory not found"),
+      err
+        .to_string()
+        .contains("test262 harness directory not found"),
       "expected missing harness directory error, got: {err:#}"
     );
   }

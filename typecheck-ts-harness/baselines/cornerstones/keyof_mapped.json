@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "strictPropertyInitialization": false,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "keyof_mapped.ts",
+      "start": 240,
+      "end": 252,
+      "category": "error",
+      "message": "Type '\"a\"' is not assignable to type '\"shared\"'."
+    },
+    {
+      "code": 2322,
+      "file": "keyof_mapped.ts",
+      "start": 320,
+      "end": 332,
+      "category": "error",
+      "message": "Type '\"missing\"' is not assignable to type '\"a\" | \"shared\" | \"b\"'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "keyof_mapped.ts",
+        "name": "remapped",
+        "type": "{ aId: number; bId: number }"
+      }
+    ]
+  }
+}

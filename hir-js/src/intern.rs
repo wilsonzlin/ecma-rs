@@ -74,6 +74,11 @@ impl NameInterner {
     self.by_id.get(&id).map(|s| s.as_str())
   }
 
+  /// Lookup an already-interned name without allocating.
+  pub fn get(&self, name: &str) -> Option<NameId> {
+    self.by_name.get(name).copied()
+  }
+
   pub fn len(&self) -> usize {
     debug_assert_eq!(self.by_name.len(), self.by_id.len());
     self.by_name.len()

@@ -62,12 +62,9 @@ impl DeclarativeEnvRecord {
     let idx = self
       .symbol_binding_index(symbol)
       .ok_or(VmError::Unimplemented("unbound identifier"))?;
-    let binding = self
-      .bindings
-      .get(idx)
-      .ok_or(VmError::Unimplemented(
-        "environment record binding index out of bounds",
-      ))?;
+    let binding = self.bindings.get(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
     if !binding.initialized {
       // TDZ.
       //
@@ -87,12 +84,9 @@ impl DeclarativeEnvRecord {
     let idx = self
       .symbol_binding_index(symbol)
       .ok_or(VmError::Unimplemented("unbound identifier"))?;
-    let binding = self
-      .bindings
-      .get_mut(idx)
-      .ok_or(VmError::Unimplemented(
-        "environment record binding index out of bounds",
-      ))?;
+    let binding = self.bindings.get_mut(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
     if binding.initialized {
       return Err(VmError::Unimplemented("binding already initialized"));
     }
@@ -109,12 +103,9 @@ impl DeclarativeEnvRecord {
     let idx = self
       .symbol_binding_index(symbol)
       .ok_or(VmError::Unimplemented("unbound identifier"))?;
-    let binding = self
-      .bindings
-      .get_mut(idx)
-      .ok_or(VmError::Unimplemented(
-        "environment record binding index out of bounds",
-      ))?;
+    let binding = self.bindings.get_mut(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
     if !binding.initialized {
       // TDZ sentinel; see `get_symbol_binding_value`.
       return Err(VmError::Throw(Value::Null));
@@ -132,8 +123,19 @@ impl DeclarativeEnvRecord {
 pub(crate) struct ObjectEnvRecord {
   pub(crate) outer: Option<GcEnv>,
   pub(crate) binding_object: GcObject,
-  #[allow(dead_code)]
+  /// When true, `HasBinding` consults `@@unscopables` (ECMA-262 Object Environment Record /
+  /// `with` statement).
   pub(crate) with_environment: bool,
+}
+
+/// Discriminant + payload for walking an environment chain without holding a heap borrow.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EnvRecordKind {
+  Declarative,
+  Object {
+    binding_object: GcObject,
+    with_environment: bool,
+  },
 }
 
 impl ObjectEnvRecord {

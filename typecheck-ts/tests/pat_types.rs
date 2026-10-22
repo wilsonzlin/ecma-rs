@@ -32,7 +32,7 @@ fn records_pattern_types_for_params_and_vars() {
   )
   .expect("parse");
   let ast = Arc::new(ast);
-  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let ast_index = AstIndex::new(ast.as_ref(), FileId(0), None);
 
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();

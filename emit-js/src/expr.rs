@@ -19,8 +19,8 @@ use parse_js::operator::{OperatorName, OPERATORS};
 use crate::emitter::{with_node_context, EmitError, EmitOptions, EmitResult};
 use crate::escape::emit_string_literal;
 use crate::precedence::{
-  child_min_prec_for_binary, expr_prec, needs_parens, starts_with_optional_chaining, Prec, Side,
-  CALL_MEMBER_PRECEDENCE,
+  child_min_prec_for_binary, expr_prec, needs_parens, needs_parens_before_optional_chain,
+  new_callee_needs_parens, Prec, Side, CALL_MEMBER_PRECEDENCE,
 };
 use crate::Emitter;
 
@@ -122,16 +122,26 @@ where
     })
   }
 
-  // TypeScript requires parentheses when `as`/`satisfies` are used as receivers of call/member access.
-  fn emit_memberish_receiver(&mut self, expr: &Node<Expr>) -> EmitResult {
-    match expr.stx.as_ref() {
-      Expr::TypeAssertion(_) | Expr::SatisfiesExpr(_) => {
-        write!(self.out, "(")?;
+  // TypeScript requires parentheses when `as`/`satisfies` are used as receivers of
+  // call/member access. `before_optional` also forces parens around `new` (see
+  // [`needs_parens_before_optional_chain`]).
+  fn emit_memberish_receiver(&mut self, expr: &Node<Expr>, before_optional: bool) -> EmitResult {
+    let wrap_ts = matches!(
+      expr.stx.as_ref(),
+      Expr::TypeAssertion(_) | Expr::SatisfiesExpr(_)
+    );
+    let wrap_new = before_optional && needs_parens_before_optional_chain(expr);
+    if wrap_ts || wrap_new {
+      write!(self.out, "(")?;
+      if wrap_ts {
         self.emit_expr_no_parens(expr)?;
-        write!(self.out, ")")?;
-        Ok(())
+      } else {
+        self.emit_expr_with_min_prec(expr, CALL_MEMBER_PRECEDENCE)?;
       }
-      _ => self.emit_expr_with_min_prec(expr, CALL_MEMBER_PRECEDENCE),
+      write!(self.out, ")")?;
+      Ok(())
+    } else {
+      self.emit_expr_with_min_prec(expr, CALL_MEMBER_PRECEDENCE)
     }
   }
 
@@ -525,6 +535,7 @@ where
 
     match argument.stx.as_ref() {
       Expr::Call(call) => {
+        // `new (a?.())`: optional call is not a MemberExpression callee.
         if call.stx.optional_chaining {
           write!(self.out, "(")?;
           self.emit_call(call)?;
@@ -533,12 +544,12 @@ where
         }
 
         let callee = &call.stx.callee;
-        if starts_with_optional_chaining(callee) {
+        if new_callee_needs_parens(callee) {
           write!(self.out, "(")?;
-          self.emit_memberish_receiver(callee)?;
+          self.emit_memberish_receiver(callee, false)?;
           write!(self.out, ")")?;
         } else {
-          self.emit_memberish_receiver(callee)?;
+          self.emit_memberish_receiver(callee, false)?;
         }
 
         write!(self.out, "(")?;
@@ -559,7 +570,8 @@ where
         Ok(())
       }
       _ => {
-        if starts_with_optional_chaining(argument) {
+        // Bare `new <expr>` (no argument list): parenthesize optional-chain callees.
+        if new_callee_needs_parens(argument) {
           write!(self.out, "(")?;
           self.emit_expr_with_min_prec(argument, CALL_MEMBER_PRECEDENCE)?;
           write!(self.out, ")")?;
@@ -655,9 +667,10 @@ where
 
   fn emit_call(&mut self, call: &Node<CallExpr>) -> EmitResult {
     with_node_context(call.loc, || {
-      if call.stx.optional_chaining {
+      let optional = call.stx.optional_chaining;
+      if optional {
         if let Expr::Instantiation(instantiation) = call.stx.callee.stx.as_ref() {
-          self.emit_memberish_receiver(&instantiation.stx.expression)?;
+          self.emit_memberish_receiver(&instantiation.stx.expression, true)?;
           write!(self.out, "?.<")?;
           for (i, arg) in instantiation.stx.type_arguments.iter().enumerate() {
             if i > 0 {
@@ -684,8 +697,8 @@ where
         }
       }
 
-      self.emit_memberish_receiver(&call.stx.callee)?;
-      if call.stx.optional_chaining {
+      self.emit_memberish_receiver(&call.stx.callee, optional)?;
+      if optional {
         write!(self.out, "?.(")?;
       } else {
         write!(self.out, "(")?;
@@ -709,7 +722,7 @@ where
   fn emit_member(&mut self, member: &Node<MemberExpr>) -> EmitResult {
     with_node_context(member.loc, || {
       if member.stx.optional_chaining {
-        self.emit_memberish_receiver(&member.stx.left)?;
+        self.emit_memberish_receiver(&member.stx.left, true)?;
         write!(self.out, "?.")?;
       } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
         let rendered = num.stx.value.to_string();
@@ -719,7 +732,7 @@ where
         }
         self.out.write_char('.')?;
       } else {
-        self.emit_memberish_receiver(&member.stx.left)?;
+        self.emit_memberish_receiver(&member.stx.left, false)?;
         self.out.write_char('.')?;
       }
       self.out.write_str(&member.stx.right)?;
@@ -729,7 +742,7 @@ where
 
   fn emit_computed_member(&mut self, member: &Node<ComputedMemberExpr>) -> EmitResult {
     with_node_context(member.loc, || {
-      self.emit_memberish_receiver(&member.stx.object)?;
+      self.emit_memberish_receiver(&member.stx.object, member.stx.optional_chaining)?;
       if member.stx.optional_chaining {
         write!(self.out, "?.[")?;
       } else {
@@ -743,14 +756,14 @@ where
 
   fn emit_tagged_template(&mut self, tagged: &Node<TaggedTemplateExpr>) -> EmitResult {
     with_node_context(tagged.loc, || {
-      self.emit_memberish_receiver(&tagged.stx.function)?;
+      self.emit_memberish_receiver(&tagged.stx.function, false)?;
       self.emit_template_literal(&tagged.stx.parts)
     })
   }
 
   fn emit_instantiation_expr(&mut self, instantiation: &Node<InstantiationExpr>) -> EmitResult {
     with_node_context(instantiation.loc, || {
-      self.emit_memberish_receiver(&instantiation.stx.expression)?;
+      self.emit_memberish_receiver(&instantiation.stx.expression, false)?;
       write!(self.out, "<")?;
       for (i, arg) in instantiation.stx.type_arguments.iter().enumerate() {
         if i > 0 {

@@ -51,7 +51,8 @@ fn allocated_bytes() -> usize {
 }
 
 #[test]
-fn symbol_for_returns_same_symbol_for_two_different_strings_with_same_contents() -> Result<(), VmError> {
+fn symbol_for_returns_same_symbol_for_two_different_strings_with_same_contents(
+) -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut scope = heap.scope();
 
@@ -126,7 +127,10 @@ fn symbol_for_eventually_returns_oom_with_tight_heap_limits() -> Result<(), VmEr
     }
   }
 
-  assert!(saw_oom, "expected repeated `symbol_for` calls to eventually hit VmError::OutOfMemory");
+  assert!(
+    saw_oom,
+    "expected repeated `symbol_for` calls to eventually hit VmError::OutOfMemory"
+  );
   assert!(
     scope.heap().used_bytes() <= max_bytes,
     "heap.used_bytes should never exceed the configured max_bytes"

@@ -96,10 +96,11 @@ stable:
 
 ### Incremental scenario
 
-`incremental/full/*` runs a complete check of the `small_project` fixtures,
-then `incremental/edit/*` re-runs after a small text edit in
-`project_text.ts` (changing the `SEPARATOR` constant while leaving the mapped
-type helpers intact). On a healthy incremental engine, the edit pass should be
-noticeably cheaper because only the affected queries are invalidated. The
-benchmarks run both phases with stable inputs so regressions in invalidation or
-cache hit rates are easy to spot.
+`incremental/full/*` and `incremental/edit/*` share **one live `Program`**: a
+cold `check()`, then `Program::set_file_text` for a small edit, then another
+`check()` on the same instance. For `small_project` the edit is a same-length
+body-only change (`let i = 0` → `let i = 1` in `project_text.ts`) so
+declaration types and def spans stay identical and salsa can reuse other
+files' body memos. Details include `body_check_executions` from salsa's
+`body_check_count()` — the edit pass should re-execute fewer body checks than
+the cold full check.

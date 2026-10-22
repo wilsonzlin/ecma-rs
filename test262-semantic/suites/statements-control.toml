@@ -1,0 +1,24 @@
+# Control-flow statement semantics and their completion values.
+#
+# Exercises statement evaluation and completion-record propagation
+# (ECMA-262 §14): if, iteration statements, switch, labelled break/continue,
+# and block scoping.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/statements/if/**/*.js",
+  "language/statements/for/**/*.js",
+  "language/statements/while/**/*.js",
+  "language/statements/do-while/**/*.js",
+  "language/statements/switch/**/*.js",
+  "language/statements/break/**/*.js",
+  "language/statements/continue/**/*.js",
+  "language/statements/block/**/*.js",
+  "language/statements/labeled/**/*.js",
+  "language/statements/empty/**/*.js",
+]
+
+exclude = [
+  "**/*_FIXTURE.js",
+  "**/*.module.js",
+]

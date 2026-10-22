@@ -85,6 +85,16 @@ pub mod util;
 #[derive(Debug)]
 struct ParseCancelled;
 
+/// Successful parse result, including recoverable soft errors.
+///
+/// Soft errors (e.g. TS-style `';' expected` after a non-LHS assignment) do not
+/// discard the AST; callers that care about diagnostics should surface them.
+#[derive(Debug)]
+pub struct ParsedAst {
+  pub ast: Node<TopLevel>,
+  pub soft_errors: Vec<SyntaxError>,
+}
+
 /// Parse JavaScript or TypeScript source as UTF-8 and return the top-level AST.
 ///
 /// Spans and diagnostics are expressed in UTF-8 byte offsets. Callers starting
@@ -99,10 +109,23 @@ pub fn parse(source: &str) -> SyntaxResult<Node<TopLevel>> {
 /// The source **must** be valid UTF-8; span math assumes byte offsets into the
 /// original string. See [`parse`] for the recommended boundary validation
 /// strategy when starting from raw bytes.
+///
+/// Soft recovery diagnostics are discarded; use [`parse_with_options_detailed`]
+/// when they must be reported.
 pub fn parse_with_options(source: &str, opts: ParseOptions) -> SyntaxResult<Node<TopLevel>> {
+  Ok(parse_with_options_detailed(source, opts)?.ast)
+}
+
+/// Like [`parse_with_options`], but retains recoverable soft errors alongside
+/// the AST.
+pub fn parse_with_options_detailed(source: &str, opts: ParseOptions) -> SyntaxResult<ParsedAst> {
   let lexer = Lexer::new(source);
   let mut parser = Parser::new(lexer, opts);
-  parser.parse_top_level()
+  let ast = parser.parse_top_level()?;
+  Ok(ParsedAst {
+    ast,
+    soft_errors: parser.take_soft_errors(),
+  })
 }
 
 /// Parse JavaScript or TypeScript source with explicit [`ParseOptions`], allowing
@@ -112,17 +135,33 @@ pub fn parse_with_options(source: &str, opts: ParseOptions) -> SyntaxResult<Node
 /// misbehaving input could otherwise stall the whole runner. Cancellation is
 /// best-effort: the parser checks `cancel` during tokenization/parsing and
 /// returns [`SyntaxErrorType::Cancelled`] once observed.
+///
+/// Soft recovery diagnostics are discarded; use
+/// [`parse_with_options_cancellable_detailed`] when they must be reported.
 pub fn parse_with_options_cancellable(
   source: &str,
   opts: ParseOptions,
   cancel: Arc<AtomicBool>,
 ) -> SyntaxResult<Node<TopLevel>> {
+  Ok(parse_with_options_cancellable_detailed(source, opts, cancel)?.ast)
+}
+
+/// Like [`parse_with_options_cancellable`], but retains recoverable soft errors.
+pub fn parse_with_options_cancellable_detailed(
+  source: &str,
+  opts: ParseOptions,
+  cancel: Arc<AtomicBool>,
+) -> SyntaxResult<ParsedAst> {
   let lexer = Lexer::new(source);
   let mut parser = Parser::new_cancellable(lexer, opts, Some(cancel));
 
   let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.parse_top_level()));
   match result {
-    Ok(result) => result,
+    Ok(Ok(ast)) => Ok(ParsedAst {
+      ast,
+      soft_errors: parser.take_soft_errors(),
+    }),
+    Ok(Err(err)) => Err(err),
     Err(payload) => {
       if payload.is::<ParseCancelled>() {
         return Err(SyntaxError::new(

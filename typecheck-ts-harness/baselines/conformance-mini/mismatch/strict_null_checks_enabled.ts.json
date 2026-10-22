@@ -12,6 +12,7 @@
       "skipLibCheck": true,
       "strictFunctionTypes": true,
       "strictNullChecks": true,
+      "strictPropertyInitialization": false,
       "target": 2,
       "useDefineForClassFields": true
     }

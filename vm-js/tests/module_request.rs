@@ -41,4 +41,3 @@ fn cmp_utf16_orders_by_utf16_code_units() {
   // Rust's default `str` ordering is based on UTF-8 bytes, where 0xF0 > 0xEE => 😀 > U+E000.
   assert_eq!("😀".cmp("\u{E000}"), Ordering::Greater);
 }
-

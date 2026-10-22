@@ -78,17 +78,27 @@ jobs:
       - name: cargo test (workspace)
         run: cargo test --workspace --locked
 
+      # Hygiene guards also covered by workspace tests above; named steps keep
+      # parse→emit fixpoint and 1-vs-N determinism visible in CI logs.
+      - name: Emit fixpoint (megatest corpus)
+        run: cargo test -p emit-js --test megatest_fixpoint --locked
+
+      - name: Checker 1-vs-N thread determinism
+        run: >
+          cargo test -p typecheck-ts --test determinism --locked
+          check_outputs_identical_under_1_vs_n_rayon_threads
+
       - name: Smoke fuzz (bounded)
         run: |
           cargo test -p typecheck-ts --features fuzzing --test fuzz_smoke --locked -- --ignored
           cargo test -p semantic-js --features fuzzing --test fuzz_smoke --locked -- --ignored
           cargo test -p typecheck-ts-harness --test fuzz_smoke --locked -- --ignored
 
-      - name: Regenerate docs/deps.md
+      - name: Regenerate wiki/architecture/deps.md
         run: ./scripts/gen_deps_graph.sh
 
-      - name: Ensure docs/deps.md is up to date
-        run: git diff --exit-code docs/deps.md
+      - name: Ensure wiki/architecture/deps.md is up to date
+        run: git diff --exit-code wiki/architecture/deps.md
 
   typecheck-ts-harness:
     runs-on: ubuntu-24.04
